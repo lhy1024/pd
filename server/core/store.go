@@ -16,6 +16,7 @@ package core
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -285,8 +286,10 @@ func (s *StoreInfo) RegionScore(highSpaceRatio, lowSpaceRatio float64, delta int
 	// lowSpaceBound is the upper bound of the low space stage.
 	lowSpaceBound := (1 - lowSpaceRatio) * capacity
 	if available-float64(delta)/amplification >= highSpaceBound {
+		regionScoreStage.WithLabelValues(strconv.FormatUint(s.GetID(), 10), "stage").Set(1.0)
 		score = float64(s.GetRegionSize() + delta)
 	} else if available-float64(delta)/amplification <= lowSpaceBound {
+		regionScoreStage.WithLabelValues(strconv.FormatUint(s.GetID(), 10), "stage").Set(3.0)
 		score = maxScore - (available - float64(delta)/amplification)
 	} else {
 		// to make the score function continuous, we use linear function y = k * x + b as transition period
@@ -305,6 +308,9 @@ func (s *StoreInfo) RegionScore(highSpaceRatio, lowSpaceRatio float64, delta int
 
 		k := (y2 - y1) / (x2 - x1)
 		b := y1 - k*x1
+		regionScoreStage.WithLabelValues(strconv.FormatUint(s.GetID(), 10), "stage").Set(2.0)
+		regionScoreStage.WithLabelValues(strconv.FormatUint(s.GetID(), 10), "k").Set(k)
+		regionScoreStage.WithLabelValues(strconv.FormatUint(s.GetID(), 10), "b").Set(b)
 		score = k*float64(s.GetRegionSize()+delta) + b
 	}
 
