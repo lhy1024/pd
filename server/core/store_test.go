@@ -19,6 +19,7 @@ import (
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 )
 
 var _ = Suite(&testDistinctScoreSuite{})
@@ -91,4 +92,112 @@ func (s *testConcurrencySuite) TestCloneStore(c *C) {
 		}
 	}()
 	wg.Wait()
+}
+
+const (
+	MB = uint64(1024 * 1024)
+	GB = 1024 * MB
+	TB = 1024 * GB
+)
+
+var _ = Suite(&testMaxScoreSuite{})
+
+type testMaxScoreSuite struct{}
+
+func putStore(stores *StoresInfo, flexibleScore, capacity uint64, storeIDs ...uint64) {
+	storeID := uint64(len(stores.GetStores()) + 1)
+	if len(storeIDs) != 0 {
+		storeID = storeIDs[0]
+	}
+	var results []*StoreInfo
+	if storeID == 0 {
+		results = stores.GetStoresAfterUpdateMaxScore(flexibleScore)
+	} else {
+		store := NewStoreInfo(
+			&metapb.Store{
+				Id: storeID,
+			},
+			SetStoreStats(&pdpb.StoreStats{
+				Capacity: capacity,
+			}),
+		)
+		results = stores.GetStoresAfterUpdateMaxScore(flexibleScore, store)
+	}
+	for _, result := range results {
+		stores.SetStore(result)
+	}
+}
+
+func checkAllStoresMaxScore(c *C, stores *StoresInfo, maxScore float64) {
+	for _, store := range stores.GetStores() {
+		c.Assert(store.GetMaxScore(), Equals, maxScore)
+	}
+}
+
+func (s *testMaxScoreSuite) TestMaxScore(c *C) {
+	stores := NewStoresInfo()
+	flexibleScore := 4 * TB / bytesPerMB
+	results := stores.GetStoresAfterUpdateMaxScore(flexibleScore)
+	c.Assert(results, HasLen, 0)
+
+	// 6 tikv stores of 1t
+	num := 6
+	oldCapacity := 1 * TB
+	oldMaxScore := float64(5 * TB / bytesPerMB)
+	for i := 1; i <= 6; i++ {
+		putStore(stores, flexibleScore, oldCapacity)
+		c.Assert(stores.GetStores(), HasLen, i)
+		c.Assert(stores.GetStore(uint64(i)).GetMaxScore(), Equals, oldMaxScore)
+	}
+	// add larger store
+	// store id         7	8	9	10	11		15
+	// add new store	2t	3t	4t	5t	6t	...	10t
+	// max score 		5t	5t	5t	5t	10t	...	10t
+	var newMaxScore float64
+	step := oldCapacity
+	for capacity := oldCapacity + step; capacity <= uint64(2*oldMaxScore*bytesPerMB); capacity += step {
+		putStore(stores, flexibleScore, capacity)
+		for _, store := range stores.GetStores() {
+			if float64(capacity/bytesPerMB) <= oldMaxScore {
+				c.Assert(store.maxScore, Equals, oldMaxScore)
+			} else {
+				newMaxScore = stores.GetStores()[len(stores.GetStores())-1].maxScore
+				c.Assert(store.maxScore, Equals, newMaxScore)
+				c.Assert(store.maxScore, Greater, oldMaxScore)
+			}
+		}
+	}
+	// add smaller store
+	for i := 1; i <= 6; i++ {
+		putStore(stores, flexibleScore, oldCapacity)
+		c.Assert(stores.GetStore(uint64(num)).GetMaxScore(), Equals, newMaxScore)
+	}
+
+	// update flexible score
+	flexibleScore = 0
+	putStore(stores, flexibleScore, 0, 0)
+	maxCapacity := getMaxCapacity(stores.GetStores())
+	checkAllStoresMaxScore(c, stores, float64(maxCapacity/bytesPerMB+flexibleScore))
+
+	// update flexible score and new store
+	flexibleScore = 4 * TB / bytesPerMB
+	capacity := 30 * TB
+	putStore(stores, flexibleScore, capacity)
+	checkAllStoresMaxScore(c, stores, float64(capacity/bytesPerMB+flexibleScore))
+
+	// update store with larger capacity than current store but smaller than max score
+	flexibleScore = 4 * TB / bytesPerMB
+	capacity = 32 * TB
+	putStore(stores, flexibleScore, capacity)
+	checkAllStoresMaxScore(c, stores, float64(30*TB/bytesPerMB+flexibleScore))
+
+	// update with smaller
+	capacity = 2 * TB
+	putStore(stores, flexibleScore, capacity)
+	checkAllStoresMaxScore(c, stores, float64(30*TB/bytesPerMB+flexibleScore))
+
+	// update with larger than max score
+	capacity = 64 * TB
+	putStore(stores, flexibleScore, capacity)
+	checkAllStoresMaxScore(c, stores, float64(capacity/bytesPerMB+flexibleScore))
 }

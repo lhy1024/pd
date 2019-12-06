@@ -23,21 +23,15 @@ import (
 // BasicCluster provides basic data member and interface for a tikv cluster.
 type BasicCluster struct {
 	sync.RWMutex
-	Stores        *StoresInfo
-	Regions       *RegionsInfo
-	flexibleScore uint64
+	Stores  *StoresInfo
+	Regions *RegionsInfo
 }
 
 // NewBasicCluster creates a BasicCluster.
-func NewBasicCluster(flexibleScores ...uint64) *BasicCluster {
-	flexibleScore := uint64(4 * 1024 * 1024)
-	if len(flexibleScores) != 0 {
-		flexibleScore = flexibleScores[0]
-	}
+func NewBasicCluster() *BasicCluster {
 	return &BasicCluster{
-		Stores:        NewStoresInfo(),
-		Regions:       NewRegionsInfo(),
-		flexibleScore: flexibleScore,
+		Stores:  NewStoresInfo(),
+		Regions: NewRegionsInfo(),
 	}
 }
 
@@ -46,6 +40,13 @@ func (bc *BasicCluster) GetStores() []*StoreInfo {
 	bc.RLock()
 	defer bc.RUnlock()
 	return bc.Stores.GetStores()
+}
+
+// GetStoresAfterUpdateMaxScore returns Stores with new max score.
+func (bc *BasicCluster) GetStoresAfterUpdateMaxScore(flexibleScore uint64, newStores ...*StoreInfo) []*StoreInfo {
+	bc.RLock()
+	defer bc.RUnlock()
+	return bc.Stores.GetStoresAfterUpdateMaxScore(flexibleScore, newStores...)
 }
 
 // GetMetaStores gets a complete set of metapb.Store.
@@ -270,36 +271,17 @@ func (bc *BasicCluster) GetAverageRegionSize() int64 {
 // PutStore put a store.
 func (bc *BasicCluster) PutStore(store *StoreInfo) {
 	bc.Lock()
+	defer bc.Unlock()
 	bc.Stores.SetStore(store)
-	bc.Unlock()
-	bc.updateMaxScore(store)
 }
 
-func (bc *BasicCluster) updateMaxScore(store *StoreInfo) {
-	stores := bc.GetStores()
-	if len(stores) == 0 {
-		store.SetMaxScore(bc.calculateMaxScore(store))
-		return
-	}
-	currentMaxScore := float64(0)
+// PutStores put many stores.
+func (bc *BasicCluster) PutStores(stores []*StoreInfo) {
+	bc.Lock()
+	defer bc.Unlock()
 	for _, store := range stores {
-		if store.GetMaxScore() > currentMaxScore {
-			currentMaxScore = store.GetMaxScore()
-		}
+		bc.Stores.SetStore(store)
 	}
-	if float64(store.GetCapacity()) > currentMaxScore {
-		newMaxScore := bc.calculateMaxScore(store)
-		store.SetMaxScore(newMaxScore)
-		for _, store := range stores {
-			store.SetMaxScore(newMaxScore)
-		}
-	} else {
-		store.SetMaxScore(currentMaxScore)
-	}
-}
-
-func (bc *BasicCluster) calculateMaxScore(s *StoreInfo) float64 {
-	return float64(s.GetCapacity() + bc.flexibleScore)
 }
 
 // DeleteStore deletes a store.

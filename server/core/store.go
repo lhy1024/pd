@@ -75,6 +75,7 @@ func (s *StoreInfo) Clone(opts ...StoreCreateOption) *StoreInfo {
 		leaderWeight:     s.leaderWeight,
 		regionWeight:     s.regionWeight,
 		available:        s.available,
+		maxScore:         s.maxScore,
 	}
 
 	for _, opt := range opts {
@@ -305,6 +306,7 @@ func (s *StoreInfo) RegionScore(highSpaceRatio, lowSpaceRatio float64, delta int
 
 		k := (y2 - y1) / (x2 - x1)
 		b := y1 - k*x1
+
 		score = k*float64(s.GetRegionSize()+delta) + b
 	}
 
@@ -404,11 +406,6 @@ func (s *StoreInfo) GetMaxScore() float64 {
 	return s.maxScore
 }
 
-// SetMaxScore is used to set maxScore
-func (s *StoreInfo) SetMaxScore(maxScore float64) {
-	s.maxScore = maxScore
-}
-
 var (
 	// If a store's last heartbeat is storeDisconnectDuration ago, the store will
 	// be marked as disconnected state. The value should be greater than tikv's
@@ -502,7 +499,8 @@ func NewStoreNotFoundErr(storeID uint64) errcode.ErrorCode {
 
 // StoresInfo contains information about all stores.
 type StoresInfo struct {
-	stores map[uint64]*StoreInfo
+	stores            map[uint64]*StoreInfo
+	lastFlexibleScore uint64
 }
 
 // NewStoresInfo create a StoresInfo with map of storeID to StoreInfo
@@ -627,6 +625,79 @@ func (s *StoresInfo) SetRegionSize(storeID uint64, regionSize int64) {
 	if store, ok := s.stores[storeID]; ok {
 		s.stores[storeID] = store.Clone(SetRegionSize(regionSize))
 	}
+}
+
+const bytesPerMB = 1024 * 1024
+
+func calculateMaxScore(flexibleScore, capacity uint64) float64 {
+	return float64(capacity/bytesPerMB + flexibleScore)
+}
+
+func getMaxCapacity(stores []*StoreInfo) uint64 {
+	var maxCapacity uint64
+	for _, store := range stores {
+		capacity := store.GetCapacity()
+		if capacity > maxCapacity {
+			maxCapacity = capacity
+		}
+	}
+	return maxCapacity
+}
+
+func maxUint64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func setAllMaxScore(stores []*StoreInfo, maxScore float64) []*StoreInfo {
+	results := make([]*StoreInfo, 0, len(stores))
+	for _, store := range stores {
+		results = append(results, store.Clone(SetMaxScore(maxScore)))
+	}
+	return results
+}
+
+// GetStoresAfterUpdateMaxScore update maxScore when flexible score change or add a new store
+func (s *StoresInfo) GetStoresAfterUpdateMaxScore(flexibleScore uint64, newStores ...*StoreInfo) []*StoreInfo {
+	results := make([]*StoreInfo, 0, len(newStores)+len(s.stores))
+	var newStore *StoreInfo
+	if len(newStores) != 0 {
+		newStore = newStores[0]
+	}
+
+	// add first store
+	if len(s.stores) == 0 {
+		if newStore != nil {
+			maxScore := calculateMaxScore(flexibleScore, newStore.GetCapacity())
+			results = append(results, newStore.Clone(SetMaxScore(maxScore)))
+			s.lastFlexibleScore = flexibleScore
+		}
+		return results
+	}
+
+	// calculate max score
+	oldStores := s.GetStores()
+	oldMaxScore := oldStores[0].maxScore
+	maxScore := oldMaxScore
+
+	maxCapacity := getMaxCapacity(oldStores)
+	if s.lastFlexibleScore != 0 && s.lastFlexibleScore != flexibleScore { //update by flexible score
+		maxCapacity = maxUint64(maxCapacity, getMaxCapacity(newStores))
+		maxScore = calculateMaxScore(flexibleScore, maxCapacity)
+		s.lastFlexibleScore = flexibleScore
+	}
+
+	if newStore != nil && float64(newStore.GetCapacity()/bytesPerMB) > oldMaxScore { //update by new store when capacity of new store is greater than old maxScore
+		maxScore = calculateMaxScore(flexibleScore, newStore.GetCapacity())
+	}
+
+	if maxScore != oldMaxScore { // happen change
+		results = append(results, setAllMaxScore(oldStores, maxScore)...)
+	}
+	results = append(results, setAllMaxScore(newStores, maxScore)...)
+	return results
 }
 
 // UpdateStoreStatus updates the information of the store.
