@@ -983,7 +983,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 		counters []prometheus.Counter
 		err      error
 	)
-
+	additionalInfos := make(map[string]string)
 	switch bs.opTy {
 	case movePeer:
 		srcPeer := bs.cur.region.GetStorePeer(bs.cur.srcStoreID) // checked in getRegionAndSrcPeer
@@ -999,13 +999,12 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 		srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
 		dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
 		peer := bs.cur.srcPeerStat
-		log.Info(desc,
-			zap.Float64("src store bytes", srcLd.ByteRate),
-			zap.Float64("src store keys", srcLd.KeyRate),
-			zap.Float64("dst store bytes", dstLd.ByteRate),
-			zap.Float64("dst store keys", dstLd.KeyRate),
-			zap.Float64("peer bytes", peer.ByteRate),
-			zap.Float64("peer keys", peer.KeyRate))
+		additionalInfos["srcByteRate"] = strconv.FormatFloat(srcLd.ByteRate, 'f', 2, 64)
+		additionalInfos["srcKeyRate"] = strconv.FormatFloat(srcLd.KeyRate, 'f', 2, 64)
+		additionalInfos["dstByteRate"] = strconv.FormatFloat(dstLd.ByteRate, 'f', 2, 64)
+		additionalInfos["dstKeyRate"] = strconv.FormatFloat(dstLd.KeyRate, 'f', 2, 64)
+		additionalInfos["peerByteRate"] = strconv.FormatFloat(peer.ByteRate, 'f', 2, 64)
+		additionalInfos["peerKeyRate"] = strconv.FormatFloat(peer.KeyRate, 'f', 2, 64)
 		counters = append(counters,
 			hotDirectionCounter.WithLabelValues("move-peer", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
 			hotDirectionCounter.WithLabelValues("move-peer", bs.rwTy.String(), strconv.FormatUint(dstPeer.GetStoreId(), 10), "in"))
@@ -1024,13 +1023,12 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 		srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
 		dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
 		peer := bs.cur.srcPeerStat
-		log.Info(desc,
-			zap.Float64("src store bytes", srcLd.ByteRate),
-			zap.Float64("src store keys", srcLd.KeyRate),
-			zap.Float64("dst store bytes", dstLd.ByteRate),
-			zap.Float64("dst store keys", dstLd.KeyRate),
-			zap.Float64("peer bytes", peer.ByteRate),
-			zap.Float64("peer keys", peer.KeyRate))
+		additionalInfos["srcByteRate"] = strconv.FormatFloat(srcLd.ByteRate, 'f', 2, 64)
+		additionalInfos["srcKeyRate"] = strconv.FormatFloat(srcLd.KeyRate, 'f', 2, 64)
+		additionalInfos["dstByteRate"] = strconv.FormatFloat(dstLd.ByteRate, 'f', 2, 64)
+		additionalInfos["dstKeyRate"] = strconv.FormatFloat(dstLd.KeyRate, 'f', 2, 64)
+		additionalInfos["peerByteRate"] = strconv.FormatFloat(peer.ByteRate, 'f', 2, 64)
+		additionalInfos["peerKeyRate"] = strconv.FormatFloat(peer.KeyRate, 'f', 2, 64)
 		counters = append(counters,
 			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
 			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.dstStoreID, 10), "in"))
@@ -1047,7 +1045,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 	op.Counters = append(op.Counters,
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), "new-operator"),
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), bs.opTy.String()))
-
+	op.AdditionalInfos = additionalInfos
 	infl := Influence{
 		ByteRate: bs.cur.srcPeerStat.GetByteRate(),
 		KeyRate:  bs.cur.srcPeerStat.GetKeyRate(),
