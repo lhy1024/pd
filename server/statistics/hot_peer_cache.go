@@ -162,7 +162,7 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 		newItem := &HotPeerStat{
 			StoreID:            storeID,
 			RegionID:           region.GetID(),
-			Kind:               f.kind,
+			kind:               f.kind,
 			ByteRate:           byteRate,
 			KeyRate:            keyRate,
 			LastUpdateTime:     time.Now(),
@@ -394,18 +394,18 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 			newItem.AntiCount = hotRegionAntiCount
 		}
 		newItem.isNew = true
-		newItem.RollingByteRate = newDimStat(byteDim)
-		newItem.RollingKeyRate = newDimStat(keyDim)
-		newItem.RollingByteRate.Add(bytes, interval)
-		newItem.RollingKeyRate.Add(keys, interval)
-		if newItem.RollingKeyRate.isFull() {
+		newItem.rollingByteRate = newDimStat(byteDim)
+		newItem.rollingKeyRate = newDimStat(keyDim)
+		newItem.rollingByteRate.Add(bytes, interval)
+		newItem.rollingKeyRate.Add(keys, interval)
+		if newItem.rollingKeyRate.isFull() {
 			newItem.clearLastAverage()
 		}
 		return newItem
 	}
 
-	newItem.RollingByteRate = oldItem.RollingByteRate
-	newItem.RollingKeyRate = oldItem.RollingKeyRate
+	newItem.rollingByteRate = oldItem.rollingByteRate
+	newItem.rollingKeyRate = oldItem.rollingKeyRate
 
 	if newItem.justTransferLeader {
 		newItem.HotDegree = oldItem.HotDegree
@@ -414,10 +414,10 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 		return newItem
 	}
 
-	newItem.RollingByteRate.Add(bytes, interval)
-	newItem.RollingKeyRate.Add(keys, interval)
+	newItem.rollingByteRate.Add(bytes, interval)
+	newItem.rollingKeyRate.Add(keys, interval)
 
-	if !newItem.RollingKeyRate.isFull() {
+	if !newItem.rollingKeyRate.isFull() {
 		// not update hot degree and anti count
 		newItem.HotDegree = oldItem.HotDegree
 		newItem.AntiCount = oldItem.AntiCount

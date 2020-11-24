@@ -64,27 +64,27 @@ func (d *dimStat) Get() float64 {
 
 // HotPeerStat records each hot peer's statistics
 type HotPeerStat struct {
-	StoreID  uint64 `json:"store_id"`
-	RegionID uint64 `json:"region_id"`
+	StoreID  uint64 `json:"store-id"`
+	RegionID uint64 `json:"region-id"`
 
 	// HotDegree records the times for the region considered as hot spot during each HandleRegionHeartbeat
-	HotDegree int `json:"hot_degree"`
+	HotDegree int `json:"hot-degree"`
 	// AntiCount used to eliminate some noise when remove region in cache
-	AntiCount int `json:"anti_count"`
+	AntiCount int `json:"anti-count"`
 
-	Kind     FlowKind `json:"kind"`
-	ByteRate float64  `json:"flow_bytes"`
-	KeyRate  float64  `json:"flow_keys"`
+	ByteRate float64 `json:"bytes-rate"`
+	KeyRate  float64 `json:"keys-rate"`
 
 	// rolling statistics, recording some recently added records.
-	RollingByteRate *dimStat
-	RollingKeyRate  *dimStat
+	rollingByteRate *dimStat
+	rollingKeyRate  *dimStat
 
 	// LastUpdateTime used to calculate average write
-	LastUpdateTime time.Time `json:"last_update_time"`
+	LastUpdateTime time.Time `json:"last-update-time"`
 	// Version used to check the region split times
-	Version uint64 `json:"version"`
+	Version uint64 `json:"epoch-version"`
 
+	kind               FlowKind
 	needDelete         bool
 	isLeader           bool
 	isNew              bool
@@ -129,37 +129,37 @@ func (stat *HotPeerStat) IsNew() bool {
 
 // GetByteRate returns denoised BytesRate if possible.
 func (stat *HotPeerStat) GetByteRate() float64 {
-	if stat.RollingByteRate == nil {
-		return stat.ByteRate
+	if stat.rollingByteRate == nil {
+		return float64(int(stat.ByteRate))
 	}
-	return stat.RollingByteRate.Get()
+	return float64(int(stat.rollingByteRate.Get()))
 }
 
 // GetKeyRate returns denoised KeysRate if possible.
 func (stat *HotPeerStat) GetKeyRate() float64 {
-	if stat.RollingKeyRate == nil {
-		return stat.KeyRate
+	if stat.rollingKeyRate == nil {
+		return float64(int(stat.KeyRate))
 	}
-	return stat.RollingKeyRate.Get()
+	return float64(int(stat.rollingKeyRate.Get()))
 }
 
 // Clone clones the HotPeerStat
 func (stat *HotPeerStat) Clone() *HotPeerStat {
 	ret := *stat
 	ret.ByteRate = stat.GetByteRate()
-	ret.RollingByteRate = nil
+	ret.rollingByteRate = nil
 	ret.KeyRate = stat.GetKeyRate()
-	ret.RollingKeyRate = nil
+	ret.rollingKeyRate = nil
 	return &ret
 }
 
 func (stat *HotPeerStat) isHot(thresholds [dimLen]float64) bool {
-	return stat.RollingByteRate.isHot(thresholds) || stat.RollingKeyRate.isHot(thresholds)
+	return stat.rollingByteRate.isHot(thresholds) || stat.rollingKeyRate.isHot(thresholds)
 }
 
 func (stat *HotPeerStat) clearLastAverage() {
-	stat.RollingByteRate.clearLastAverage()
-	stat.RollingKeyRate.clearLastAverage()
+	stat.rollingByteRate.clearLastAverage()
+	stat.rollingKeyRate.clearLastAverage()
 }
 
 // Log is used to output some info
@@ -178,5 +178,5 @@ func (stat *HotPeerStat) Log(str string, level func(msg string, fields ...zap.Fi
 		zap.Bool("justTransferLeader", stat.justTransferLeader),
 		zap.Bool("isLeader", stat.isLeader),
 		zap.Bool("needDelete", stat.needDelete),
-		zap.String("type", stat.Kind.String()))
+		zap.String("type", stat.kind.String()))
 }
