@@ -90,7 +90,7 @@ type HotPeerStat struct {
 	isNew              bool
 	justTransferLeader bool
 	interval           uint64
-	thresholdsLog      [2]float64
+	thresholds         [dimLen]float64
 	peers              []uint64
 }
 
@@ -143,6 +143,11 @@ func (stat *HotPeerStat) GetKeyRate() float64 {
 	return float64(int(stat.rollingKeyRate.Get()))
 }
 
+// GetKeyRate returns thresholds
+func (stat *HotPeerStat) GetThresholds() [dimLen]float64 {
+	return stat.thresholds
+}
+
 // Clone clones the HotPeerStat
 func (stat *HotPeerStat) Clone() *HotPeerStat {
 	ret := *stat
@@ -164,19 +169,22 @@ func (stat *HotPeerStat) clearLastAverage() {
 
 // Log is used to output some info
 func (stat *HotPeerStat) Log(str string, level func(msg string, fields ...zap.Field)) {
+	if stat == nil {
+		return
+	}
 	level(str,
 		zap.Uint64("interval", stat.interval),
 		zap.Uint64("region", stat.RegionID),
 		zap.Uint64("store", stat.StoreID),
-		zap.Uint64("epoch", stat.Version),
-		zap.Float64("byteRate", stat.ByteRate),
-		zap.Float64("byteRateTh", stat.thresholdsLog[byteDim]),
-		zap.Float64("keyRate", stat.KeyRate),
-		zap.Float64("keyRateTh", stat.thresholdsLog[keyDim]),
-		zap.Int("hotDegree", stat.HotDegree),
-		zap.Int("hotRegionAntiCount", stat.AntiCount),
-		zap.Bool("justTransferLeader", stat.justTransferLeader),
-		zap.Bool("isLeader", stat.isLeader),
-		zap.Bool("needDelete", stat.needDelete),
+		zap.Uint64("epoch-version", stat.Version),
+		zap.Float64("byte-rate", stat.GetByteRate()),
+		zap.Float64("byte-rate-threshold", stat.thresholds[byteDim]),
+		zap.Float64("key-rate", stat.GetKeyRate()),
+		zap.Float64("key-rate-threshold", stat.thresholds[keyDim]),
+		zap.Int("hot-degree", stat.HotDegree),
+		zap.Int("hot-anti-count", stat.AntiCount),
+		zap.Bool("just-transfer-leader", stat.justTransferLeader),
+		zap.Bool("is-leader", stat.isLeader),
+		zap.Bool("need-delete", stat.IsNeedDelete()),
 		zap.String("type", stat.kind.String()))
 }

@@ -25,9 +25,11 @@ import (
 )
 
 const (
-	topNN             = 60
+	// TopNN is the threshold which means we can get hot threshold from store.
+	TopNN = 60
+	// HotThresholdRatio is used to calculate hot thresholds
+	HotThresholdRatio = 0.8
 	topNTTL           = 3 * RegionHeartBeatReportInterval * time.Second
-	hotThresholdRatio = 0.8
 
 	rollingWindowsSize = 5
 
@@ -93,7 +95,7 @@ func (f *hotPeerCache) Update(item *HotPeerStat) {
 	} else {
 		peers, ok := f.peersOfStore[item.StoreID]
 		if !ok {
-			peers = NewTopN(dimLen, topNN, topNTTL)
+			peers = NewTopN(dimLen, TopNN, topNTTL)
 			f.peersOfStore[item.StoreID] = peers
 		}
 		peers.Put(item)
@@ -159,6 +161,8 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			continue
 		}
 
+		thresholds := f.calcHotThresholds(storeID)
+
 		newItem := &HotPeerStat{
 			StoreID:            storeID,
 			RegionID:           region.GetID(),
@@ -172,6 +176,7 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			justTransferLeader: justTransferLeader,
 			interval:           interval,
 			peers:              peers,
+			thresholds:         thresholds,
 		}
 
 		if oldItem == nil {
@@ -187,14 +192,9 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			}
 		}
 
-		thresholds := f.calcHotThresholds(newItem.StoreID)
-
 		newItem = f.updateHotPeerStat(newItem, oldItem, bytes, keys, time.Duration(interval)*time.Second, thresholds)
 		if newItem != nil {
 			ret = append(ret, newItem)
-			if newItem.isLeader {
-				newItem.thresholdsLog = thresholds
-			}
 		}
 	}
 
@@ -271,7 +271,7 @@ func (f *hotPeerCache) isRegionExpired(region *core.RegionInfo, storeID uint64) 
 func (f *hotPeerCache) calcHotThresholds(storeID uint64) [dimLen]float64 {
 	minThresholds := minHotThresholds[f.kind]
 	tn, ok := f.peersOfStore[storeID]
-	if !ok || tn.Len() < topNN {
+	if !ok || tn.Len() < TopNN {
 		return minThresholds
 	}
 	ret := [dimLen]float64{
@@ -279,7 +279,7 @@ func (f *hotPeerCache) calcHotThresholds(storeID uint64) [dimLen]float64 {
 		keyDim:  tn.GetTopNMin(keyDim).(*HotPeerStat).GetKeyRate(),
 	}
 	for k := 0; k < dimLen; k++ {
-		ret[k] = math.Max(ret[k]*hotThresholdRatio, minThresholds[k])
+		ret[k] = math.Max(ret[k]*HotThresholdRatio, minThresholds[k])
 	}
 	return ret
 }
