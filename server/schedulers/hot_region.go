@@ -471,7 +471,7 @@ func (h *hotScheduler) balanceHotReadRegions(cluster opt.Cluster) []*operator.Op
 
 	peerSolver := newBalanceSolver(h, cluster, read, movePeer)
 	peerOps := peerSolver.solve()
-	if len(leaderOps) > 0 && leaderSolver.best.progressiveRank <= peerSolver.best.progressiveRank {
+	if len(leaderOps) > 0 && (len(peerOps) == 0 || leaderSolver.best.progressiveRank <= peerSolver.best.progressiveRank) {
 		return leaderOps
 	}
 	if len(peerOps) > 0 {
