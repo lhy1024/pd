@@ -1028,7 +1028,7 @@ func (bs *balanceSolver) isReadyToBuild() bool {
 		bs.cur.srcPeerStat == nil || bs.cur.region == nil {
 		return false
 	}
-	if bs.cur.srcStoreID != bs.cur.srcPeerStat.StoreID ||
+	if bs.cur.srcStoreID != bs.cur.srcPeerStat.GetStoreID() ||
 		bs.cur.region.GetID() != bs.cur.srcPeerStat.ID() {
 		return false
 	}

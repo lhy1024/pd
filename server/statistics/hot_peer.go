@@ -64,7 +64,7 @@ func (d *dimStat) Get() float64 {
 
 // HotPeerStat records each hot peer's statistics
 type HotPeerStat struct {
-	StoreID  uint64 `json:"store-id"`
+	storeID  uint64
 	RegionID uint64 `json:"region-id"`
 
 	// HotDegree records the times for the region considered as hot spot during each HandleRegionHeartbeat
@@ -127,6 +127,11 @@ func (stat *HotPeerStat) IsNew() bool {
 	return stat.isNew
 }
 
+// GetStoreID returns store ID
+func (stat *HotPeerStat) GetStoreID() uint64 {
+	return stat.storeID
+}
+
 // GetByteRate returns denoised BytesRate if possible.
 func (stat *HotPeerStat) GetByteRate() float64 {
 	if stat.rollingByteRate == nil {
@@ -175,7 +180,7 @@ func (stat *HotPeerStat) Log(str string, level func(msg string, fields ...zap.Fi
 	level(str,
 		zap.Uint64("interval", stat.interval),
 		zap.Uint64("region", stat.RegionID),
-		zap.Uint64("store", stat.StoreID),
+		zap.Uint64("store", stat.storeID),
 		zap.Uint64("epoch-version", stat.Version),
 		zap.Float64("byte-rate", stat.GetByteRate()),
 		zap.Float64("byte-rate-threshold", stat.thresholds[byteDim]),

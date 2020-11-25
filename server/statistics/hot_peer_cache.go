@@ -84,19 +84,19 @@ func (f *hotPeerCache) RegionStats() map[uint64][]*HotPeerStat {
 // Update updates the items in statistics.
 func (f *hotPeerCache) Update(item *HotPeerStat) {
 	if item.IsNeedDelete() {
-		if peers, ok := f.peersOfStore[item.StoreID]; ok {
+		if peers, ok := f.peersOfStore[item.storeID]; ok {
 			peers.Remove(item.RegionID)
 		}
 
 		if stores, ok := f.storesOfRegion[item.RegionID]; ok {
-			delete(stores, item.StoreID)
+			delete(stores, item.storeID)
 		}
 		item.Log("delete from cache", log.Info)
 	} else {
-		peers, ok := f.peersOfStore[item.StoreID]
+		peers, ok := f.peersOfStore[item.storeID]
 		if !ok {
 			peers = NewTopN(dimLen, TopNN, topNTTL)
-			f.peersOfStore[item.StoreID] = peers
+			f.peersOfStore[item.storeID] = peers
 		}
 		peers.Put(item)
 
@@ -105,7 +105,7 @@ func (f *hotPeerCache) Update(item *HotPeerStat) {
 			stores = make(map[uint64]struct{})
 			f.storesOfRegion[item.RegionID] = stores
 		}
-		stores[item.StoreID] = struct{}{}
+		stores[item.storeID] = struct{}{}
 		item.Log("region heartbeat interval", log.Info)
 	}
 }
@@ -164,7 +164,7 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 		thresholds := f.calcHotThresholds(storeID)
 
 		newItem := &HotPeerStat{
-			StoreID:            storeID,
+			storeID:            storeID,
 			RegionID:           region.GetID(),
 			kind:               f.kind,
 			ByteRate:           byteRate,
@@ -343,7 +343,7 @@ func (f *hotPeerCache) justTransferLeader(region *core.RegionInfo) bool {
 				continue
 			}
 			if oldItem.isLeader {
-				return oldItem.StoreID != region.GetLeader().GetStoreId()
+				return oldItem.storeID != region.GetLeader().GetStoreId()
 			}
 		}
 	}
@@ -422,7 +422,7 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 		newItem.HotDegree = oldItem.HotDegree
 		newItem.AntiCount = oldItem.AntiCount
 	} else {
-		if f.isOldColdPeer(oldItem, newItem.StoreID) {
+		if f.isOldColdPeer(oldItem, newItem.storeID) {
 			if newItem.isHot(thresholds) {
 				newItem.HotDegree = 1
 				newItem.AntiCount = hotRegionAntiCount
