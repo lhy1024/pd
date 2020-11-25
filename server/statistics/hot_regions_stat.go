@@ -17,6 +17,8 @@ package statistics
 type HotPeersStat struct {
 	StoreBytesRate float64       `json:"store-bytes-rate"`
 	StoreKeysRate  float64       `json:"store-keys-rate"`
+	TotalBytesRate float64       `json:"total-flow-bytes"`
+	TotalKeysRate  float64       `json:"total-flow-keys"`
 	Count          int           `json:"hot-peers-count"`
 	Stats          []HotPeerStat `json:"statistics"`
 }
