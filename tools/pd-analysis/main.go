@@ -28,8 +28,9 @@ var (
 	logLevel = flag.String("logLevel", "info", "log level, default info")
 	style    = flag.String("style", "", "analysis style, e.g. transfer-counter")
 	operator = flag.String("operator", "", "operator style, e.g. balance-region, balance-leader, transfer-hot-read-leader, move-hot-read-region, transfer-hot-write-leader, move-hot-write-region")
-	start    = flag.String("start", "", "start time, e.g. 2019/09/10 12:20:07, default: total file")
-	end      = flag.String("end", "", "end time, e.g. 2019/09/10 14:20:07, default: total file")
+	// dim      = flag.String("dim", "", "hot scheduler dim, e.g. read-key, write-key, read-byte, write-byte")
+	start = flag.String("start", "", "start time, e.g. 2019/09/10 12:20:07, default: total file")
+	end   = flag.String("end", "", "end time, e.g. 2019/09/10 14:20:07, default: total file")
 )
 
 // Logger is the global logger used for simulator.
@@ -45,7 +46,6 @@ func InitLogger(l string) {
 func main() {
 	flag.Parse()
 	InitLogger(*logLevel)
-	analysis.GetTransferCounter().Init(0, 0)
 	if *input == "" {
 		Logger.Fatal("Need to specify one input pd log.")
 	}
@@ -72,7 +72,7 @@ func main() {
 			if err != nil {
 				Logger.Fatal(err.Error())
 			}
-			analysis.GetTransferCounter().PrintResult()
+			analysis.GetTransferCounter().OutputResult()
 			break
 		}
 	default:

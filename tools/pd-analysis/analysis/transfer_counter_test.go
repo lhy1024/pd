@@ -91,6 +91,6 @@ func (t *testTransferRegionCounter) TestCounterRedundant(c *C) {
 		GetTransferCounter().Result()
 		c.Assert(GetTransferCounter().Redundant, Equals, uint64(1778))
 		c.Assert(GetTransferCounter().Necessary, Equals, uint64(938))
-		GetTransferCounter().PrintResult()
+		GetTransferCounter().OutputResult()
 	}
 }

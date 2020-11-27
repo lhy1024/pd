@@ -17,10 +17,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/pingcap/errors"
 )
 
 // TransferCounter is to count transfer schedule for judging whether redundant
@@ -213,8 +215,8 @@ func (c *TransferCounter) printGraph() {
 	}
 }
 
-// PrintResult will print result to log and csv file.
-func (c *TransferCounter) PrintResult() {
+// OutputResult will print result to log and csv file.
+func (c *TransferCounter) OutputResult() {
 	c.prepare()
 	// Output log
 	log.Println("Total Schedules Graph: ")
@@ -251,6 +253,42 @@ func (c *TransferCounter) PrintResult() {
 	}
 }
 
-func toString(num uint64) string {
-	return strconv.FormatInt(int64(num), 10)
+// CompileRegex is to provide regexp for transfer counter.
+func (c *TransferCounter) CompileRegex(operator string) (*regexp.Regexp, error) {
+	var r *regexp.Regexp
+	var err error
+
+	for _, regionOperator := range regionOperators {
+		if operator == regionOperator {
+			r, err = regexp.Compile(".*?operator finish.*?region-id=([0-9]*).*?" + operator + ".*?store \\[([0-9]*)\\] to \\[([0-9]*)\\].*?")
+		}
+	}
+
+	for _, leaderOperator := range leaderOperators {
+		if operator == leaderOperator {
+			r, err = regexp.Compile(".*?operator finish.*?region-id=([0-9]*).*?" + operator + ".*?store ([0-9]*) to ([0-9]*).*?")
+		}
+	}
+
+	if r == nil {
+		err = errors.New("unsupported operator. ")
+	}
+	return r, err
+}
+
+// ParseLog is to parse log for transfer counter.
+func (c *TransferCounter) ParseLog(filename, start, end, layout string, r *regexp.Regexp) error {
+	collectResult := func(content string) error {
+		results, err := c.parseLine(content, r)
+		if err != nil {
+			return err
+		}
+		if len(results) == 3 {
+			regionID, sourceID, targetID := results[0], results[1], results[2]
+			c.AddTarget(regionID, targetID)
+			c.AddSource(regionID, sourceID)
+		}
+		return nil
+	}
+	return readLog(filename, start, end, layout, collectResult)
 }

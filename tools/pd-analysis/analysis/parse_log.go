@@ -40,29 +40,6 @@ type Interpreter interface {
 	ParseLog(filename string, r *regexp.Regexp) error
 }
 
-// CompileRegex is to provide regexp for transfer counter.
-func (c *TransferCounter) CompileRegex(operator string) (*regexp.Regexp, error) {
-	var r *regexp.Regexp
-	var err error
-
-	for _, regionOperator := range regionOperators {
-		if operator == regionOperator {
-			r, err = regexp.Compile(".*?operator finish.*?region-id=([0-9]*).*?" + operator + ".*?store \\[([0-9]*)\\] to \\[([0-9]*)\\].*?")
-		}
-	}
-
-	for _, leaderOperator := range leaderOperators {
-		if operator == leaderOperator {
-			r, err = regexp.Compile(".*?operator finish.*?region-id=([0-9]*).*?" + operator + ".*?store ([0-9]*) to ([0-9]*).*?")
-		}
-	}
-
-	if r == nil {
-		err = errors.New("unsupported operator. ")
-	}
-	return r, err
-}
-
 func (c *TransferCounter) parseLine(content string, r *regexp.Regexp) ([]uint64, error) {
 	results := make([]uint64, 0, 4)
 	subStrings := r.FindStringSubmatch(content)
@@ -151,21 +128,4 @@ func readLog(filename, start, end, layout string, collectResult func(string) err
 		}
 	}
 	return nil
-}
-
-// ParseLog is to parse log for transfer counter.
-func (c *TransferCounter) ParseLog(filename, start, end, layout string, r *regexp.Regexp) error {
-	collectResult := func(content string) error {
-		results, err := c.parseLine(content, r)
-		if err != nil {
-			return err
-		}
-		if len(results) == 3 {
-			regionID, sourceID, targetID := results[0], results[1], results[2]
-			GetTransferCounter().AddTarget(regionID, targetID)
-			GetTransferCounter().AddSource(regionID, sourceID)
-		}
-		return nil
-	}
-	return readLog(filename, start, end, layout, collectResult)
 }
