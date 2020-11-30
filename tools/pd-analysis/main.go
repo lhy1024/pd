@@ -15,6 +15,7 @@ package main
 
 import (
 	"flag"
+	"net/http"
 	"os"
 
 	"github.com/pingcap/log"
@@ -73,6 +74,22 @@ func main() {
 				Logger.Fatal(err.Error())
 			}
 			analysis.GetTransferCounter().OutputResult()
+			break
+		}
+	case "heartbeat":
+		{
+			collector := analysis.NewHeartbeatCollector()
+			re, err := collector.CompileRegex()
+			if err != nil {
+				Logger.Fatal(err.Error())
+			}
+			http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				r.ParseForm()
+				line, err := collector.ParseLog(*input, *start, *end, analysis.DefaultLayout, re)
+				if err != nil {
+					line.Render(w)
+				}
+			})
 			break
 		}
 	default:

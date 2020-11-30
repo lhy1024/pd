@@ -4,7 +4,6 @@ go 1.13
 
 require (
 	github.com/BurntSushi/toml v0.3.1
-	github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751
 	github.com/aws/aws-sdk-go v1.35.3
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
@@ -12,6 +11,7 @@ require (
 	github.com/coreos/pkg v0.0.0-20180928190104-399ea9e2e55f
 	github.com/docker/go-units v0.4.0
 	github.com/go-echarts/go-echarts v1.0.0
+	github.com/go-echarts/go-echarts/v2 v2.2.3
 	github.com/go-playground/overalls v0.0.0-20180201144345-22ec1a223b7c
 	github.com/gogo/protobuf v1.3.1
 	github.com/golang/protobuf v1.3.4

@@ -118,9 +118,15 @@ func (t *testParseLog) TestStoreHeartbeatParseLog(c *C) {
 	r, err := h.CompileRegex()
 	c.Check(err, IsNil)
 	{
-		content := "[2019/09/05 04:15:52.404 +00:00] [INFO] [operator_controller.go:119] [\"operator finish\"] [region-id=54252] [operator=\"\"balance-leader {transfer leader: store 4 to 6} (kind:leader,balance, region:54252(8243,398), createAt:2019-09-05 04:15:52.400290023 +0000 UTC m=+91268.739649520, startAt:2019-09-05 04:15:52.400489629 +0000 UTC m=+91268.739849120, currentStep:1, steps:[transfer leader from store 4 to store 6]) finished\"\"]"
+		content := "[2020/11/30 08:19:50.355 +00:00] [INFO] [store.go:342] [\"update store stats\"] [key-write=313617] [key-read=20907041] [byte-write=44492991] [byte-read=1402498008] [interval=10s] [store-id=55001]"
 		s, err := h.parseLine(content, r)
 		c.Check(err, IsNil)
 		c.Check(s, NotNil)
+		c.Check(s.writeKeyRate, Equals, 313617)
+		c.Check(s.readKeyRate, Equals, 20907041)
+		c.Check(s.writeByteRate, Equals, 44492991)
+		c.Check(s.readByteRate, Equals, 1402498008)
+		c.Check(s.interval, Equals, 10)
+		c.Check(s.id, Equals, 55001)
 	}
 }
