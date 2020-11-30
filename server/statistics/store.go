@@ -332,11 +332,11 @@ func collect(records []*pdpb.RecordPair) float64 {
 func (r *RollingStoreStats) Observe(stats *pdpb.StoreStats) {
 	statInterval := stats.GetInterval()
 	interval := statInterval.GetEndTimestamp() - statInterval.GetStartTimestamp()
-	log.Debug("update store stats",
+	log.Info("update store stats",
 		zap.Uint64("key-write", stats.KeysWritten),
 		zap.Uint64("key-read", stats.KeysRead),
-		zap.Uint64("bytes-write", stats.BytesWritten),
-		zap.Uint64("bytes-read", stats.BytesRead),
+		zap.Uint64("byte-write", stats.BytesWritten),
+		zap.Uint64("byte-read", stats.BytesRead),
 		zap.Duration("interval", time.Duration(interval)*time.Second),
 		zap.Uint64("store-id", stats.GetStoreId()))
 	r.Lock()

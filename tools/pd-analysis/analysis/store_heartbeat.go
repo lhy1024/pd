@@ -14,18 +14,38 @@
 package analysis
 
 import (
+	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/tikv/pd/pkg/movingaverage"
 )
 
 type storeStats struct {
-	storeID       uint64
-	readByteRate  float64
-	writeByteRate float64
-	readKeyRate   float64
-	writeKeyRate  float64
-	interval      uint64
+	storeID       int
+	readByteRate  int
+	writeByteRate int
+	readKeyRate   int
+	writeKeyRate  int
+	interval      int
+}
+
+func (s *storeStats) log() {
+	if s == nil {
+		log.Info("store stats is nil")
+		return
+	}
+	log.Info("store stats",
+		zap.Int("key-write", s.writeKeyRate),
+		zap.Int("key-read", s.readKeyRate),
+		zap.Int("byte-write", s.writeKeyRate),
+		zap.Int("byte-read", s.writeKeyRate),
+		zap.Int("interval", s.writeKeyRate),
+		zap.Int("store-id", s.writeKeyRate),
+	)
 }
 
 type deltaWithInterval struct {
@@ -42,23 +62,43 @@ func NewHeartbeatCollector() *heartbeatCollector {
 	return &heartbeatCollector{}
 }
 
-//func (c *heartbeatCollector) ParseLog(filename, start, end, layout string, r *regexp.Regexp) error {
-//	collectResult := func(content string) error {
-//		results, err := c.parseLine(content, r)
-//		for _, result := range results {
-//			log.Info("results", zap.Uint64("storeID", result.storeID))
-//		}
-//		return err
-//	}
-//	return readLog(filename, start, end, layout, collectResult)
-//}
-//
-//func (c *heartbeatCollector) parseLine(content string, r *regexp.Regexp) ([]storeStats, error) {
-//	results := make([]uint64, 0, 4)
-//	subStrings := r.FindStringSubmatch(content)
-//	if len(subStrings) == 0 {
-//
-//	} else {
-//		return results, errors.New("Can't parse Log, with " + content)
-//	}
-//}
+// CompileRegex is to provide regexp for heartbeatCollector.
+func (c *heartbeatCollector) CompileRegex() (*regexp.Regexp, error) {
+	typs := []string{
+		"key-write",
+		"key-read",
+		"byte-write",
+		"byte-read",
+		"interval",
+		"store-id",
+	}
+	r := ".*?update store stats.*?"
+	for _, typ := range typs {
+		r += typ + "=([0-9]*).*?"
+	}
+	return regexp.Compile(r)
+}
+
+func (c *heartbeatCollector) ParseLog(filename, start, end, layout string, r *regexp.Regexp) error {
+	collectResult := func(content string) error {
+		s, err := c.parseLine(content, r)
+		s.log()
+		return err
+	}
+	return readLog(filename, start, end, layout, collectResult)
+}
+
+func (c *heartbeatCollector) parseLine(content string, r *regexp.Regexp) (*storeStats, error) {
+	subStrings := r.FindStringSubmatch(content)
+	if len(subStrings) == 6 {
+		s := &storeStats{}
+		s.writeKeyRate, _ = strconv.Atoi(subStrings[0])
+		s.readKeyRate, _ = strconv.Atoi(subStrings[1])
+		s.writeByteRate, _ = strconv.Atoi(subStrings[2])
+		s.readByteRate, _ = strconv.Atoi(subStrings[3])
+		s.interval, _ = strconv.Atoi(subStrings[4])
+		s.storeID, _ = strconv.Atoi(subStrings[5])
+		return s, nil
+	}
+	return nil, errors.New("Can't parse Log, with " + content)
+}

@@ -113,8 +113,14 @@ func (t *testParseLog) TestCurrentTime(c *C) {
 	c.Assert(current, Equals, expect)
 }
 
-//func (t *testParseLog) TestStoreHeartbeatParseLog(c *C) {
-//	{
-//		content := "[2019/09/05 04:15:52.404 +00:00] [INFO] [operator_controller.go:119] [\"operator finish\"] [region-id=54252] [operator=\"\"balance-leader {transfer leader: store 4 to 6} (kind:leader,balance, region:54252(8243,398), createAt:2019-09-05 04:15:52.400290023 +0000 UTC m=+91268.739649520, startAt:2019-09-05 04:15:52.400489629 +0000 UTC m=+91268.739849120, currentStep:1, steps:[transfer leader from store 4 to store 6]) finished\"\"]"
-//	}
-//}
+func (t *testParseLog) TestStoreHeartbeatParseLog(c *C) {
+	h := NewHeartbeatCollector()
+	r, err := h.CompileRegex()
+	c.Check(err, IsNil)
+	{
+		content := "[2019/09/05 04:15:52.404 +00:00] [INFO] [operator_controller.go:119] [\"operator finish\"] [region-id=54252] [operator=\"\"balance-leader {transfer leader: store 4 to 6} (kind:leader,balance, region:54252(8243,398), createAt:2019-09-05 04:15:52.400290023 +0000 UTC m=+91268.739649520, startAt:2019-09-05 04:15:52.400489629 +0000 UTC m=+91268.739849120, currentStep:1, steps:[transfer leader from store 4 to store 6]) finished\"\"]"
+		s, err := h.parseLine(content, r)
+		c.Check(err, IsNil)
+		c.Check(s, NotNil)
+	}
+}
