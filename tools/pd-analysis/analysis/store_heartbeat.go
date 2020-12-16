@@ -139,14 +139,14 @@ func (c *heartbeatCollector) ParseLog(filename, start, end, layout string, r *re
 	id := 1
 	stats := c.hb.get(id)
 
-	line1, _ := c.draw(stats, readByte)
-	line2, _ := c.draw(stats, writeByte)
+	line1, _ := c.draw(stats, []rateKind{readByte, writeByte})
+	// line2, _ := c.draw(stats, writeByte)
 
-	return []*charts.Line{line1, line2}, nil
+	return []*charts.Line{line1}, nil
 
 }
 
-func (c *heartbeatCollector) draw(stats []*stat, kind rateKind) (*charts.Line, error) {
+func (c *heartbeatCollector) draw(stats []*stat, kinds []rateKind) (*charts.Line, error) {
 	line := charts.NewLine()
 	line.SetGlobalOptions(
 		charts.WithTitleOpts(opts.Title{
@@ -159,13 +159,14 @@ func (c *heartbeatCollector) draw(stats []*stat, kind rateKind) (*charts.Line, e
 	for i := 1; i < len(stats); i++ {
 		xAxis[i] = xAxis[i-1] + stats[i].interval
 	}
-
-	scoreData := make([]opts.LineData, 0, len(stats))
-	for _, stat := range stats {
-		scoreData = append(scoreData, opts.LineData{Value: stat.getRate(kind)})
+	l := line.SetXAxis(xAxis)
+	for _, kind := range kinds {
+		scoreData := make([]opts.LineData, 0, len(stats))
+		for _, stat := range stats {
+			scoreData = append(scoreData, opts.LineData{Value: stat.getRate(kind)})
+		}
+		l.AddSeries("", scoreData)
 	}
-
-	line.SetXAxis(xAxis).AddSeries("wb", scoreData)
 	return line, nil
 }
 
