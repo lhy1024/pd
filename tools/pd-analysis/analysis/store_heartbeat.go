@@ -14,7 +14,6 @@
 package analysis
 
 import (
-	"flag"
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
 	"github.com/pingcap/errors"
@@ -25,8 +24,6 @@ import (
 	"strconv"
 )
 
-var port = flag.String("p", ":8086", "serving addr")
-
 type rateKind int
 
 const (
@@ -34,6 +31,13 @@ const (
 	writeByte
 	readKey
 	writeKey
+)
+
+type idKind int
+
+const (
+	store idKind = iota
+	region
 )
 
 type stat struct {
@@ -81,7 +85,7 @@ func newHeartbeats() *heartbeats {
 }
 
 func (hb *heartbeats) add(s *stat) {
-	if _, ok := hb.stats[s.id]; ok {
+	if _, ok := hb.stats[s.id]; !ok {
 		hb.stats[s.id] = make([]*stat, 0, 0)
 	}
 	hb.stats[s.id] = append(hb.stats[s.id], s)
@@ -89,6 +93,7 @@ func (hb *heartbeats) add(s *stat) {
 
 func (hb *heartbeats) get(id int) []*stat {
 	if stats, ok := hb.stats[id]; ok {
+		log.Info("add", zap.Int("len", len(stats)), zap.Int("id", id))
 		return stats
 	}
 	return nil
@@ -122,57 +127,54 @@ func (c *heartbeatCollector) CompileRegex() (*regexp.Regexp, error) {
 	return regexp.Compile(r)
 }
 
-func (c *heartbeatCollector) ParseLog(filename, start, end, layout string, r *regexp.Regexp) (*charts.Line, error) {
+func (c *heartbeatCollector) ParseLog(filename, start, end, layout string, r *regexp.Regexp) ([]*charts.Line, error) {
 	collectResult := func(content string) error {
 		s, err := c.parseLine(content, r)
-		if err == nil {
+		if s != nil {
 			c.hb.add(s)
 		}
 		return err
 	}
+	readLog(filename, start, end, layout, collectResult)
 	id := 1
 	stats := c.hb.get(id)
-	//if stats == nil {
-	//	return errors.New("Can't get hbs, with id " + strconv.FormatInt(int64(id), 10))
-	//}
-	readLog(filename, start, end, layout, collectResult)
 
-	return c.draw(stats, readByte)
+	line1, _ := c.draw(stats, readByte)
+	line2, _ := c.draw(stats, writeByte)
+
+	return []*charts.Line{line1, line2}, nil
 
 }
 
 func (c *heartbeatCollector) draw(stats []*stat, kind rateKind) (*charts.Line, error) {
-	size := charts.NewLine()
-	size.SetGlobalOptions(
+	line := charts.NewLine()
+	line.SetGlobalOptions(
 		charts.WithTitleOpts(opts.Title{
-			Title: "Size",
+			Title: "line",
 		}),
 	)
 
-	//xAxis := make([]int, len(hbs))
-	//xAxis[0] = hbs[0].interval
-	//for i := 1; i < len(hbs); i++ {
-	//	xAxis[i] = xAxis[i-1] + hbs[i].interval
-	//}
-
-	xAxis := make([]float64, 0, 0)
-	for _, stat := range stats {
-		if stat.interval == 0 {
-			continue
-		}
-		rate := float64(stat.getRate(kind)) / float64(stat.interval)
-		for j := 0; j < stat.interval; j++ {
-			xAxis = append(xAxis, rate)
-		}
+	xAxis := make([]int, len(stats))
+	xAxis[0] = stats[0].interval
+	for i := 1; i < len(stats); i++ {
+		xAxis[i] = xAxis[i-1] + stats[i].interval
 	}
 
-	size.SetXAxis(xAxis)
-	return size, nil
+	scoreData := make([]opts.LineData, 0, len(stats))
+	for _, stat := range stats {
+		scoreData = append(scoreData, opts.LineData{Value: stat.getRate(kind)})
+	}
+
+	line.SetXAxis(xAxis).AddSeries("wb", scoreData)
+	return line, nil
 }
 
 func (c *heartbeatCollector) parseLine(content string, r *regexp.Regexp) (*stat, error) {
 	subStrings := r.FindStringSubmatch(content)
-	if len(subStrings) == 7 {
+	switch len(subStrings) {
+	case 0:
+		return nil, nil
+	case 7:
 		s := &stat{}
 		s.writeKeyRate, _ = strconv.Atoi(subStrings[1])
 		s.readKeyRate, _ = strconv.Atoi(subStrings[2])
@@ -181,6 +183,7 @@ func (c *heartbeatCollector) parseLine(content string, r *regexp.Regexp) (*stat,
 		s.interval, _ = strconv.Atoi(subStrings[5])
 		s.id, _ = strconv.Atoi(subStrings[6])
 		return s, nil
+	default:
+		return nil, errors.New("Can't parse Log, with " + content)
 	}
-	return nil, errors.New("Can't parse Log, with " + content)
 }

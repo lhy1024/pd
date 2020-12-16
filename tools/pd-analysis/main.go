@@ -32,6 +32,7 @@ var (
 	// dim      = flag.String("dim", "", "hot scheduler dim, e.g. read-key, write-key, read-byte, write-byte")
 	start = flag.String("start", "", "start time, e.g. 2019/09/10 12:20:07, default: total file")
 	end   = flag.String("end", "", "end time, e.g. 2019/09/10 14:20:07, default: total file")
+	port  = flag.String("port", ":8086", "serving addr")
 )
 
 // Logger is the global logger used for simulator.
@@ -61,39 +62,39 @@ func main() {
 
 	switch *style {
 	case "transfer-counter":
-		{
-			if *operator == "" {
-				Logger.Fatal("Need to specify one operator.")
-			}
-			r, err := analysis.GetTransferCounter().CompileRegex(*operator)
-			if err != nil {
-				Logger.Fatal(err.Error())
-			}
-			err = analysis.GetTransferCounter().ParseLog(*input, *start, *end, analysis.DefaultLayout, r)
-			if err != nil {
-				Logger.Fatal(err.Error())
-			}
-			analysis.GetTransferCounter().OutputResult()
-			break
+		if *operator == "" {
+			Logger.Fatal("Need to specify one operator.")
 		}
+		r, err := analysis.GetTransferCounter().CompileRegex(*operator)
+		if err != nil {
+			Logger.Fatal(err.Error())
+		}
+		err = analysis.GetTransferCounter().ParseLog(*input, *start, *end, analysis.DefaultLayout, r)
+		if err != nil {
+			Logger.Fatal(err.Error())
+		}
+		analysis.GetTransferCounter().OutputResult()
 	case "heartbeat":
-		{
-			collector := analysis.NewHeartbeatCollector()
-			re, err := collector.CompileRegex()
-			if err != nil {
-				Logger.Fatal(err.Error())
-			}
-			http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				r.ParseForm()
-				line, err := collector.ParseLog(*input, *start, *end, analysis.DefaultLayout, re)
-				if err != nil {
-					line.Render(w)
-				}
-			})
-			break
+		collector := analysis.NewHeartbeatCollector()
+		re, err := collector.CompileRegex()
+		if err != nil {
+			Logger.Fatal(err.Error())
 		}
+		lines, err := collector.ParseLog(*input, *start, *end, analysis.DefaultLayout, re)
+		if err != nil {
+			log.Error("render", zap.Error(err))
+		}
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			r.ParseForm()
+			for _, line := range lines {
+				err = line.Render(w)
+			}
+			if err != nil {
+				log.Error("line", zap.Error(err))
+			}
+		})
+		http.ListenAndServe(*port, nil)
 	default:
 		Logger.Fatal("Style is not exist.")
 	}
-
 }
