@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/server/core"
 	"github.com/tikv/pd/server/schedule/filter"
@@ -29,17 +30,19 @@ import (
 
 // RuleChecker fix/improve region by placement rules.
 type RuleChecker struct {
-	cluster     opt.Cluster
-	ruleManager *placement.RuleManager
-	name        string
+	cluster           opt.Cluster
+	ruleManager       *placement.RuleManager
+	name              string
+	regionWaitingList cache.Cache
 }
 
 // NewRuleChecker creates a checker instance.
-func NewRuleChecker(cluster opt.Cluster, ruleManager *placement.RuleManager) *RuleChecker {
+func NewRuleChecker(cluster opt.Cluster, ruleManager *placement.RuleManager, regionWaitingList cache.Cache) *RuleChecker {
 	return &RuleChecker{
-		cluster:     cluster,
-		ruleManager: ruleManager,
-		name:        "rule-checker",
+		cluster:           cluster,
+		ruleManager:       ruleManager,
+		name:              "rule-checker",
+		regionWaitingList: regionWaitingList,
 	}
 }
 
@@ -78,7 +81,14 @@ func (c *RuleChecker) fixRange(region *core.RegionInfo) *operator.Operator {
 	if len(keys) == 0 {
 		return nil
 	}
-	return operator.CreateSplitRegionOperator("rule-split-region", region, 0, pdpb.CheckPolicy_USEKEY, keys)
+
+	op, err := operator.CreateSplitRegionOperator("rule-split-region", region, 0, pdpb.CheckPolicy_USEKEY, keys)
+	if err != nil {
+		log.Debug("create split region operator failed", errs.ZapError(err))
+		return nil
+	}
+
+	return op
 }
 
 func (c *RuleChecker) fixRulePeer(region *core.RegionInfo, fit *placement.RegionFit, rf *placement.RuleFit) (*operator.Operator, error) {
@@ -116,6 +126,7 @@ func (c *RuleChecker) addRulePeer(region *core.RegionInfo, rf *placement.RuleFit
 	store := c.strategy(region, rf.Rule).SelectStoreToAdd(ruleStores)
 	if store == 0 {
 		checkerCounter.WithLabelValues("rule_checker", "no-store-add").Inc()
+		c.regionWaitingList.Put(region.GetID(), nil)
 		return nil, errors.New("no store to add peer")
 	}
 	peer := &metapb.Peer{StoreId: store, Role: rf.Rule.Role.MetaPeerRole()}
@@ -127,6 +138,7 @@ func (c *RuleChecker) replaceRulePeer(region *core.RegionInfo, rf *placement.Rul
 	store := c.strategy(region, rf.Rule).SelectStoreToReplace(ruleStores, peer.GetStoreId())
 	if store == 0 {
 		checkerCounter.WithLabelValues("rule_checker", "no-store-replace").Inc()
+		c.regionWaitingList.Put(region.GetID(), nil)
 		return nil, errors.New("no store to replace peer")
 	}
 	newPeer := &metapb.Peer{StoreId: store, Role: rf.Rule.Role.MetaPeerRole()}

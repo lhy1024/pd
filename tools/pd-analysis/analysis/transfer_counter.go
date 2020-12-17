@@ -122,7 +122,7 @@ func (c *TransferCounter) prepare() {
 		c.unIndexMap[storeID] = index
 	}
 
-	c.graphMat = make([][]uint64, 0)
+	c.graphMat = nil
 	for i := 0; i < c.scheduledStoreNum; i++ {
 		tmp := make([]uint64, c.scheduledStoreNum)
 		c.graphMat = append(c.graphMat, tmp)
@@ -235,7 +235,7 @@ func (c *TransferCounter) OutputResult() {
 	log.Println("Necessary Schedules: ", c.Necessary)
 
 	// Output csv file
-	fd, err := os.OpenFile("result.txt", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	fd, err := os.OpenFile("result.txt", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -11,15 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build tools
+package statistics
 
-package tools
+// HotStat contains cluster's hotspot statistics.
+type HotStat struct {
+	*HotCache
+	*StoresStats
+}
 
-import (
-	_ "github.com/mgechev/revive"
-	_ "github.com/pingcap/errors/errdoc-gen"
-	_ "github.com/pingcap/failpoint/failpoint-ctl"
-	_ "github.com/sasha-s/go-deadlock"
-	_ "github.com/swaggo/swag/cmd/swag"
-	_ "golang.org/x/tools/cmd/goimports"
-)
+// NewHotStat creates the container to hold cluster's hotspot statistics.
+func NewHotStat() *HotStat {
+	return &HotStat{
+		HotCache:    NewHotCache(),
+		StoresStats: NewStoresStats(),
+	}
+}
