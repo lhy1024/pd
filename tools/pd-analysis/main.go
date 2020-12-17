@@ -15,6 +15,7 @@ package main
 
 import (
 	"flag"
+	"github.com/go-echarts/go-echarts/v2/charts"
 	"net/http"
 	"os"
 
@@ -80,9 +81,16 @@ func main() {
 		if err != nil {
 			Logger.Fatal(err.Error())
 		}
-		lines, err := collector.ParseLog(*input, *start, *end, analysis.DefaultLayout, re)
-		if err != nil {
-			log.Error("render", zap.Error(err))
+		inputs := []string{
+			"a.log", "b.log",
+		}
+		var lines []*charts.Line
+		for _, input := range inputs {
+			line, err := collector.ParseLog(input, *start, *end, analysis.DefaultLayout, re)
+			if err != nil {
+				log.Error("render", zap.Error(err))
+			}
+			lines = append(lines, line)
 		}
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			r.ParseForm()

@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 	"regexp"
 	"strconv"
+	"time"
 )
 
 type rateKind int
@@ -93,10 +94,13 @@ func (hb *heartbeats) add(s *stat) {
 
 func (hb *heartbeats) get(id int) []*stat {
 	if stats, ok := hb.stats[id]; ok {
-		log.Info("add", zap.Int("len", len(stats)), zap.Int("id", id))
 		return stats
 	}
 	return nil
+}
+
+func (hb *heartbeats) clear() {
+	hb.stats = make(map[int][]*stat)
 }
 
 type heartbeatCollector struct {
@@ -127,7 +131,7 @@ func (c *heartbeatCollector) CompileRegex() (*regexp.Regexp, error) {
 	return regexp.Compile(r)
 }
 
-func (c *heartbeatCollector) ParseLog(filename, start, end, layout string, r *regexp.Regexp) ([]*charts.Line, error) {
+func (c *heartbeatCollector) ParseLog(filename, start, end, layout string, r *regexp.Regexp) (*charts.Line, error) {
 	collectResult := func(content string) error {
 		s, err := c.parseLine(content, r)
 		if s != nil {
@@ -135,18 +139,19 @@ func (c *heartbeatCollector) ParseLog(filename, start, end, layout string, r *re
 		}
 		return err
 	}
+	c.hb.clear()
 	readLog(filename, start, end, layout, collectResult)
-	id := 1
+	id := 11252623
 	stats := c.hb.get(id)
-
-	line1, _ := c.draw(stats, []rateKind{readByte, writeByte})
-	// line2, _ := c.draw(stats, writeByte)
-
-	return []*charts.Line{line1}, nil
+	return c.drawBaseLine(stats, readByte)
 
 }
 
-func (c *heartbeatCollector) draw(stats []*stat, kinds []rateKind) (*charts.Line, error) {
+func (c *heartbeatCollector) drawBaseLine(stats []*stat, kind rateKind) (*charts.Line, error) {
+	if len(stats) == 0 {
+		log.Fatal("Emtpy stats")
+	}
+
 	line := charts.NewLine()
 	line.SetGlobalOptions(
 		charts.WithTitleOpts(opts.Title{
@@ -160,13 +165,43 @@ func (c *heartbeatCollector) draw(stats []*stat, kinds []rateKind) (*charts.Line
 		xAxis[i] = xAxis[i-1] + stats[i].interval
 	}
 	l := line.SetXAxis(xAxis)
-	for _, kind := range kinds {
+	{
 		scoreData := make([]opts.LineData, 0, len(stats))
 		for _, stat := range stats {
-			scoreData = append(scoreData, opts.LineData{Value: stat.getRate(kind)})
+			scoreData = append(scoreData, opts.LineData{Value: stat.getRate(kind) / stat.interval})
 		}
-		l.AddSeries("", scoreData)
+		l.AddSeries("origin", scoreData)
 	}
+	{
+		h := movingaverage.NewHMA(60)
+		scoreData := make([]opts.LineData, 0, len(stats))
+		for _, stat := range stats {
+			h.Add(float64(stat.getRate(kind)) / float64(stat.interval))
+			scoreData = append(scoreData, opts.LineData{Value: h.Get()})
+		}
+		l.AddSeries("HMA", scoreData)
+	}
+	{
+		t := movingaverage.NewTimeMedian(2, 5, 10)
+		scoreData := make([]opts.LineData, 0, len(stats))
+		for _, stat := range stats {
+			t.Add(float64(stat.getRate(kind)), time.Duration(stat.interval)*time.Second)
+			scoreData = append(scoreData, opts.LineData{Value: t.Get()})
+		}
+		l.AddSeries("TM", scoreData)
+	}
+	{
+		aot := movingaverage.NewAvgOverTime(time.Second * 20) // 10和20没影响
+		t := movingaverage.NewHMA(1)
+		scoreData := make([]opts.LineData, 0, len(stats))
+		for _, stat := range stats {
+			aot.Add(float64(stat.getRate(kind)), time.Duration(stat.interval)*time.Second)
+			t.Add(aot.Get())
+			scoreData = append(scoreData, opts.LineData{Value: t.Get()})
+		}
+		l.AddSeries("AOT+HMA", scoreData)
+	}
+
 	return line, nil
 }
 
