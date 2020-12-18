@@ -172,36 +172,48 @@ func (c *heartbeatCollector) drawBaseLine(stats []*stat, kind rateKind) (*charts
 		}
 		l.AddSeries("origin", scoreData)
 	}
+	//{
+	//	t := movingaverage.NewTimeMedian(2, 5, 10)
+	//	scoreData := make([]opts.LineData, 0, len(stats))
+	//	for _, stat := range stats {
+	//		t.Add(float64(stat.getRate(kind)), time.Duration(stat.interval)*time.Second)
+	//		scoreData = append(scoreData, opts.LineData{Value: t.Get()})
+	//	}
+	//	l.AddSeries("TM", scoreData)
+	//}
 	{
-		h := movingaverage.NewHMA(60)
-		scoreData := make([]opts.LineData, 0, len(stats))
-		for _, stat := range stats {
-			h.Add(float64(stat.getRate(kind)) / float64(stat.interval))
-			scoreData = append(scoreData, opts.LineData{Value: h.Get()})
-		}
-		l.AddSeries("HMA", scoreData)
-	}
-	{
-		t := movingaverage.NewTimeMedian(2, 5, 10)
-		scoreData := make([]opts.LineData, 0, len(stats))
-		for _, stat := range stats {
-			t.Add(float64(stat.getRate(kind)), time.Duration(stat.interval)*time.Second)
-			scoreData = append(scoreData, opts.LineData{Value: t.Get()})
-		}
-		l.AddSeries("TM", scoreData)
-	}
-	{
-		aot := movingaverage.NewAvgOverTime(time.Second * 20) // 10和20没影响
-		t := movingaverage.NewHMA(1)
+		aot := movingaverage.NewAvgOverTime(time.Second * 20) // 稳定的时候，10和20没影响，带不带也没影响
+		t := movingaverage.NewHMA(30)                         //median 只能改变延迟
 		scoreData := make([]opts.LineData, 0, len(stats))
 		for _, stat := range stats {
 			aot.Add(float64(stat.getRate(kind)), time.Duration(stat.interval)*time.Second)
 			t.Add(aot.Get())
 			scoreData = append(scoreData, opts.LineData{Value: t.Get()})
 		}
-		l.AddSeries("AOT+HMA", scoreData)
+		l.AddSeries("AOT+HMA+30", scoreData)
 	}
-
+	{
+		aot := movingaverage.NewAvgOverTime(time.Second * 20) // 稳定的时候，10和20没影响，带不带也没影响
+		t := movingaverage.NewHMA(45)
+		scoreData := make([]opts.LineData, 0, len(stats))
+		for _, stat := range stats {
+			aot.Add(float64(stat.getRate(kind)), time.Duration(stat.interval)*time.Second)
+			t.Add(aot.Get())
+			scoreData = append(scoreData, opts.LineData{Value: t.Get()})
+		}
+		l.AddSeries("AOT+HMA+45", scoreData)
+	}
+	{
+		aot := movingaverage.NewAvgOverTime(time.Second * 20) // 稳定的时候，10和20没影响，带不带也没影响
+		t := movingaverage.NewHMA(60)
+		scoreData := make([]opts.LineData, 0, len(stats))
+		for _, stat := range stats {
+			aot.Add(float64(stat.getRate(kind)), time.Duration(stat.interval)*time.Second)
+			t.Add(aot.Get())
+			scoreData = append(scoreData, opts.LineData{Value: t.Get()})
+		}
+		l.AddSeries("AOT+HMA+60", scoreData)
+	}
 	return line, nil
 }
 
