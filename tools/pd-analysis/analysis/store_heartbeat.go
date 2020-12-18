@@ -181,6 +181,7 @@ func (c *heartbeatCollector) drawBaseLine(stats []*stat, kind rateKind) (*charts
 	//	}
 	//	l.AddSeries("TM", scoreData)
 	//}
+	// todo 需要对比 sum(f(region)) 和 f(store) 的情况，这里不能用 f(sum(region)) 替代，因为 hma 不是线性函数
 	{
 		aot := movingaverage.NewAvgOverTime(time.Second * 20) // 稳定的时候，10和20没影响，带不带也没影响
 		t := movingaverage.NewHMA(30)                         //median 只能改变延迟
