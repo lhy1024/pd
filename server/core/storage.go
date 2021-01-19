@@ -20,7 +20,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -61,7 +60,7 @@ type Storage struct {
 	encryptionKeyManager *encryptionkm.KeyManager
 	useRegionStorage     int32
 	regionLoaded         int32
-	mu                   sync.Mutex
+	mu                   deadlock.Mutex
 }
 
 // StorageOpt represents available options to create Storage.

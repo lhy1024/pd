@@ -15,13 +15,13 @@ package tso
 
 import (
 	"path"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/etcdutil"
 	"github.com/tikv/pd/pkg/tsoutil"
@@ -59,7 +59,7 @@ type timestampOracle struct {
 	maxResetTSGap          func() time.Duration
 	// tso info stored in the memory
 	tsoMux struct {
-		sync.RWMutex
+		deadlock.RWMutex
 		tso *tsoObject
 	}
 	// last timestamp window stored in etcd

@@ -21,13 +21,13 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/server/cluster"
 	"github.com/tikv/pd/server/config"
@@ -77,11 +77,11 @@ type Handler struct {
 	s               *Server
 	opt             *config.PersistOptions
 	pluginChMap     map[string]chan string
-	pluginChMapLock sync.RWMutex
+	pluginChMapLock deadlock.RWMutex
 }
 
 func newHandler(s *Server) *Handler {
-	return &Handler{s: s, opt: s.persistOptions, pluginChMap: make(map[string]chan string), pluginChMapLock: sync.RWMutex{}}
+	return &Handler{s: s, opt: s.persistOptions, pluginChMap: make(map[string]chan string), pluginChMapLock: deadlock.RWMutex{}}
 }
 
 // GetRaftCluster returns RaftCluster.

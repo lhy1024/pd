@@ -21,6 +21,7 @@ import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/testutil"
 	"github.com/tikv/pd/pkg/tsoutil"
 	"github.com/tikv/pd/server"
@@ -33,7 +34,7 @@ var _ = Suite(&testLocalTSOSuite{})
 type testLocalTSOSuite struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
-	tsPoolMutex sync.Mutex
+	tsPoolMutex deadlock.Mutex
 	tsPool      map[uint64]struct{}
 }
 

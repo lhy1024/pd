@@ -16,10 +16,10 @@ package schedulers
 import (
 	"fmt"
 	"net/http"
-	"sync"
 
 	"github.com/gorilla/mux"
 	"github.com/pingcap/errors"
+	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/apiutil"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/server/core"
@@ -73,7 +73,7 @@ const (
 )
 
 type scatterRangeSchedulerConfig struct {
-	mu        sync.RWMutex
+	mu        deadlock.RWMutex
 	storage   *core.Storage
 	RangeName string `json:"range-name"`
 	StartKey  string `json:"start-key"`

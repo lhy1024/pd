@@ -20,12 +20,12 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/server/core"
 	"github.com/tikv/pd/server/schedule"
@@ -83,7 +83,7 @@ var schedulePeerPr = 0.66
 type hotScheduler struct {
 	name string
 	*BaseScheduler
-	sync.RWMutex
+	deadlock.RWMutex
 	leaderLimit uint64
 	peerLimit   uint64
 	types       []rwType

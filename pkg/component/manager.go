@@ -16,16 +16,16 @@ package component
 import (
 	"fmt"
 	"net/url"
-	"sync"
 
 	"github.com/pingcap/log"
+	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/server/core"
 	"go.uber.org/zap"
 )
 
 // Manager is used to manage components.
 type Manager struct {
-	sync.RWMutex
+	deadlock.RWMutex
 	storage *core.Storage
 	// component -> addresses
 	Addresses map[string][]string `json:"address"`
