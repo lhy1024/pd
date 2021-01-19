@@ -18,10 +18,10 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"sync"
 
 	"github.com/pingcap-incubator/tidb-dashboard/pkg/apiserver"
 	"github.com/pingcap-incubator/tidb-dashboard/pkg/utils"
+	"github.com/sasha-s/go-deadlock"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 
 // Redirector is used to redirect when the dashboard is started in another PD.
 type Redirector struct {
-	mu sync.RWMutex
+	mu deadlock.RWMutex
 
 	name      string
 	tlsConfig *tls.Config

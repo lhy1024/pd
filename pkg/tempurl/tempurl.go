@@ -16,15 +16,15 @@ package tempurl
 import (
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/sasha-s/go-deadlock"
 	"go.uber.org/zap"
 )
 
 var (
-	testAddrMutex sync.Mutex
+	testAddrMutex deadlock.Mutex
 	testAddrMap   = make(map[string]struct{})
 )
 

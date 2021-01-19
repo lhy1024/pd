@@ -20,13 +20,13 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/server/encryptionkm"
@@ -60,7 +60,7 @@ type Storage struct {
 	encryptionKeyManager *encryptionkm.KeyManager
 	useRegionStorage     int32
 	regionLoaded         int32
-	mu                   sync.Mutex
+	mu                   deadlock.Mutex
 }
 
 // StorageOpt represents available options to create Storage.

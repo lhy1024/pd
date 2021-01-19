@@ -278,6 +278,7 @@ func (f *hotPeerCache) calcHotThresholds(storeID uint64) [dimLen]float64 {
 		byteDim: tn.GetTopNMin(byteDim).(*HotPeerStat).GetByteRate(),
 		keyDim:  tn.GetTopNMin(keyDim).(*HotPeerStat).GetKeyRate(),
 	}
+	log.Info("2333",zap.Float64("",tn.GetTopNMin(byteDim).(*HotPeerStat).GetByteRate()))
 	for k := 0; k < dimLen; k++ {
 		ret[k] = math.Max(ret[k]*HotThresholdRatio, minThresholds[k])
 	}
@@ -377,7 +378,7 @@ func (f *hotPeerCache) getDefaultTimeMedian() *movingaverage.TimeMedian {
 }
 
 func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, keys float64, interval time.Duration) *HotPeerStat {
-	if newItem.needDelete {
+	if newItem == nil || newItem.needDelete {
 		return newItem
 	}
 
@@ -385,11 +386,12 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 		if interval == 0 {
 			return nil
 		}
+		isHot := bytes/interval.Seconds() >= newItem.thresholds[byteDim] || keys/interval.Seconds() >= newItem.thresholds[keyDim]
+		if !isHot {
+			return nil
+		}
 		if interval.Seconds() >= RegionHeartBeatReportInterval {
-			isHot := bytes/interval.Seconds() >= newItem.thresholds[byteDim] || keys/interval.Seconds() >= newItem.thresholds[keyDim]
-			if !isHot {
-				return nil
-			}
+
 			newItem.HotDegree = 1
 			newItem.AntiCount = hotRegionAntiCount
 		}
