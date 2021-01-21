@@ -391,7 +391,6 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 			return nil
 		}
 		if interval.Seconds() >= RegionHeartBeatReportInterval {
-
 			newItem.HotDegree = 1
 			newItem.AntiCount = hotRegionAntiCount
 		}
