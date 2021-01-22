@@ -402,8 +402,8 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 	newItem.rollingKeyRate = oldItem.rollingKeyRate
 
 	if newItem.justTransferLeader {
-		newItem.HotDegree = oldItem.HotDegree
-		newItem.AntiCount = oldItem.AntiCount
+		//newItem.HotDegree = oldItem.HotDegree
+		//newItem.AntiCount = oldItem.AntiCount
 		// skip the first heartbeat interval after transfer leader
 		return newItem
 	}
