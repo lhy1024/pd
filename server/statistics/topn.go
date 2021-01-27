@@ -128,7 +128,9 @@ func (tn *TopN) maintain() {
 			stn.Remove(id)
 		}
 	}
-	log.Info("maintain remove expired", zap.Uint64s("region-id", l))
+	if len(l) != 0 {
+		log.Info("maintain remove expired", zap.Uint64s("region-id", l))
+	}
 }
 
 type singleTopN struct {
