@@ -18,11 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 
 	pb "github.com/pingcap/kvproto/pkg/replication_modepb"
 	"github.com/pingcap/log"
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/logutil"
 	"github.com/tikv/pd/server/config"
@@ -60,7 +60,7 @@ const persistFileTimeout = time.Second * 10
 type ModeManager struct {
 	initTime time.Time
 
-	deadlock.RWMutex
+	sync.RWMutex
 	config         config.ReplicationModeConfig
 	storage        *core.Storage
 	cluster        opt.Cluster

@@ -15,9 +15,9 @@ package schedulers
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/mux"
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/apiutil"
 	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/server/core"
@@ -35,7 +35,7 @@ const (
 var allRoles = []string{roleLeader, roleFollower, roleLearner}
 
 type shuffleRegionSchedulerConfig struct {
-	deadlock.RWMutex
+	sync.RWMutex
 	storage *core.Storage
 
 	Ranges []core.KeyRange `json:"ranges"`

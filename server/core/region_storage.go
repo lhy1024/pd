@@ -16,11 +16,11 @@ package core
 import (
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/server/encryptionkm"
@@ -33,7 +33,7 @@ var dirtyFlushTick = time.Second
 type RegionStorage struct {
 	*kv.LeveldbKV
 	encryptionKeyManager *encryptionkm.KeyManager
-	mu                   deadlock.RWMutex
+	mu                   sync.RWMutex
 	batchRegions         map[string]*metapb.Region
 	batchSize            int
 	cacheSize            int
