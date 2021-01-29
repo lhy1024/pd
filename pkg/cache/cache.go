@@ -13,7 +13,7 @@
 
 package cache
 
-import "github.com/sasha-s/go-deadlock"
+import "sync"
 
 // Cache is an interface for cache system
 type Cache interface {
@@ -48,7 +48,7 @@ var (
 
 type threadSafeCache struct {
 	cache Cache
-	lock  deadlock.RWMutex
+	lock  sync.RWMutex
 }
 
 func newThreadSafeCache(cache Cache) Cache {

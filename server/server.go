@@ -39,7 +39,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/sysutil"
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/etcdutil"
 	"github.com/tikv/pd/pkg/grpcutil"
@@ -140,7 +139,7 @@ type Server struct {
 	closeCallbacks []func()
 
 	// serviceSafePointLock is a lock for UpdateServiceGCSafePoint
-	serviceSafePointLock deadlock.Mutex
+	serviceSafePointLock sync.Mutex
 }
 
 // HandlerBuilder builds a server HTTP handler.

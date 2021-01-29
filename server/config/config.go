@@ -23,9 +23,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/grpcutil"
@@ -259,7 +259,7 @@ func initByLDFlags(edition string) {
 
 // StoreLimit is the default limit of adding peer and removing peer when putting stores.
 type StoreLimit struct {
-	mu deadlock.RWMutex
+	mu sync.RWMutex
 	// AddPeer is the default rate of adding peers for store limit (per minute).
 	AddPeer float64
 	// RemovePeer is the default rate of removing peers for store limit (per minute).

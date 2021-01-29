@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/movingaverage"
 	"github.com/tikv/pd/server/core"
-	"go.uber.org/zap"
 )
 
 const (
@@ -273,7 +272,6 @@ func (f *hotPeerCache) calcHotThresholds(storeID uint64) [dimLen]float64 {
 		byteDim: tn.GetTopNMin(byteDim).(*HotPeerStat).GetByteRate(),
 		keyDim:  tn.GetTopNMin(keyDim).(*HotPeerStat).GetKeyRate(),
 	}
-	log.Info("2333", zap.Float64("", tn.GetTopNMin(byteDim).(*HotPeerStat).GetByteRate()))
 	for k := 0; k < dimLen; k++ {
 		ret[k] = math.Max(ret[k]*HotThresholdRatio, minThresholds[k])
 	}
@@ -373,7 +371,7 @@ func (f *hotPeerCache) getDefaultTimeMedian() *movingaverage.TimeMedian {
 }
 
 func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, keys float64, interval time.Duration) *HotPeerStat {
-	if newItem == nil || newItem.needDelete {
+	if newItem.needDelete {
 		return newItem
 	}
 

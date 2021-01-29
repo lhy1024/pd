@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/logutil"
 	"github.com/tikv/pd/server/config"
@@ -55,7 +54,7 @@ const (
 
 // coordinator is used to manage all schedulers and checkers to decide if the region needs to be scheduled.
 type coordinator struct {
-	deadlock.RWMutex
+	sync.RWMutex
 
 	wg              sync.WaitGroup
 	ctx             context.Context

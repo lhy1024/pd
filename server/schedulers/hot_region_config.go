@@ -20,10 +20,10 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/server/core"
 	"github.com/tikv/pd/server/schedule"
 	"github.com/tikv/pd/server/statistics"
@@ -48,7 +48,7 @@ func initHotRegionScheduleConfig() *hotRegionSchedulerConfig {
 }
 
 type hotRegionSchedulerConfig struct {
-	deadlock.RWMutex
+	sync.RWMutex
 	storage *core.Storage
 
 	MinHotByteRate  float64 `json:"min-hot-byte-rate"`

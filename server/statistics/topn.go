@@ -17,10 +17,10 @@ import (
 	"container/heap"
 	"container/list"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/sasha-s/go-deadlock"
 	"go.uber.org/zap"
 )
 
@@ -34,7 +34,7 @@ type TopNItem interface {
 
 // TopN maintains the N largest items of multiple dimensions.
 type TopN struct {
-	rw     deadlock.RWMutex
+	rw     sync.RWMutex
 	topns  []*singleTopN
 	ttlLst *ttlList
 }

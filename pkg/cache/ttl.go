@@ -15,10 +15,10 @@ package cache
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/sasha-s/go-deadlock"
 	"go.uber.org/zap"
 )
 
@@ -29,7 +29,7 @@ type ttlCacheItem struct {
 
 // ttlCache is a cache that assigns TTL(Time-To-Live) for each items.
 type ttlCache struct {
-	deadlock.RWMutex
+	sync.RWMutex
 	ctx context.Context
 
 	items      map[interface{}]ttlCacheItem

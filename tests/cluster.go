@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/autoscaling"
 	"github.com/tikv/pd/pkg/dashboard"
 	"github.com/tikv/pd/pkg/swaggerserver"
@@ -60,7 +59,7 @@ var (
 
 // TestServer is only for test.
 type TestServer struct {
-	deadlock.RWMutex
+	sync.RWMutex
 	server *server.Server
 	state  int32
 }

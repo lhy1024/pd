@@ -18,13 +18,13 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-	"github.com/sasha-s/go-deadlock"
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/typeutil"
@@ -41,7 +41,7 @@ var gcInterval = time.Minute
 var gcTTL = time.Minute * 3
 
 type selectedStores struct {
-	mu deadlock.Mutex
+	mu sync.Mutex
 	// If checkExist is true, after each putting operation, an entry with the key constructed by group and storeID would be put
 	// into "stores" map. And the entry with the same key (storeID, group) couldn't be put before "stores" being reset
 	checkExist bool
