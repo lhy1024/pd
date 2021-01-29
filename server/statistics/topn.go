@@ -19,6 +19,9 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // TopNItem represents a single object in TopN.
@@ -119,10 +122,14 @@ func (tn *TopN) Remove(id uint64) (item TopNItem) {
 }
 
 func (tn *TopN) maintain() {
-	for _, id := range tn.ttlLst.TakeExpired() {
+	l := tn.ttlLst.TakeExpired()
+	for _, id := range l {
 		for _, stn := range tn.topns {
 			stn.Remove(id)
 		}
+	}
+	if len(l) != 0 {
+		log.Info("maintain remove expired", zap.Uint64s("region-id", l))
 	}
 }
 

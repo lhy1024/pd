@@ -14,6 +14,7 @@
 package statistics
 
 import (
+	"go.uber.org/zap"
 	"math"
 	"time"
 
@@ -21,7 +22,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/movingaverage"
 	"github.com/tikv/pd/server/core"
-	"go.uber.org/zap"
 )
 
 const (
@@ -199,8 +199,7 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			ret = append(ret, newItem)
 		}
 	}
-
-	log.Info("region heartbeat info",
+	log.Debug("region heartbeat info",
 		zap.String("type", f.kind.String()),
 		zap.Uint64("region", region.GetID()),
 		zap.Uint64("leader", region.GetLeader().GetStoreId()),
@@ -379,7 +378,7 @@ func (f *hotPeerCache) getDefaultTimeMedian() *movingaverage.TimeMedian {
 }
 
 func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, keys float64, interval time.Duration) *HotPeerStat {
-	if newItem == nil || newItem.needDelete {
+	if newItem.needDelete {
 		return newItem
 	}
 

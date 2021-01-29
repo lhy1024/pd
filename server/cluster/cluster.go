@@ -227,7 +227,7 @@ func (c *RaftCluster) Start(s Server) error {
 		return nil
 	}
 
-	c.ruleManager = placement.NewRuleManager(c.storage)
+	c.ruleManager = placement.NewRuleManager(c.storage, c)
 	if c.opt.IsPlacementRulesEnabled() {
 		err = c.ruleManager.Initialize(c.opt.GetMaxReplicas(), c.opt.GetLocationLabels())
 		if err != nil {
@@ -1200,6 +1200,10 @@ func (c *RaftCluster) RemoveTombStoneRecords() error {
 
 	for _, store := range c.GetStores() {
 		if store.IsTombstone() {
+			if store.GetRegionCount() > 0 {
+				log.Warn("skip removing tombstone", zap.Stringer("store", store.GetMeta()))
+				continue
+			}
 			// the store has already been tombstone
 			err := c.deleteStoreLocked(store)
 			if err != nil {
