@@ -542,7 +542,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 				bs.cur.dstStoreID = dstStoreID
 				bs.calcProgressiveRank()
 				if bs.cur.progressiveRank < 0 && bs.betterThan(best) {
-					if newOps, newInfls := bs.buildOperators(best); len(newOps) > 0 {
+					if newOps, newInfls := bs.buildOperators(); len(newOps) > 0 {
 						ops = newOps
 						infls = newInfls
 						clone := *bs.cur
@@ -554,6 +554,9 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 	}
 
 	for i := 0; i < len(ops); i++ {
+		if ops[i].AdditionalInfos != nil {
+			ops[i].AdditionalInfos["rank"] = strconv.FormatInt(best.progressiveRank, 10)
+		}
 		// TODO: multiple operators need to be atomic.
 		if !bs.sche.addPendingInfluence(ops[i], best.srcStoreID, best.dstStoreID, infls[i], bs.rwTy, bs.opTy) {
 			return nil
@@ -972,7 +975,7 @@ func (bs *balanceSolver) isReadyToBuild() bool {
 	return true
 }
 
-func (bs *balanceSolver) buildOperators(best *solution) ([]*operator.Operator, []Influence) {
+func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 	if !bs.isReadyToBuild() {
 		return nil, nil
 	}
@@ -994,7 +997,7 @@ func (bs *balanceSolver) buildOperators(best *solution) ([]*operator.Operator, [
 			operator.OpHotRegion,
 			bs.cur.srcStoreID,
 			dstPeer)
-		additionalInfos = bs.generateAdditionalInfos(best)
+		additionalInfos = bs.generateAdditionalInfos()
 		counters = append(counters,
 			hotDirectionCounter.WithLabelValues("move-peer", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
 			hotDirectionCounter.WithLabelValues("move-peer", bs.rwTy.String(), strconv.FormatUint(dstPeer.GetStoreId(), 10), "in"))
@@ -1010,7 +1013,7 @@ func (bs *balanceSolver) buildOperators(best *solution) ([]*operator.Operator, [
 			bs.cur.srcStoreID,
 			bs.cur.dstStoreID,
 			operator.OpHotRegion)
-		additionalInfos = bs.generateAdditionalInfos(best)
+		additionalInfos = bs.generateAdditionalInfos()
 		counters = append(counters,
 			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
 			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.dstStoreID, 10), "in"))
@@ -1037,7 +1040,7 @@ func (bs *balanceSolver) buildOperators(best *solution) ([]*operator.Operator, [
 	return []*operator.Operator{op}, []Influence{infl}
 }
 
-func (bs *balanceSolver) generateAdditionalInfos(best *solution) (additionalInfos map[string]string) {
+func (bs *balanceSolver) generateAdditionalInfos() (additionalInfos map[string]string) {
 	additionalInfos = make(map[string]string, 6)
 	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
 	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
@@ -1048,7 +1051,6 @@ func (bs *balanceSolver) generateAdditionalInfos(best *solution) (additionalInfo
 	additionalInfos["dstKeyRate"] = strconv.FormatFloat(dstLd.KeyRate, 'f', 2, 64)
 	additionalInfos["peerByteRate"] = strconv.FormatFloat(peer.ByteRate, 'f', 2, 64)
 	additionalInfos["peerKeyRate"] = strconv.FormatFloat(peer.KeyRate, 'f', 2, 64)
-	additionalInfos["rank"] = strconv.FormatInt(best.progressiveRank, 10)
 	return additionalInfos
 }
 
