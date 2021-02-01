@@ -553,7 +553,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 				bs.cur.dstStoreID = dstStoreID
 				bs.calcProgressiveRank()
 				if bs.cur.progressiveRank < 0 && bs.betterThan(best) {
-					if newOps, newInfls := bs.buildOperators(); len(newOps) > 0 {
+					if newOps, newInfls := bs.buildOperators(best); len(newOps) > 0 {
 						ops = newOps
 						infls = newInfls
 						clone := *bs.cur
@@ -791,6 +791,15 @@ func (bs *balanceSolver) calcProgressiveRank() {
 		if srcLd.KeyRate >= dstLd.KeyRate+peer.GetKeyRate() {
 			rank = -1
 		}
+		log.Info("calcProgressiveRank",
+			zap.String("type", "transfer writer leader"),
+			zap.Float64("src-key", srcLd.KeyRate),
+			zap.Float64("dst-key", dstLd.KeyRate),
+			zap.Float64("peer-key", peer.GetKeyRate()),
+			zap.Uint64("region-id", peer.RegionID),
+		)
+		bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.log(bs.cur.srcStoreID, peer.RegionID, "calcProgressiveRank")
+		bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.log(bs.cur.dstStoreID, peer.RegionID, "calcProgressiveRank")
 	} else {
 		getSrcDecRate := func(a, b float64) float64 {
 			if a-b <= 0 {
@@ -974,7 +983,7 @@ func (bs *balanceSolver) isReadyToBuild() bool {
 	return true
 }
 
-func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
+func (bs *balanceSolver) buildOperators(best *solution) ([]*operator.Operator, []Influence) {
 	if !bs.isReadyToBuild() {
 		return nil, nil
 	}
@@ -996,7 +1005,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 			operator.OpHotRegion,
 			bs.cur.srcStoreID,
 			dstPeer)
-		additionalInfos = bs.generateAdditionalInfos()
+		additionalInfos = bs.generateAdditionalInfos(best)
 		counters = append(counters,
 			hotDirectionCounter.WithLabelValues("move-peer", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
 			hotDirectionCounter.WithLabelValues("move-peer", bs.rwTy.String(), strconv.FormatUint(dstPeer.GetStoreId(), 10), "in"))
@@ -1012,7 +1021,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 			bs.cur.srcStoreID,
 			bs.cur.dstStoreID,
 			operator.OpHotRegion)
-		additionalInfos = bs.generateAdditionalInfos()
+		additionalInfos = bs.generateAdditionalInfos(best)
 		counters = append(counters,
 			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
 			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.dstStoreID, 10), "in"))
@@ -1039,7 +1048,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 	return []*operator.Operator{op}, []Influence{infl}
 }
 
-func (bs *balanceSolver) generateAdditionalInfos() (additionalInfos map[string]string) {
+func (bs *balanceSolver) generateAdditionalInfos(best *solution) (additionalInfos map[string]string) {
 	additionalInfos = make(map[string]string, 6)
 	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
 	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
@@ -1050,6 +1059,7 @@ func (bs *balanceSolver) generateAdditionalInfos() (additionalInfos map[string]s
 	additionalInfos["dstKeyRate"] = strconv.FormatFloat(dstLd.KeyRate, 'f', 2, 64)
 	additionalInfos["peerByteRate"] = strconv.FormatFloat(peer.ByteRate, 'f', 2, 64)
 	additionalInfos["peerKeyRate"] = strconv.FormatFloat(peer.KeyRate, 'f', 2, 64)
+	additionalInfos["rank"] = strconv.FormatInt(best.progressiveRank, 10)
 	return additionalInfos
 }
 

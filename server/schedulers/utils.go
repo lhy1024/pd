@@ -269,6 +269,17 @@ func (lp *storeLoadPred) max() *storeLoad {
 	return maxLoad(&lp.Current, &lp.Future)
 }
 
+func (lp *storeLoadPred) log(storeID uint64, regionID uint64, typ string) {
+	log.Info(typ,
+		zap.Uint64("store-id", storeID),
+		zap.Uint64("region-id", regionID),
+		zap.Float64("current-key", lp.Current.KeyRate),
+		zap.Float64("current-byte", lp.Current.ByteRate),
+		zap.Float64("future-key", lp.Future.KeyRate),
+		zap.Float64("future-byte", lp.Future.ByteRate),
+	)
+}
+
 func (lp *storeLoadPred) diff() *storeLoad {
 	mx, mn := lp.max(), lp.min()
 	return &storeLoad{
