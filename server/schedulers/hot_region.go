@@ -784,8 +784,10 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*co
 // calcProgressiveRank calculates `bs.cur.progressiveRank`.
 // See the comments of `solution.progressiveRank` for more about progressive rank.
 func (bs *balanceSolver) calcProgressiveRank() {
-	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
-	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
+	src := bs.cur.srcStoreID
+	dst := bs.cur.dstStoreID
+	srcLd := bs.stLoadDetail[src].LoadPred.min()
+	dstLd := bs.stLoadDetail[dst].LoadPred.max()
 	peer := bs.cur.srcPeerStat
 	rank := int64(0)
 	if bs.rwTy == write && bs.opTy == transferLeader {
@@ -799,9 +801,11 @@ func (bs *balanceSolver) calcProgressiveRank() {
 				zap.Float64("dst-key", dstLd.KeyRate),
 				zap.Float64("peer-key", peer.GetKeyRate()),
 				zap.Uint64("region-id", peer.RegionID),
+				zap.Uint64("src-store-id", src),
+				zap.Uint64("dst-store-id", dst),
 			)
-			bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.log(bs.cur.srcStoreID, peer.RegionID, "calcProgressiveRank-src")
-			bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.log(bs.cur.dstStoreID, peer.RegionID, "calcProgressiveRank-dst")
+			bs.stLoadDetail[src].LoadPred.log(src, peer.RegionID, "calcProgressiveRank-src")
+			bs.stLoadDetail[dst].LoadPred.log(dst, peer.RegionID, "calcProgressiveRank-dst")
 		}
 	} else {
 		getSrcDecRate := func(a, b float64) float64 {
