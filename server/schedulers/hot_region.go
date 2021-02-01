@@ -780,18 +780,18 @@ func (bs *balanceSolver) calcProgressiveRank() {
 	if bs.rwTy == write && bs.opTy == transferLeader {
 		// In this condition, CPU usage is the matter.
 		// Only consider about key rate.
-		if srcLd.KeyRate >= dstLd.KeyRate+peer.GetKeyRate() {
+		if srcLd.KeyRate-peer.GetKeyRate() >= dstLd.KeyRate+peer.GetKeyRate() {
 			rank = -1
+			log.Info("calcProgressiveRank",
+				zap.String("type", "transfer writer leader"),
+				zap.Float64("src-key", srcLd.KeyRate),
+				zap.Float64("dst-key", dstLd.KeyRate),
+				zap.Float64("peer-key", peer.GetKeyRate()),
+				zap.Uint64("region-id", peer.RegionID),
+			)
+			bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.log(bs.cur.srcStoreID, peer.RegionID, "calcProgressiveRank-src")
+			bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.log(bs.cur.dstStoreID, peer.RegionID, "calcProgressiveRank-dst")
 		}
-		log.Info("calcProgressiveRank",
-			zap.String("type", "transfer writer leader"),
-			zap.Float64("src-key", srcLd.KeyRate),
-			zap.Float64("dst-key", dstLd.KeyRate),
-			zap.Float64("peer-key", peer.GetKeyRate()),
-			zap.Uint64("region-id", peer.RegionID),
-		)
-		bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.log(bs.cur.srcStoreID, peer.RegionID, "calcProgressiveRank")
-		bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.log(bs.cur.dstStoreID, peer.RegionID, "calcProgressiveRank")
 	} else {
 		getSrcDecRate := func(a, b float64) float64 {
 			if a-b <= 0 {
