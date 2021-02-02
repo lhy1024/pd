@@ -14,6 +14,7 @@
 package statistics
 
 import (
+	"go.uber.org/zap"
 	"math"
 	"time"
 
@@ -198,6 +199,12 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			ret = append(ret, newItem)
 		}
 	}
+	log.Debug("region heartbeat info",
+		zap.String("type", f.kind.String()),
+		zap.Uint64("region", region.GetID()),
+		zap.Uint64("leader", region.GetLeader().GetStoreId()),
+		zap.Uint64s("peers", peers),
+	)
 	return ret
 }
 
@@ -402,8 +409,8 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 	newItem.rollingKeyRate = oldItem.rollingKeyRate
 
 	if newItem.justTransferLeader {
-		newItem.HotDegree = oldItem.HotDegree
-		newItem.AntiCount = oldItem.AntiCount
+		//newItem.HotDegree = oldItem.HotDegree
+		//newItem.AntiCount = oldItem.AntiCount
 		// skip the first heartbeat interval after transfer leader
 		return newItem
 	}

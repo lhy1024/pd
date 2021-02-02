@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tikv/pd/pkg/movingaverage"
+	"go.uber.org/zap"
 )
 
 const (
@@ -170,7 +171,7 @@ func (stat *HotPeerStat) clearLastAverage() {
 func (stat *HotPeerStat) Log(str string, level func(msg string, fields ...zap.Field)) {
 	level(str,
 		zap.Uint64("interval", stat.interval),
-		zap.Uint64("region", stat.RegionID),
+		zap.Uint64("region-id", stat.RegionID),
 		zap.Uint64("store", stat.StoreID),
 		zap.Float64("byte-rate", stat.GetByteRate()),
 		zap.Float64("byte-rate-threshold", stat.thresholds[byteDim]),
