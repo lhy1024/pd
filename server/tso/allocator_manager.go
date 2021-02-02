@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/errs"
@@ -165,14 +166,14 @@ func (am *AllocatorManager) SetLocalTSOConfig(localTSOConfig config.LocalTSOConf
 		Then(clientv3.OpPut(dcLocationKey, localTSOConfig.DCLocation)).
 		Commit()
 	if err != nil {
-		return errs.ErrEtcdTxn.Wrap(err).GenWithStackByCause()
+		return errs.ErrEtcdTxnInternal.Wrap(err).GenWithStackByCause()
 	}
 	if !resp.Succeeded {
 		log.Warn("write dc-location configuration into etcd failed",
 			zap.String("dc-location", localTSOConfig.DCLocation),
 			zap.String("server-name", serverName),
 			zap.Uint64("server-id", serverID))
-		return errs.ErrEtcdTxn.FastGenByArgs()
+		return errs.ErrEtcdTxnConflict.FastGenByArgs()
 	}
 	log.Info("write dc-location configuration into etcd",
 		zap.String("dc-location", localTSOConfig.DCLocation),
@@ -288,13 +289,16 @@ func (am *AllocatorManager) SetUpAllocator(parentCtx context.Context, dcLocation
 		log.Warn("tso update physical interval is non-default",
 			zap.Duration("update-physical-interval", am.updatePhysicalInterval))
 	}
+	if _, exist := am.mu.allocatorGroups[dcLocation]; exist {
+		return nil
+	}
 	var allocator Allocator
 	if dcLocation == config.GlobalDCLocation {
 		allocator = NewGlobalTSOAllocator(am, leadership)
 	} else {
 		allocator = NewLocalTSOAllocator(am, leadership, dcLocation)
 	}
-	// Update or create a new allocatorGroup
+	// Create a new allocatorGroup
 	am.mu.allocatorGroups[dcLocation] = &allocatorGroup{
 		dcLocation: dcLocation,
 		parentCtx:  parentCtx,
@@ -363,13 +367,17 @@ func (am *AllocatorManager) allocatorLeaderLoop(ctx context.Context, allocator *
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		if nextLeader != 0 && nextLeader != am.member.ID() {
-			log.Info("skip campaigning of the local tso allocator leader and check later",
-				zap.String("server-name", am.member.Member().Name),
-				zap.Uint64("server-id", am.member.ID()),
-				zap.Uint64("next-leader-id", nextLeader))
-			time.Sleep(200 * time.Millisecond)
-			continue
+		isNextLeader := false
+		if nextLeader != 0 {
+			if nextLeader != am.member.ID() {
+				log.Info("skip campaigning of the local tso allocator leader and check later",
+					zap.String("server-name", am.member.Member().Name),
+					zap.Uint64("server-id", am.member.ID()),
+					zap.Uint64("next-leader-id", nextLeader))
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			isNextLeader = true
 		}
 
 		// Make sure the leader is aware of this new dc-location in order to make the
@@ -398,7 +406,7 @@ func (am *AllocatorManager) allocatorLeaderLoop(ctx context.Context, allocator *
 			continue
 		}
 
-		am.campaignAllocatorLeader(ctx, allocator, dcLocationInfo)
+		am.campaignAllocatorLeader(ctx, allocator, dcLocationInfo, isNextLeader)
 	}
 }
 
@@ -416,17 +424,44 @@ func longSleep(ctx context.Context, waitStep time.Duration) bool {
 	}
 }
 
-func (am *AllocatorManager) campaignAllocatorLeader(loopCtx context.Context, allocator *LocalTSOAllocator, dcLocationInfo *pdpb.GetDCLocationInfoResponse) {
+func (am *AllocatorManager) campaignAllocatorLeader(
+	loopCtx context.Context,
+	allocator *LocalTSOAllocator,
+	dcLocationInfo *pdpb.GetDCLocationInfoResponse,
+	isNextLeader bool,
+) {
 	log.Info("start to campaign local tso allocator leader",
 		zap.String("dc-location", allocator.dcLocation),
 		zap.Any("dc-location-info", dcLocationInfo),
 		zap.String("name", am.member.Member().Name))
-	if err := allocator.CampaignAllocatorLeader(defaultAllocatorLeaderLease); err != nil {
-		log.Error("failed to campaign local tso allocator leader",
-			zap.String("dc-location", allocator.dcLocation),
-			zap.Any("dc-location-info", dcLocationInfo),
-			zap.String("name", am.member.Member().Name),
-			errs.ZapError(err))
+	cmps := make([]clientv3.Cmp, 0)
+	nextLeaderKey := am.nextLeaderKey(allocator.dcLocation)
+	if !isNextLeader {
+		cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(nextLeaderKey), "=", 0))
+	} else {
+		nextLeaderValue := fmt.Sprintf("%v", am.member.ID())
+		cmps = append(cmps, clientv3.Compare(clientv3.Value(nextLeaderKey), "=", nextLeaderValue))
+	}
+	failpoint.Inject("injectNextLeaderKey", func(val failpoint.Value) {
+		if val.(bool) {
+			cmps = []clientv3.Cmp{
+				clientv3.Compare(clientv3.Value(nextLeaderKey), "=", "mockValue"),
+			}
+		}
+	})
+	if err := allocator.CampaignAllocatorLeader(defaultAllocatorLeaderLease, cmps...); err != nil {
+		if err.Error() == errs.ErrEtcdTxnConflict.Error() {
+			log.Info("failed to campaign local tso allocator leader due to txn conflict, another allocator may campaign successfully",
+				zap.String("dc-location", allocator.dcLocation),
+				zap.Any("dc-location-info", dcLocationInfo),
+				zap.String("name", am.member.Member().Name))
+		} else {
+			log.Error("failed to campaign local tso allocator leader due to etcd error",
+				zap.String("dc-location", allocator.dcLocation),
+				zap.Any("dc-location-info", dcLocationInfo),
+				zap.String("name", am.member.Member().Name),
+				errs.ZapError(err))
+		}
 		return
 	}
 
@@ -434,7 +469,7 @@ func (am *AllocatorManager) campaignAllocatorLeader(loopCtx context.Context, all
 	ctx, cancel := context.WithCancel(loopCtx)
 	defer cancel()
 	defer am.resetAllocatorGroup(allocator.dcLocation)
-	// maintain the Local TSO Allocator leader
+	// Maintain the Local TSO Allocator leader
 	go allocator.KeepAllocatorLeader(ctx)
 	log.Info("campaign local tso allocator leader ok",
 		zap.String("dc-location", allocator.dcLocation),
@@ -511,8 +546,8 @@ func (am *AllocatorManager) AllocatorDaemon(serverCtx context.Context) {
 		case <-patrolTicker.C:
 			am.allocatorPatroller(serverCtx)
 		case <-checkerTicker.C:
-			// These two functions are low frequency and time consuming,
-			// we can run them concurrently.
+			// ClusterDCLocationChecker and PriorityChecker are time consuming and low frequent to run,
+			// we should run them concurrently to speed up the progress.
 			go am.ClusterDCLocationChecker()
 			go am.PriorityChecker()
 		case <-serverCtx.Done():
@@ -677,7 +712,7 @@ func (am *AllocatorManager) getOrCreateLocalTSOSuffix(dcLocation string) (int32,
 		Then(clientv3.OpPut(localTSOSuffixKey, localTSOSuffixValue)).
 		Commit()
 	if err != nil {
-		return -1, errs.ErrEtcdTxn.Wrap(err).GenWithStackByCause()
+		return -1, errs.ErrEtcdTxnInternal.Wrap(err).GenWithStackByCause()
 	}
 	if !txnResp.Succeeded {
 		log.Warn("write local tso suffix into etcd failed",
@@ -685,7 +720,7 @@ func (am *AllocatorManager) getOrCreateLocalTSOSuffix(dcLocation string) (int32,
 			zap.String("local-tso-surfix", localTSOSuffixValue),
 			zap.String("server-name", am.member.Member().Name),
 			zap.Uint64("server-id", am.member.ID()))
-		return -1, errs.ErrEtcdTxn.FastGenByArgs()
+		return -1, errs.ErrEtcdTxnConflict.FastGenByArgs()
 	}
 	return int32(maxSuffix), nil
 }
@@ -777,7 +812,7 @@ func (am *AllocatorManager) PriorityChecker() {
 				zap.String("old-dc-location", leaderServerDCLocation),
 				zap.Uint64("next-leader-id", serverID),
 				zap.String("next-dc-location", myServerDCLocation))
-			nextLeaderKey := path.Join(am.rootPath, allocatorGroup.dcLocation, "next-leader")
+			nextLeaderKey := am.nextLeaderKey(allocatorGroup.dcLocation)
 			// Grant a etcd lease with checkStep * 1.5
 			nextLeaderLease := clientv3.NewLease(am.member.Client())
 			ctx, cancel := context.WithTimeout(am.member.Client().Ctx(), etcdutil.DefaultRequestTimeout)
@@ -793,7 +828,7 @@ func (am *AllocatorManager) PriorityChecker() {
 				Then(clientv3.OpPut(nextLeaderKey, fmt.Sprint(serverID), clientv3.WithLease(leaseResp.ID))).
 				Commit()
 			if err != nil {
-				err = errs.ErrEtcdTxn.Wrap(err).GenWithStackByCause()
+				err = errs.ErrEtcdTxnInternal.Wrap(err).GenWithStackByCause()
 				log.Error("failed to write next leader id into etcd", errs.ZapError(err))
 				continue
 			}
@@ -833,7 +868,7 @@ func (am *AllocatorManager) getServerDCLocation(serverID uint64) (string, error)
 }
 
 func (am *AllocatorManager) getNextLeaderID(dcLocation string) (uint64, error) {
-	nextLeaderKey := path.Join(am.rootPath, dcLocation, "next-leader")
+	nextLeaderKey := am.nextLeaderKey(dcLocation)
 	nextLeaderValue, err := etcdutil.GetValue(am.member.Client(), nextLeaderKey)
 	if err != nil {
 		return 0, err
@@ -845,7 +880,7 @@ func (am *AllocatorManager) getNextLeaderID(dcLocation string) (uint64, error) {
 }
 
 func (am *AllocatorManager) deleteNextLeaderID(dcLocation string) error {
-	nextLeaderKey := path.Join(am.rootPath, dcLocation, "next-leader")
+	nextLeaderKey := am.nextLeaderKey(dcLocation)
 	resp, err := kv.NewSlowLogTxn(am.member.Client()).
 		Then(clientv3.OpDelete(nextLeaderKey)).
 		Commit()
@@ -853,7 +888,7 @@ func (am *AllocatorManager) deleteNextLeaderID(dcLocation string) error {
 		return errs.ErrEtcdKVDelete.Wrap(err).GenWithStackByCause()
 	}
 	if !resp.Succeeded {
-		return errs.ErrEtcdTxn.FastGenByArgs()
+		return errs.ErrEtcdTxnConflict.FastGenByArgs()
 	}
 	return nil
 }
@@ -1056,4 +1091,8 @@ func (am *AllocatorManager) setGRPCConn(newConn *grpc.ClientConn, addr string) {
 		return
 	}
 	am.localAllocatorConn.clientConns[addr] = newConn
+}
+
+func (am *AllocatorManager) nextLeaderKey(dcLocation string) string {
+	return path.Join(am.rootPath, dcLocation, "next-leader")
 }
