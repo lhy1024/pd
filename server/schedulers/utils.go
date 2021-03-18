@@ -347,3 +347,18 @@ func (li *storeLoadDetail) toHotPeersStat() *statistics.HotPeersStat {
 		Stats:          peers,
 	}
 }
+
+func (lp *storeLoadPred) log(storeID uint64, regionID uint64, typ string) {
+	log.Info(typ,
+		zap.Uint64("store-id", storeID),
+		zap.Uint64("region-id", regionID),
+		zap.Float64("current-key", lp.Current.KeyRate),
+		zap.Float64("current-byte", lp.Current.ByteRate),
+		zap.Float64("future-key", lp.Future.KeyRate),
+		zap.Float64("future-byte", lp.Future.ByteRate),
+		zap.Float64("max-byte", lp.max().ByteRate),
+		zap.Float64("max-key", lp.max().KeyRate),
+		zap.Float64("min-byte", lp.min().ByteRate),
+		zap.Float64("min-key", lp.min().KeyRate),
+	)
+}

@@ -456,10 +456,12 @@ type balanceSolver struct {
 }
 
 type solution struct {
-	srcStoreID  uint64
-	srcPeerStat *statistics.HotPeerStat
-	region      *core.RegionInfo
-	dstStoreID  uint64
+	srcStoreID   uint64
+	srcPeerStat  *statistics.HotPeerStat
+	region       *core.RegionInfo
+	dstStoreID   uint64
+	keyDecRatio  float64
+	byteDecRatio float64
 
 	// progressiveRank measures the contribution for balance.
 	// The smaller the rank, the better this solution is.
@@ -790,19 +792,21 @@ func (bs *balanceSolver) calcProgressiveRank() {
 	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
 	peer := bs.cur.srcPeerStat
 	rank := int64(0)
+	getSrcDecRate := func(a, b float64) float64 {
+		if a-b <= 0 {
+			return 1
+		}
+		return a - b
+	}
 	if bs.rwTy == write && bs.opTy == transferLeader {
 		// In this condition, CPU usage is the matter.
 		// Only consider about key rate.
 		if srcLd.KeyRate-peer.GetKeyRate() >= dstLd.KeyRate+peer.GetKeyRate() {
 			rank = -1
 		}
+		bs.cur.keyDecRatio = (dstLd.KeyRate + peer.GetKeyRate()) / getSrcDecRate(srcLd.KeyRate, peer.GetKeyRate())
 	} else {
-		getSrcDecRate := func(a, b float64) float64 {
-			if a-b <= 0 {
-				return 1
-			}
-			return a - b
-		}
+
 		// we use DecRatio(Decline Ratio) to expect that the dst store's (key/byte) rate should still be less
 		// than the src store's (key/byte) rate after scheduling one peer.
 		keyDecRatio := (dstLd.KeyRate + peer.GetKeyRate()) / getSrcDecRate(srcLd.KeyRate, peer.GetKeyRate())
@@ -821,6 +825,8 @@ func (bs *balanceSolver) calcProgressiveRank() {
 			// If belong to the case, byte rate will be more balanced, ignore the key rate.
 			rank = -1
 		}
+		bs.cur.keyDecRatio = keyDecRatio
+		bs.cur.byteDecRatio = byteDecRatio
 	}
 	bs.cur.progressiveRank = rank
 }
@@ -984,9 +990,10 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 		return nil, nil
 	}
 	var (
-		op       *operator.Operator
-		counters []prometheus.Counter
-		err      error
+		op              *operator.Operator
+		counters        []prometheus.Counter
+		err             error
+		additionalInfos map[string]string
 	)
 
 	switch bs.opTy {
@@ -1001,7 +1008,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 			operator.OpHotRegion,
 			bs.cur.srcStoreID,
 			dstPeer)
-
+		additionalInfos = bs.generateAdditionalInfos()
 		counters = append(counters,
 			hotDirectionCounter.WithLabelValues("move-peer", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
 			hotDirectionCounter.WithLabelValues("move-peer", bs.rwTy.String(), strconv.FormatUint(dstPeer.GetStoreId(), 10), "in"))
@@ -1017,6 +1024,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 			bs.cur.srcStoreID,
 			bs.cur.dstStoreID,
 			operator.OpHotRegion)
+		additionalInfos = bs.generateAdditionalInfos()
 		counters = append(counters,
 			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
 			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.dstStoreID, 10), "in"))
@@ -1033,7 +1041,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 	op.Counters = append(op.Counters,
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), "new-operator"),
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), bs.opTy.String()))
-
+	op.AdditionalInfos = additionalInfos
 	infl := Influence{
 		ByteRate: bs.cur.srcPeerStat.GetByteRate(),
 		KeyRate:  bs.cur.srcPeerStat.GetKeyRate(),
@@ -1042,7 +1050,21 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 
 	return []*operator.Operator{op}, []Influence{infl}
 }
-
+func (bs *balanceSolver) generateAdditionalInfos() (additionalInfos map[string]string) {
+	additionalInfos = make(map[string]string, 6)
+	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
+	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
+	peer := bs.cur.srcPeerStat
+	additionalInfos["srcByteRate"] = strconv.FormatFloat(srcLd.ByteRate, 'f', 2, 64)
+	additionalInfos["srcKeyRate"] = strconv.FormatFloat(srcLd.KeyRate, 'f', 2, 64)
+	additionalInfos["dstByteRate"] = strconv.FormatFloat(dstLd.ByteRate, 'f', 2, 64)
+	additionalInfos["dstKeyRate"] = strconv.FormatFloat(dstLd.KeyRate, 'f', 2, 64)
+	additionalInfos["peerByteRate"] = strconv.FormatFloat(peer.ByteRate, 'f', 2, 64)
+	additionalInfos["peerKeyRate"] = strconv.FormatFloat(peer.KeyRate, 'f', 2, 64)
+	additionalInfos["keyDecRatio"] = strconv.FormatFloat(bs.cur.keyDecRatio, 'f', 2, 64)
+	additionalInfos["byteDecRatio"] = strconv.FormatFloat(bs.cur.byteDecRatio, 'f', 2, 64)
+	return additionalInfos
+}
 func (h *hotScheduler) GetHotReadStatus() *statistics.StoreHotPeersInfos {
 	h.RLock()
 	defer h.RUnlock()

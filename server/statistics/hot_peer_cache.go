@@ -94,6 +94,7 @@ func (f *hotPeerCache) Update(item *HotPeerStat) {
 		if stores, ok := f.storesOfRegion[item.RegionID]; ok {
 			delete(stores, item.StoreID)
 		}
+		item.Log("delete from cache", log.Info)
 	} else {
 		peers, ok := f.peersOfStore[item.StoreID]
 		if !ok {
@@ -108,6 +109,7 @@ func (f *hotPeerCache) Update(item *HotPeerStat) {
 			f.storesOfRegion[item.RegionID] = stores
 		}
 		stores[item.StoreID] = struct{}{}
+		item.Log("region heartbeat update", log.Info)
 	}
 }
 
@@ -198,7 +200,7 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 		}
 	}
 
-	log.Debug("region heartbeat info",
+	log.Info("region heartbeat info",
 		zap.String("type", f.kind.String()),
 		zap.Uint64("region", region.GetID()),
 		zap.Uint64("leader", region.GetLeader().GetStoreId()),

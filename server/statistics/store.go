@@ -181,7 +181,7 @@ func collect(records []*pdpb.RecordPair) float64 {
 func (r *RollingStoreStats) Observe(stats *pdpb.StoreStats) {
 	statInterval := stats.GetInterval()
 	interval := statInterval.GetEndTimestamp() - statInterval.GetStartTimestamp()
-	log.Debug("update store stats", zap.Uint64("key-write", stats.KeysWritten), zap.Uint64("bytes-write", stats.BytesWritten), zap.Duration("interval", time.Duration(interval)*time.Second), zap.Uint64("store-id", stats.GetStoreId()))
+
 	r.Lock()
 	defer r.Unlock()
 	r.timeMedians[StoreWriteBytes].Add(float64(stats.BytesWritten), time.Duration(interval)*time.Second)
@@ -193,6 +193,18 @@ func (r *RollingStoreStats) Observe(stats *pdpb.StoreStats) {
 	r.movingAvgs[StoreCPUUsage].Add(collect(stats.GetCpuUsages()))
 	r.movingAvgs[StoreDiskReadRate].Add(collect(stats.GetReadIoRates()))
 	r.movingAvgs[StoreDiskWriteRate].Add(collect(stats.GetWriteIoRates()))
+
+	log.Info("update store stats",
+		zap.Uint64("key-write-instant", stats.KeysWritten),
+		zap.Uint64("key-write", uint64(r.timeMedians[StoreWriteKeys].Get())),
+		zap.Uint64("key-read-instant", stats.KeysRead),
+		zap.Uint64("key-read", uint64(r.timeMedians[StoreReadKeys].Get())),
+		zap.Uint64("bytes-write-instant", stats.BytesWritten),
+		zap.Uint64("bytes-write", uint64(r.timeMedians[StoreWriteBytes].Get())),
+		zap.Uint64("bytes-read-instant", stats.BytesRead),
+		zap.Uint64("bytes-read", uint64(r.timeMedians[StoreReadBytes].Get())),
+		zap.Duration("interval", time.Duration(interval)*time.Second),
+		zap.Uint64("store-id", stats.GetStoreId()))
 }
 
 // Set sets the statistics (for test).
