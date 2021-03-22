@@ -134,13 +134,6 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 	bytes := float64(f.getRegionBytes(region))
 	keys := float64(f.getRegionKeys(region))
 
-	reportInterval := region.GetInterval()
-	interval := reportInterval.GetEndTimestamp() - reportInterval.GetStartTimestamp()
-
-	byteRate := bytes / float64(interval)
-	keyRate := keys / float64(interval)
-
-	f.collectRegionMetrics(byteRate, keyRate, interval)
 	// old region is in the front and new region is in the back
 	// which ensures it will hit the cache if moving peer or transfer leader occurs with the same replica number
 
@@ -159,12 +152,38 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			tmpItem = oldItem
 		}
 
+		thresholds := f.calcHotThresholds(storeID)
+
+		if oldItem == nil {
+			if tmpItem != nil { // use the tmpItem cached from the store where this region was in before
+				oldItem = tmpItem
+			} else { // new item is new peer after adding replica
+				for _, storeID := range storeIDs {
+					oldItem = f.getOldHotPeerStat(region.GetID(), storeID)
+					if oldItem != nil {
+						break
+					}
+				}
+			}
+		}
+
+		var interval uint64
+		if oldItem == nil {
+			reportInterval := region.GetInterval()
+			interval = reportInterval.GetEndTimestamp() - reportInterval.GetStartTimestamp()
+		} else {
+			interval = uint64(time.Since(oldItem.LastUpdateTime).Seconds())
+		}
+
 		// This is used for the simulator and test. Ignore if report too fast.
 		if !isExpired && Denoising && interval < HotRegionReportMinInterval {
 			continue
 		}
 
-		thresholds := f.calcHotThresholds(storeID)
+		byteRate := bytes / float64(interval)
+		keyRate := keys / float64(interval)
+
+		f.collectRegionMetrics(byteRate, keyRate, interval)
 
 		newItem := &HotPeerStat{
 			StoreID:            storeID,
@@ -179,19 +198,6 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			interval:           interval,
 			peers:              peers,
 			thresholds:         thresholds,
-		}
-
-		if oldItem == nil {
-			if tmpItem != nil { // use the tmpItem cached from the store where this region was in before
-				oldItem = tmpItem
-			} else { // new item is new peer after adding replica
-				for _, storeID := range storeIDs {
-					oldItem = f.getOldHotPeerStat(region.GetID(), storeID)
-					if oldItem != nil {
-						break
-					}
-				}
-			}
 		}
 
 		newItem = f.updateHotPeerStat(newItem, oldItem, bytes, keys, time.Duration(interval)*time.Second)
