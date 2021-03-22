@@ -250,6 +250,7 @@ func (h *hotScheduler) gcRegionPendings() {
 		for ty, op := range pendings {
 			if op != nil && op.IsEnd() {
 				if time.Now().After(op.GetCreateTime().Add(h.conf.GetMaxZombieDuration())) {
+					log.Info("gcRegionPendings", zap.Uint64("id", regionID), zap.Time("create", op.GetCreateTime()), zap.Time("now", time.Now()), zap.Duration("zombie", h.conf.GetMaxZombieDuration()))
 					schedulerStatus.WithLabelValues(h.GetName(), "pending_op_infos").Dec()
 					pendings[ty] = nil
 				}
@@ -259,6 +260,7 @@ func (h *hotScheduler) gcRegionPendings() {
 			}
 		}
 		if empty {
+			log.Info("gcRegionPendings delete", zap.Uint64("id", regionID))
 			delete(h.regionPendings, regionID)
 		} else {
 			h.regionPendings[regionID] = pendings
@@ -380,11 +382,13 @@ func filterHotPeers(
 func (h *hotScheduler) addPendingInfluence(op *operator.Operator, srcStore, dstStore uint64, infl Influence, rwTy rwType, opTy opType) bool {
 	regionID := op.RegionID()
 	_, ok := h.regionPendings[regionID]
+
 	if ok {
 		schedulerStatus.WithLabelValues(h.GetName(), "pending_op_fails").Inc()
 		return false
 	}
 
+	log.Info("add pending", zap.Uint64("id", regionID))
 	influence := newPendingInfluence(op, srcStore, dstStore, infl)
 	rcTy := toResourceType(rwTy, opTy)
 	h.pendings[rcTy][influence] = struct{}{}
@@ -618,9 +622,11 @@ func (bs *balanceSolver) filterHotPeers() []*statistics.HotPeerStat {
 
 	// filter pending region
 	appendItem := func(items []*statistics.HotPeerStat, item *statistics.HotPeerStat) []*statistics.HotPeerStat {
-		if _, ok := bs.sche.regionPendings[item.ID()]; !ok {
+		var ok bool
+		if _, ok = bs.sche.regionPendings[item.ID()]; !ok {
 			items = append(items, item)
 		}
+		log.Info("filterHotPeers pending", zap.Uint64("id", item.ID()), zap.Bool("isExist", ok))
 		return items
 	}
 	if len(ret) <= maxPeerNum {
@@ -1056,6 +1062,7 @@ func (bs *balanceSolver) generateAdditionalInfos() (additionalInfos map[string]s
 	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
 	peer := bs.cur.srcPeerStat
 	additionalInfos["srcByteRate"] = strconv.FormatFloat(srcLd.ByteRate, 'f', 2, 64)
+	additionalInfos["srcPending"] = strconv.FormatFloat(bs, 'f', 2, 64)
 	additionalInfos["srcKeyRate"] = strconv.FormatFloat(srcLd.KeyRate, 'f', 2, 64)
 	additionalInfos["dstByteRate"] = strconv.FormatFloat(dstLd.ByteRate, 'f', 2, 64)
 	additionalInfos["dstKeyRate"] = strconv.FormatFloat(dstLd.KeyRate, 'f', 2, 64)
