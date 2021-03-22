@@ -22,6 +22,10 @@ import (
 	"github.com/tikv/pd/server/core"
 )
 
+func Test(t *testing.T) {
+	TestingT(t)
+}
+
 var _ = Suite(&testHotPeerCache{})
 
 type testHotPeerCache struct{}

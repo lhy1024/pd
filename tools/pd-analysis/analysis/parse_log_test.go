@@ -112,3 +112,21 @@ func (t *testParseLog) TestCurrentTime(c *C) {
 	expect, _ := time.Parse(DefaultLayout, "2019/09/05 14:19:15")
 	c.Assert(current, Equals, expect)
 }
+
+func (t *testParseLog) TestStoreHeartbeatParseLog(c *C) {
+	h := NewHeartbeatCollector()
+	r, err := h.CompileRegex()
+	c.Check(err, IsNil)
+	{
+		content := "[2020/11/30 08:19:50.355 +00:00] [INFO] [store.go:342] [\"update store stats\"] [key-write=313617] [key-read=20907041] [byte-write=44492991] [byte-read=1402498008] [interval=10s] [store-id=55001]"
+		s, err := h.parseLine(content, r)
+		c.Check(err, IsNil)
+		c.Check(s, NotNil)
+		c.Check(s.writeKeyRate, Equals, 313617)
+		c.Check(s.readKeyRate, Equals, 20907041)
+		c.Check(s.writeByteRate, Equals, 44492991)
+		c.Check(s.readByteRate, Equals, 1402498008)
+		c.Check(s.interval, Equals, 10)
+		c.Check(s.id, Equals, 55001)
+	}
+}

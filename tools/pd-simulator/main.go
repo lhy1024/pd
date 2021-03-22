@@ -182,7 +182,7 @@ EXIT:
 	fmt.Printf("%s [%s] total iteration: %d, time cost: %v\n", simResult, simCase, driver.TickCount(), time.Since(start))
 	driver.PrintStatistics()
 	if analysis.GetTransferCounter().IsValid {
-		analysis.GetTransferCounter().PrintResult()
+		analysis.GetTransferCounter().OutputResult()
 	}
 
 	if simResult != "OK" {

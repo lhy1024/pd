@@ -15,7 +15,10 @@ package main
 
 import (
 	"flag"
+	"net/http"
 	"os"
+
+	"github.com/go-echarts/go-echarts/v2/charts"
 
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/tools/pd-analysis/analysis"
@@ -28,8 +31,10 @@ var (
 	logLevel = flag.String("logLevel", "info", "log level, default info")
 	style    = flag.String("style", "", "analysis style, e.g. transfer-counter")
 	operator = flag.String("operator", "", "operator style, e.g. balance-region, balance-leader, transfer-hot-read-leader, move-hot-read-region, transfer-hot-write-leader, move-hot-write-region")
-	start    = flag.String("start", "", "start time, e.g. 2019/09/10 12:20:07, default: total file")
-	end      = flag.String("end", "", "end time, e.g. 2019/09/10 14:20:07, default: total file")
+	// dim      = flag.String("dim", "", "hot scheduler dim, e.g. read-key, write-key, read-byte, write-byte")
+	start = flag.String("start", "", "start time, e.g. 2019/09/10 12:20:07, default: total file")
+	end   = flag.String("end", "", "end time, e.g. 2019/09/10 14:20:07, default: total file")
+	port  = flag.String("port", ":8086", "serving addr")
 )
 
 // Logger is the global logger used for simulator.
@@ -45,7 +50,6 @@ func InitLogger(l string) {
 func main() {
 	flag.Parse()
 	InitLogger(*logLevel)
-	analysis.GetTransferCounter().Init(0, 0)
 	if *input == "" {
 		Logger.Fatal("Need to specify one input pd log.")
 	}
@@ -60,23 +64,46 @@ func main() {
 
 	switch *style {
 	case "transfer-counter":
-		{
-			if *operator == "" {
-				Logger.Fatal("Need to specify one operator.")
-			}
-			r, err := analysis.GetTransferCounter().CompileRegex(*operator)
-			if err != nil {
-				Logger.Fatal(err.Error())
-			}
-			err = analysis.GetTransferCounter().ParseLog(*input, *start, *end, analysis.DefaultLayout, r)
-			if err != nil {
-				Logger.Fatal(err.Error())
-			}
-			analysis.GetTransferCounter().PrintResult()
-			break
+		if *operator == "" {
+			Logger.Fatal("Need to specify one operator.")
 		}
+		r, err := analysis.GetTransferCounter().CompileRegex(*operator)
+		if err != nil {
+			Logger.Fatal(err.Error())
+		}
+		err = analysis.GetTransferCounter().ParseLog(*input, *start, *end, analysis.DefaultLayout, r)
+		if err != nil {
+			Logger.Fatal(err.Error())
+		}
+		analysis.GetTransferCounter().OutputResult()
+	case "heartbeat":
+		collector := analysis.NewHeartbeatCollector()
+		re, err := collector.CompileRegex()
+		if err != nil {
+			Logger.Fatal(err.Error())
+		}
+		inputs := []string{
+			"/data2/lhy1024/1.log",
+		}
+		var lines []*charts.Line
+		for _, input := range inputs {
+			line, err := collector.ParseLog(input, *start, *end, analysis.DefaultLayout, re)
+			if err != nil {
+				log.Error("render", zap.Error(err))
+			}
+			lines = append(lines, line)
+		}
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			r.ParseForm()
+			for _, line := range lines {
+				err = line.Render(w)
+			}
+			if err != nil {
+				log.Error("line", zap.Error(err))
+			}
+		})
+		http.ListenAndServe(*port, nil)
 	default:
 		Logger.Fatal("Style is not exist.")
 	}
-
 }

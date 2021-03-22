@@ -40,29 +40,6 @@ type Interpreter interface {
 	ParseLog(filename string, r *regexp.Regexp) error
 }
 
-// CompileRegex is to provide regexp for transfer counter.
-func (c *TransferCounter) CompileRegex(operator string) (*regexp.Regexp, error) {
-	var r *regexp.Regexp
-	var err error
-
-	for _, regionOperator := range regionOperators {
-		if operator == regionOperator {
-			r, err = regexp.Compile(".*?operator finish.*?region-id=([0-9]*).*?" + operator + ".*?store \\[([0-9]*)\\] to \\[([0-9]*)\\].*?")
-		}
-	}
-
-	for _, leaderOperator := range leaderOperators {
-		if operator == leaderOperator {
-			r, err = regexp.Compile(".*?operator finish.*?region-id=([0-9]*).*?" + operator + ".*?store ([0-9]*) to ([0-9]*).*?")
-		}
-	}
-
-	if r == nil {
-		err = errors.New("unsupported operator. ")
-	}
-	return r, err
-}
-
 func (c *TransferCounter) parseLine(content string, r *regexp.Regexp) ([]uint64, error) {
 	results := make([]uint64, 0, 4)
 	subStrings := r.FindStringSubmatch(content)
@@ -80,32 +57,6 @@ func (c *TransferCounter) parseLine(content string, r *regexp.Regexp) ([]uint64,
 	} else {
 		return results, errors.New("Can't parse Log, with " + content)
 	}
-}
-
-func forEachLine(filename string, solve func(string) error) error {
-	// Open file
-	fi, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-	defer fi.Close()
-	br := bufio.NewReader(fi)
-	// For each
-	for {
-		content, _, err := br.ReadLine()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-
-		err = solve(string(content))
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func isExpectTime(expect, layout string, isBeforeThanExpect bool) func(time.Time) bool {
@@ -144,30 +95,37 @@ func currentTime(layout string) func(content string) (time.Time, error) {
 	}
 }
 
-// ParseLog is to parse log for transfer counter.
-func (c *TransferCounter) ParseLog(filename, start, end, layout string, r *regexp.Regexp) error {
+func readLog(filename, start, end, layout string, collectResult func(string) error) error {
 	afterStart := isExpectTime(start, layout, false)
 	beforeEnd := isExpectTime(end, layout, true)
 	getCurrent := currentTime(layout)
-	err := forEachLine(filename, func(content string) error {
+	// Open file
+	fi, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer fi.Close()
+	br := bufio.NewReader(fi)
+	// for each line
+	for {
+		content, _, err := br.ReadLine()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
 		// Get current line time
-		current, err := getCurrent(content)
+		current, err := getCurrent(string(content))
 		if err != nil || current.IsZero() {
 			return err
 		}
 		// if current line time between start and end
 		if afterStart(current) && beforeEnd(current) {
-			results, err := c.parseLine(content, r)
-			if err != nil {
+			if err := collectResult(string(content)); err != nil {
 				return err
 			}
-			if len(results) == 3 {
-				regionID, sourceID, targetID := results[0], results[1], results[2]
-				GetTransferCounter().AddTarget(regionID, targetID)
-				GetTransferCounter().AddSource(regionID, sourceID)
-			}
 		}
-		return nil
-	})
-	return err
+	}
+	return nil
 }

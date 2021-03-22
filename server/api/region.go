@@ -55,6 +55,7 @@ type RegionInfo struct {
 	ApproximateSize int64             `json:"approximate_size"`
 	ApproximateKeys int64             `json:"approximate_keys"`
 
+
 	ReplicationStatus *ReplicationStatus `json:"replication_status,omitempty"`
 }
 
