@@ -623,10 +623,10 @@ func (bs *balanceSolver) filterHotPeers() []*statistics.HotPeerStat {
 	// filter pending region
 	appendItem := func(items []*statistics.HotPeerStat, item *statistics.HotPeerStat) []*statistics.HotPeerStat {
 		var ok bool
-		if _, ok = bs.sche.regionPendings[item.ID()]; !ok {
+		if _, ok = bs.sche.regionPendings[item.ID()]; !ok && !item.IsJustTransferLeader() {
 			items = append(items, item)
 		}
-		log.Info("filterHotPeers pending", zap.Uint64("id", item.ID()), zap.Bool("isExist", ok))
+		log.Info("filterHotPeers pending", zap.Uint64("id", item.ID()), zap.Bool("isExist", ok),zap.Bool("justTransfer",item.IsJustTransferLeader()))
 		return items
 	}
 	if len(ret) <= maxPeerNum {

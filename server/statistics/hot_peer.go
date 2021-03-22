@@ -145,6 +145,11 @@ func (stat *HotPeerStat) IsLeader() bool {
 	return stat.isLeader
 }
 
+// IsJustTransferLeader indicates the item belong to the leader.
+func (stat *HotPeerStat) IsJustTransferLeader() bool {
+	return stat.justTransferLeader
+}
+
 // IsNew indicates the item is first update in the cache of the region.
 func (stat *HotPeerStat) IsNew() bool {
 	return stat.isNew
