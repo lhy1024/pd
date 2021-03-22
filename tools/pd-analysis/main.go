@@ -15,9 +15,10 @@ package main
 
 import (
 	"flag"
-	"github.com/go-echarts/go-echarts/v2/charts"
 	"net/http"
 	"os"
+
+	"github.com/go-echarts/go-echarts/v2/charts"
 
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/tools/pd-analysis/analysis"
@@ -82,7 +83,7 @@ func main() {
 			Logger.Fatal(err.Error())
 		}
 		inputs := []string{
-			"a.log", "b.log",
+			"/data2/lhy1024/1.log",
 		}
 		var lines []*charts.Line
 		for _, input := range inputs {
