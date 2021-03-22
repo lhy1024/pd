@@ -39,6 +39,7 @@ import (
 	"github.com/tikv/pd/server/schedule/placement"
 	"github.com/tikv/pd/server/schedulers"
 	"github.com/tikv/pd/server/statistics"
+	"github.com/tikv/pd/server/tso"
 	"go.uber.org/zap"
 )
 
@@ -171,40 +172,13 @@ func (h *Handler) GetHotReadRegions() *statistics.StoreHotPeersInfos {
 	return c.GetHotReadRegions()
 }
 
-// GetHotBytesWriteStores gets all hot write stores stats.
-func (h *Handler) GetHotBytesWriteStores() map[uint64]float64 {
+// GetStoresLoads gets all hot write stores stats.
+func (h *Handler) GetStoresLoads() map[uint64][]float64 {
 	rc := h.s.GetRaftCluster()
 	if rc == nil {
 		return nil
 	}
-	return rc.GetStoresBytesWriteStat()
-}
-
-// GetHotBytesReadStores gets all hot write stores stats.
-func (h *Handler) GetHotBytesReadStores() map[uint64]float64 {
-	rc := h.s.GetRaftCluster()
-	if rc == nil {
-		return nil
-	}
-	return rc.GetStoresBytesReadStat()
-}
-
-// GetHotKeysWriteStores gets all hot write stores stats.
-func (h *Handler) GetHotKeysWriteStores() map[uint64]float64 {
-	rc := h.s.GetRaftCluster()
-	if rc == nil {
-		return nil
-	}
-	return rc.GetStoresKeysWriteStat()
-}
-
-// GetHotKeysReadStores gets all hot write stores stats.
-func (h *Handler) GetHotKeysReadStores() map[uint64]float64 {
-	rc := h.s.GetRaftCluster()
-	if rc == nil {
-		return nil
-	}
-	return rc.GetStoresKeysReadStat()
+	return rc.GetStoresLoads()
 }
 
 // AddScheduler adds a scheduler.
@@ -421,8 +395,7 @@ func (h *Handler) SetAllStoresLimit(ratePerMin float64, limitType storelimit.Typ
 	if err != nil {
 		return err
 	}
-	c.SetAllStoresLimit(limitType, ratePerMin)
-	return nil
+	return c.SetAllStoresLimit(limitType, ratePerMin)
 }
 
 // SetAllStoresLimitTTL is used to set limit of all stores with ttl
@@ -445,7 +418,8 @@ func (h *Handler) SetLabelStoresLimit(ratePerMin float64, limitType storelimit.T
 		for _, label := range labels {
 			for _, sl := range store.GetLabels() {
 				if label.Key == sl.Key && label.Value == sl.Value {
-					c.SetStoreLimit(store.GetID(), limitType, ratePerMin)
+					// TODO: need to handle some of stores are persisted, and some of stores are not.
+					_ = c.SetStoreLimit(store.GetID(), limitType, ratePerMin)
 				}
 			}
 		}
@@ -468,8 +442,7 @@ func (h *Handler) SetStoreLimit(storeID uint64, ratePerMin float64, limitType st
 	if err != nil {
 		return err
 	}
-	c.SetStoreLimit(storeID, limitType, ratePerMin)
-	return nil
+	return c.SetStoreLimit(storeID, limitType, ratePerMin)
 }
 
 // AddTransferLeaderOperator adds an operator to transfer leader to the store.
@@ -859,9 +832,18 @@ func (h *Handler) GetSchedulerConfigHandler() http.Handler {
 	return mux
 }
 
+// GetOfflinePeer gets the region with offline peer.
+func (h *Handler) GetOfflinePeer(typ statistics.RegionStatisticType) ([]*core.RegionInfo, error) {
+	c := h.s.GetRaftCluster()
+	if c == nil {
+		return nil, errs.ErrNotBootstrapped.FastGenByArgs()
+	}
+	return c.GetOfflineRegionStatsByType(typ), nil
+}
+
 // ResetTS resets the ts with specified tso.
 func (h *Handler) ResetTS(ts uint64) error {
-	tsoAllocator, err := h.s.tsoAllocatorManager.GetAllocator(config.GlobalDCLocation)
+	tsoAllocator, err := h.s.tsoAllocatorManager.GetAllocator(tso.GlobalDCLocation)
 	if err != nil {
 		return err
 	}

@@ -130,7 +130,7 @@ func (s *clusterTestSuite) TestGetPutConfig(c *C) {
 	rc := leaderServer.GetRaftCluster()
 	c.Assert(rc, NotNil)
 	// Get region.
-	region := getRegion(c, clusterID, grpcPDClient, []byte("abc"))
+	region := getRegion(c, clusterID, grpcPDClient, leaderServer.GetAddr(), []byte("abc"))
 	c.Assert(region.GetPeers(), HasLen, 1)
 	peer := region.GetPeers()[0]
 
@@ -223,7 +223,13 @@ func testPutStore(c *C, clusterID uint64, rc *cluster.RaftCluster, grpcPDClient 
 func resetStoreState(c *C, rc *cluster.RaftCluster, storeID uint64, state metapb.StoreState) {
 	store := rc.GetStore(storeID)
 	c.Assert(store, NotNil)
-	newStore := store.Clone(core.SetStoreState(state))
+	newStore := store.Clone(core.OfflineStore(false))
+	if state == metapb.StoreState_Up {
+		newStore = newStore.Clone(core.UpStore())
+	} else if state == metapb.StoreState_Tombstone {
+		newStore = newStore.Clone(core.TombstoneStore())
+	}
+
 	rc.GetCacheCluster().PutStore(newStore)
 	if state == metapb.StoreState_Offline {
 		rc.SetStoreLimit(storeID, storelimit.RemovePeer, storelimit.Unlimited)
@@ -269,38 +275,34 @@ func testRemoveStore(c *C, clusterID uint64, rc *cluster.RaftCluster, grpcPDClie
 		beforeState := metapb.StoreState_Up // When store is up
 		// Case 1: RemoveStore should be OK;
 		testStateAndLimit(c, clusterID, rc, grpcPDClient, store, beforeState, func(cluster *cluster.RaftCluster) error {
-			return cluster.RemoveStore(store.GetId())
+			return cluster.RemoveStore(store.GetId(), false)
 		}, metapb.StoreState_Offline)
-		// Case 2: BuryStore w/ force should be OK;
+		// Case 2: RemoveStore with physically destroyed should be OK;
 		testStateAndLimit(c, clusterID, rc, grpcPDClient, store, beforeState, func(cluster *cluster.RaftCluster) error {
-			return cluster.BuryStore(store.GetId(), true)
-		}, metapb.StoreState_Tombstone)
-		// Case 3: BuryStore w/o force should fail.
-		testStateAndLimit(c, clusterID, rc, grpcPDClient, store, beforeState, func(cluster *cluster.RaftCluster) error {
-			return cluster.BuryStore(store.GetId(), false)
-		})
+			return cluster.RemoveStore(store.GetId(), true)
+		}, metapb.StoreState_Offline)
 	}
 	{
 		beforeState := metapb.StoreState_Offline // When store is offline
 		// Case 1: RemoveStore should be OK;
 		testStateAndLimit(c, clusterID, rc, grpcPDClient, store, beforeState, func(cluster *cluster.RaftCluster) error {
-			return cluster.RemoveStore(store.GetId())
+			return cluster.RemoveStore(store.GetId(), false)
 		}, metapb.StoreState_Offline)
-		// Case 2: BuryStore w/ or w/o force should be OK.
+		// Case 2: remove store with physically destroyed should be success
 		testStateAndLimit(c, clusterID, rc, grpcPDClient, store, beforeState, func(cluster *cluster.RaftCluster) error {
-			return cluster.BuryStore(store.GetId(), false)
-		}, metapb.StoreState_Tombstone)
+			return cluster.RemoveStore(store.GetId(), true)
+		}, metapb.StoreState_Offline)
 	}
 	{
 		beforeState := metapb.StoreState_Tombstone // When store is tombstone
 		// Case 1: RemoveStore should should fail;
 		testStateAndLimit(c, clusterID, rc, grpcPDClient, store, beforeState, func(cluster *cluster.RaftCluster) error {
-			return cluster.RemoveStore(store.GetId())
+			return cluster.RemoveStore(store.GetId(), false)
 		})
-		// Case 2: BuryStore w/ or w/o force should be OK.
+		// Case 2: RemoveStore with physically destroyed should fail;
 		testStateAndLimit(c, clusterID, rc, grpcPDClient, store, beforeState, func(cluster *cluster.RaftCluster) error {
-			return cluster.BuryStore(store.GetId(), false)
-		}, metapb.StoreState_Tombstone)
+			return cluster.RemoveStore(store.GetId(), true)
+		})
 	}
 	{
 		// Put after removed should return tombstone error.
@@ -399,10 +401,7 @@ func (s *clusterTestSuite) TestGetPDMembers(c *C) {
 	leaderServer := tc.GetServer(tc.GetLeader())
 	grpcPDClient := testutil.MustNewGrpcClient(c, leaderServer.GetAddr())
 	clusterID := leaderServer.GetClusterID()
-	req := &pdpb.GetMembersRequest{
-		Header: testutil.NewRequestHeader(clusterID),
-	}
-
+	req := &pdpb.GetMembersRequest{Header: testutil.NewRequestHeader(clusterID)}
 	resp, err := grpcPDClient.GetMembers(context.Background(), req)
 	c.Assert(err, IsNil)
 	// A more strict test can be found at api/member_test.go
@@ -760,11 +759,10 @@ func (s *clusterTestSuite) TestTiFlashWithPlacementRules(c *C) {
 	rep.EnablePlacementRules = false
 	err = svr.SetReplicationConfig(rep)
 	c.Assert(err, NotNil)
-	err = svr.GetRaftCluster().BuryStore(11, true)
+	err = svr.GetRaftCluster().RemoveStore(11, true)
 	c.Assert(err, IsNil)
 	err = svr.SetReplicationConfig(rep)
-	c.Assert(err, IsNil)
-	c.Assert(len(svr.GetScheduleConfig().StoreLimit), Equals, 0)
+	c.Assert(err, NotNil)
 }
 
 func (s *clusterTestSuite) TestReplicationModeStatus(c *C) {
@@ -843,7 +841,7 @@ func getStore(c *C, clusterID uint64, grpcPDClient pdpb.PDClient, storeID uint64
 	return resp.GetStore()
 }
 
-func getRegion(c *C, clusterID uint64, grpcPDClient pdpb.PDClient, regionKey []byte) *metapb.Region {
+func getRegion(c *C, clusterID uint64, grpcPDClient pdpb.PDClient, leaderAddr string, regionKey []byte) *metapb.Region {
 	req := &pdpb.GetRegionRequest{
 		Header:    testutil.NewRequestHeader(clusterID),
 		RegionKey: regionKey,
@@ -870,9 +868,7 @@ func getRegionByID(c *C, clusterID uint64, grpcPDClient pdpb.PDClient, regionID 
 }
 
 func getClusterConfig(c *C, clusterID uint64, grpcPDClient pdpb.PDClient) *metapb.Cluster {
-	req := &pdpb.GetClusterConfigRequest{
-		Header: testutil.NewRequestHeader(clusterID),
-	}
+	req := &pdpb.GetClusterConfigRequest{Header: testutil.NewRequestHeader(clusterID)}
 
 	resp, err := grpcPDClient.GetClusterConfig(context.Background(), req)
 	c.Assert(err, IsNil)
@@ -959,7 +955,7 @@ func (s *clusterTestSuite) TestOfflineStoreLimit(c *C) {
 
 	// offline store 1
 	rc.SetStoreLimit(1, storelimit.RemovePeer, storelimit.Unlimited)
-	rc.RemoveStore(1)
+	rc.RemoveStore(1, false)
 
 	// can add unlimited remove peer operators on store 1
 	for i := uint64(1); i <= 30; i++ {
@@ -1026,8 +1022,8 @@ func (s *clusterTestSuite) TestUpgradeStoreLimit(c *C) {
 
 func (s *clusterTestSuite) TestStaleTermHeartbeat(c *C) {
 	tc, err := tests.NewTestCluster(s.ctx, 1)
-	defer tc.Destroy()
 	c.Assert(err, IsNil)
+	defer tc.Destroy()
 
 	err = tc.RunInitialServers()
 	c.Assert(err, IsNil)
@@ -1082,6 +1078,15 @@ func (s *clusterTestSuite) TestStaleTermHeartbeat(c *C) {
 	regionReq.Term = 6
 	regionReq.Leader = peers[1]
 	region = core.RegionFromHeartbeat(regionReq)
+	err = rc.HandleRegionHeartbeat(region)
+	c.Assert(err, IsNil)
+
+	// issue #3379
+	regionReq.KeysWritten = uint64(18446744073709551615)  // -1
+	regionReq.BytesWritten = uint64(18446744073709550602) // -1024
+	region = core.RegionFromHeartbeat(regionReq)
+	c.Assert(region.GetKeysWritten(), Equals, uint64(0))
+	c.Assert(region.GetBytesWritten(), Equals, uint64(0))
 	err = rc.HandleRegionHeartbeat(region)
 	c.Assert(err, IsNil)
 

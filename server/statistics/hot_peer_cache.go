@@ -69,15 +69,17 @@ func NewHotStoresStats(kind FlowKind) *hotPeerCache {
 }
 
 // RegionStats returns hot items
-func (f *hotPeerCache) RegionStats() map[uint64][]*HotPeerStat {
+func (f *hotPeerCache) RegionStats(minHotDegree int) map[uint64][]*HotPeerStat {
 	res := make(map[uint64][]*HotPeerStat)
 	for storeID, peers := range f.peersOfStore {
 		values := peers.GetAll()
-		stat := make([]*HotPeerStat, len(values))
-		res[storeID] = stat
-		for i := range values {
-			stat[i] = values[i].(*HotPeerStat)
+		stat := make([]*HotPeerStat, 0, len(values))
+		for _, v := range values {
+			if peer := v.(*HotPeerStat); peer.HotDegree >= minHotDegree {
+				stat = append(stat, peer)
+			}
 		}
+		res[storeID] = stat
 	}
 	return res
 }
@@ -375,7 +377,7 @@ func (f *hotPeerCache) getDefaultTimeMedian() *movingaverage.TimeMedian {
 }
 
 func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, keys float64, interval time.Duration) *HotPeerStat {
-	if newItem == nil || newItem.needDelete {
+	if newItem.needDelete {
 		return newItem
 	}
 
@@ -383,11 +385,11 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 		if interval == 0 {
 			return nil
 		}
+		isHot := bytes/interval.Seconds() >= newItem.thresholds[byteDim] || keys/interval.Seconds() >= newItem.thresholds[keyDim]
+		if !isHot {
+			return nil
+		}
 		if interval.Seconds() >= RegionHeartBeatReportInterval {
-			isHot := bytes/interval.Seconds() >= newItem.thresholds[byteDim] || keys/interval.Seconds() >= newItem.thresholds[keyDim]
-			if !isHot {
-				return nil
-			}
 			newItem.HotDegree = 1
 			newItem.AntiCount = hotRegionAntiCount
 		}
@@ -421,14 +423,14 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 		newItem.AntiCount = oldItem.AntiCount
 	} else {
 		if f.isOldColdPeer(oldItem, newItem.StoreID) {
-			if newItem.isHot() {
+			if newItem.isFullAndHot() {
 				newItem.HotDegree = 1
 				newItem.AntiCount = hotRegionAntiCount
 			} else {
 				newItem.needDelete = true
 			}
 		} else {
-			if newItem.isHot() {
+			if newItem.isFullAndHot() {
 				newItem.HotDegree = oldItem.HotDegree + 1
 				newItem.AntiCount = hotRegionAntiCount
 			} else {

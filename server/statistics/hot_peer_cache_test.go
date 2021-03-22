@@ -15,7 +15,6 @@ package statistics
 
 import (
 	"math/rand"
-	"testing"
 	"time"
 
 	. "github.com/pingcap/check"
@@ -52,7 +51,7 @@ func (t *testHotPeerCache) TestStoreTimeUnsync(c *C) {
 
 		checkAndUpdate(c, cache, region, 3)
 		{
-			stats := cache.RegionStats()
+			stats := cache.RegionStats(0)
 			c.Assert(stats, HasLen, 3)
 			for _, s := range stats {
 				c.Assert(s, HasLen, 1)
@@ -269,4 +268,46 @@ func (t *testHotPeerCache) TestUpdateHotPeerStat(c *C) {
 	c.Check(newItem.HotDegree, Equals, 0)
 	c.Check(newItem.AntiCount, Equals, 0)
 	c.Check(newItem.needDelete, Equals, true)
+}
+
+func (t *testHotPeerCache) TestThresholdWithUpdateHotPeerStat(c *C) {
+	byteRate := minHotThresholds[ReadFlow][byteDim] * 2
+	expectThreshold := byteRate * HotThresholdRatio
+	t.testMetrics(c, 120., byteRate, expectThreshold)
+	t.testMetrics(c, 60., byteRate, expectThreshold)
+	t.testMetrics(c, 30., byteRate, expectThreshold)
+	t.testMetrics(c, 17., byteRate, expectThreshold)
+	t.testMetrics(c, 1., byteRate, expectThreshold)
+}
+func (t *testHotPeerCache) testMetrics(c *C, interval, byteRate, expectThreshold float64) {
+	cache := NewHotStoresStats(ReadFlow)
+	minThresholds := minHotThresholds[cache.kind]
+	storeID := uint64(1)
+	c.Assert(byteRate, GreaterEqual, minThresholds[byteDim])
+	for i := uint64(1); i < TopNN+10; i++ {
+		var oldItem *HotPeerStat
+		for {
+			thresholds := cache.calcHotThresholds(storeID)
+			newItem := &HotPeerStat{
+				StoreID:    storeID,
+				RegionID:   i,
+				needDelete: false,
+				thresholds: thresholds,
+				ByteRate:   byteRate,
+				KeyRate:    0,
+			}
+			oldItem = cache.getOldHotPeerStat(i, storeID)
+			if oldItem != nil && oldItem.rollingByteRate.isHot(thresholds) == true {
+				break
+			}
+			item := cache.updateHotPeerStat(newItem, oldItem, byteRate*interval, 0, time.Duration(interval)*time.Second)
+			cache.Update(item)
+		}
+		thresholds := cache.calcHotThresholds(storeID)
+		if i < TopNN {
+			c.Assert(thresholds[byteDim], Equals, minThresholds[byteDim])
+		} else {
+			c.Assert(thresholds[byteDim], Equals, expectThreshold)
+		}
+	}
 }

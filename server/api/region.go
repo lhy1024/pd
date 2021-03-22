@@ -131,7 +131,7 @@ func newRegionHandler(svr *server.Server, rd *render.Render) *regionHandler {
 // @Failure 400 {string} string "The input is invalid."
 // @Router /region/id/{id} [get]
 func (h *regionHandler) GetRegionByID(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 
 	vars := mux.Vars(r)
 	regionIDStr := vars["id"]
@@ -152,7 +152,7 @@ func (h *regionHandler) GetRegionByID(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} RegionInfo
 // @Router /region/key/{key} [get]
 func (h *regionHandler) GetRegionByKey(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	vars := mux.Vars(r)
 	key := vars["key"]
 	key, err := url.QueryUnescape(key)
@@ -198,7 +198,7 @@ func convertToAPIRegions(regions []*core.RegionInfo) *RegionsInfo {
 // @Success 200 {object} RegionsInfo
 // @Router /regions [get]
 func (h *regionsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	regions := rc.GetRegions()
 	regionsInfo := convertToAPIRegions(regions)
 	h.rd.JSON(w, http.StatusOK, regionsInfo)
@@ -213,7 +213,7 @@ func (h *regionsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {string} string "The input is invalid."
 // @Router /regions/key [get]
 func (h *regionsHandler) ScanRegions(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	startKey := r.URL.Query().Get("key")
 
 	limit := defaultRegionLimit
@@ -239,7 +239,7 @@ func (h *regionsHandler) ScanRegions(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} RegionsInfo
 // @Router /regions/count [get]
 func (h *regionsHandler) GetRegionCount(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	count := rc.GetRegionCount()
 	h.rd.JSON(w, http.StatusOK, &RegionsInfo{Count: count})
 }
@@ -252,7 +252,7 @@ func (h *regionsHandler) GetRegionCount(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {string} string "The input is invalid."
 // @Router /regions/store/{id} [get]
 func (h *regionsHandler) GetStoreRegions(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 
 	vars := mux.Vars(r)
 	id, err := strconv.Atoi(vars["id"])
@@ -358,7 +358,7 @@ func (h *regionsHandler) GetLearnerPeerRegions(w http.ResponseWriter, r *http.Re
 // @Router /regions/check/offline-peer [get]
 func (h *regionsHandler) GetOfflinePeer(w http.ResponseWriter, r *http.Request) {
 	handler := h.svr.GetHandler()
-	regions, err := handler.GetRegionsByType(statistics.OfflinePeer)
+	regions, err := handler.GetOfflinePeer(statistics.OfflinePeer)
 	if err != nil {
 		h.rd.JSON(w, http.StatusInternalServerError, err.Error())
 		return
@@ -418,7 +418,7 @@ func (h *regionsHandler) GetSizeHistogram(w http.ResponseWriter, r *http.Request
 		h.rd.JSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	regions := rc.GetRegions()
 	histSizes := make([]int64, 0, len(regions))
 	for _, region := range regions {
@@ -442,7 +442,7 @@ func (h *regionsHandler) GetKeysHistogram(w http.ResponseWriter, r *http.Request
 		h.rd.JSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	regions := rc.GetRegions()
 	histKeys := make([]int64, 0, len(regions))
 	for _, region := range regions {
@@ -496,7 +496,7 @@ func calHist(bound int, list *[]int64) *[]*histItem {
 // @Failure 404 {string} string "The region does not exist."
 // @Router /regions/sibling/{id} [get]
 func (h *regionsHandler) GetRegionSiblings(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 
 	vars := mux.Vars(r)
 	id, err := strconv.Atoi(vars["id"])
@@ -593,7 +593,7 @@ func (h *regionsHandler) GetTopSize(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {string} string "The input is invalid."
 // @Router /regions/accelerate-schedule [post]
 func (h *regionsHandler) AccelerateRegionsScheduleInRange(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	var input map[string]interface{}
 	if err := apiutil.ReadJSONRespondError(h.rd, w, r.Body, &input); err != nil {
 		return
@@ -635,7 +635,7 @@ func (h *regionsHandler) AccelerateRegionsScheduleInRange(w http.ResponseWriter,
 }
 
 func (h *regionsHandler) GetTopNRegions(w http.ResponseWriter, r *http.Request, less func(a, b *core.RegionInfo) bool) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	limit := defaultRegionLimit
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
 		var err error
@@ -662,7 +662,7 @@ func (h *regionsHandler) GetTopNRegions(w http.ResponseWriter, r *http.Request, 
 // @Failure 400 {string} string "The input is invalid."
 // @Router /regions/scatter [post]
 func (h *regionsHandler) ScatterRegions(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	var input map[string]interface{}
 	if err := apiutil.ReadJSONRespondError(h.rd, w, r.Body, &input); err != nil {
 		return
@@ -738,7 +738,7 @@ func (h *regionsHandler) ScatterRegions(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {string} string "The input is invalid."
 // @Router /regions/split [post]
 func (h *regionsHandler) SplitRegions(w http.ResponseWriter, r *http.Request) {
-	rc := getCluster(r.Context())
+	rc := h.svr.GetRaftCluster()
 	var input map[string]interface{}
 	if err := apiutil.ReadJSONRespondError(h.rd, w, r.Body, &input); err != nil {
 		return

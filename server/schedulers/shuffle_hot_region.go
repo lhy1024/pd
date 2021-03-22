@@ -110,9 +110,19 @@ func (s *shuffleHotRegionScheduler) EncodeConfig() ([]byte, error) {
 }
 
 func (s *shuffleHotRegionScheduler) IsScheduleAllowed(cluster opt.Cluster) bool {
-	return s.OpController.OperatorCount(operator.OpHotRegion) < s.conf.Limit &&
-		s.OpController.OperatorCount(operator.OpRegion) < cluster.GetOpts().GetRegionScheduleLimit() &&
-		s.OpController.OperatorCount(operator.OpLeader) < cluster.GetOpts().GetLeaderScheduleLimit()
+	hotRegionAllowed := s.OpController.OperatorCount(operator.OpHotRegion) < s.conf.Limit
+	regionAllowed := s.OpController.OperatorCount(operator.OpRegion) < cluster.GetOpts().GetRegionScheduleLimit()
+	leaderAllowed := s.OpController.OperatorCount(operator.OpLeader) < cluster.GetOpts().GetLeaderScheduleLimit()
+	if !hotRegionAllowed {
+		operator.OperatorLimitCounter.WithLabelValues(s.GetType(), operator.OpHotRegion.String()).Inc()
+	}
+	if !regionAllowed {
+		operator.OperatorLimitCounter.WithLabelValues(s.GetType(), operator.OpRegion.String()).Inc()
+	}
+	if !leaderAllowed {
+		operator.OperatorLimitCounter.WithLabelValues(s.GetType(), operator.OpLeader.String()).Inc()
+	}
+	return hotRegionAllowed && regionAllowed && leaderAllowed
 }
 
 func (s *shuffleHotRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Operator {
@@ -122,25 +132,20 @@ func (s *shuffleHotRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Op
 }
 
 func (s *shuffleHotRegionScheduler) dispatch(typ rwType, cluster opt.Cluster) []*operator.Operator {
-	storesStats := cluster.GetStoresStats()
-	minHotDegree := cluster.GetOpts().GetHotRegionCacheHitsThreshold()
+	storesLoads := cluster.GetStoresLoads()
 	switch typ {
 	case read:
 		s.stLoadInfos[readLeader] = summaryStoresLoad(
-			storesStats.GetStoresBytesReadStat(),
-			storesStats.GetStoresKeysReadStat(),
+			storesLoads,
 			map[uint64]Influence{},
 			cluster.RegionReadStats(),
-			minHotDegree,
 			read, core.LeaderKind)
 		return s.randomSchedule(cluster, s.stLoadInfos[readLeader])
 	case write:
 		s.stLoadInfos[writeLeader] = summaryStoresLoad(
-			storesStats.GetStoresBytesWriteStat(),
-			storesStats.GetStoresKeysWriteStat(),
+			storesLoads,
 			map[uint64]Influence{},
 			cluster.RegionWriteStats(),
-			minHotDegree,
 			write, core.LeaderKind)
 		return s.randomSchedule(cluster, s.stLoadInfos[writeLeader])
 	}

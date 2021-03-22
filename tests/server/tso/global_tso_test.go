@@ -23,9 +23,12 @@ import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/tikv/pd/pkg/grpcutil"
 	"github.com/tikv/pd/pkg/testutil"
+	"github.com/tikv/pd/pkg/tsoutil"
 	"github.com/tikv/pd/server"
 	"github.com/tikv/pd/server/config"
+	"github.com/tikv/pd/server/tso"
 	"github.com/tikv/pd/tests"
 	"go.uber.org/goleak"
 )
@@ -82,7 +85,7 @@ func (s *testNormalGlobalTSOSuite) TestNormalGlobalTSO(c *C) {
 	req := &pdpb.TsoRequest{
 		Header:     testutil.NewRequestHeader(clusterID),
 		Count:      uint32(tsoCount),
-		DcLocation: config.GlobalDCLocation,
+		DcLocation: tso.GlobalDCLocation,
 	}
 
 	var wg sync.WaitGroup
@@ -98,10 +101,32 @@ func (s *testNormalGlobalTSOSuite) TestNormalGlobalTSO(c *C) {
 
 			for j := 0; j < 30; j++ {
 				ts := s.testGetNormalGlobalTimestamp(c, grpcPDClient, req)
-				c.Assert(ts.GetPhysical(), Not(Less), last.GetPhysical())
-				if ts.GetPhysical() == last.GetPhysical() {
-					c.Assert(ts.GetLogical(), Greater, last.GetLogical())
-				}
+				// Check whether the TSO fallbacks
+				c.Assert(tsoutil.CompareTimestamp(ts, last), Equals, 1)
+				last = ts
+				time.Sleep(10 * time.Millisecond)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Test Global TSO after the leader change
+	leaderServer.GetServer().GetMember().ResetLeader()
+	cluster.WaitLeader()
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			last := &pdpb.Timestamp{
+				Physical: 0,
+				Logical:  0,
+			}
+
+			for j := 0; j < 30; j++ {
+				ts := s.testGetNormalGlobalTimestamp(c, grpcPDClient, req)
+				// Check whether the TSO fallbacks
+				c.Assert(tsoutil.CompareTimestamp(ts, last), Equals, 1)
 				last = ts
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -122,7 +147,8 @@ func (s *testNormalGlobalTSOSuite) testGetNormalGlobalTimestamp(c *C, pdCli pdpb
 	c.Assert(err, IsNil)
 	c.Assert(resp.GetCount(), Equals, req.GetCount())
 	res := resp.GetTimestamp()
-	c.Assert(res.GetLogical(), Greater, int64(0))
+	c.Assert(res.GetPhysical(), Greater, int64(0))
+	c.Assert(uint32(res.GetLogical())>>res.GetSuffixBits(), GreaterEqual, req.GetCount())
 	return res
 }
 
@@ -169,7 +195,7 @@ func (s *testNormalGlobalTSOSuite) TestZeroTSOCount(c *C) {
 
 	req := &pdpb.TsoRequest{
 		Header:     testutil.NewRequestHeader(clusterID),
-		DcLocation: config.GlobalDCLocation,
+		DcLocation: tso.GlobalDCLocation,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -204,10 +230,11 @@ func (s *testNormalGlobalTSOSuite) TestRequestFollower(c *C) {
 	req := &pdpb.TsoRequest{
 		Header:     testutil.NewRequestHeader(clusterID),
 		Count:      1,
-		DcLocation: config.GlobalDCLocation,
+		DcLocation: tso.GlobalDCLocation,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = grpcutil.BuildForwardContext(ctx, followerServer.GetAddr())
 	tsoClient, err := grpcPDClient.Tso(ctx)
 	c.Assert(err, IsNil)
 	defer tsoClient.CloseSend()
@@ -249,7 +276,7 @@ func (s *testNormalGlobalTSOSuite) TestDelaySyncTimestamp(c *C) {
 	req := &pdpb.TsoRequest{
 		Header:     testutil.NewRequestHeader(clusterID),
 		Count:      1,
-		DcLocation: config.GlobalDCLocation,
+		DcLocation: tso.GlobalDCLocation,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -260,6 +287,7 @@ func (s *testNormalGlobalTSOSuite) TestDelaySyncTimestamp(c *C) {
 	leaderServer.ResignLeader()
 	c.Assert(nextLeaderServer.WaitLeader(), IsTrue)
 
+	ctx = grpcutil.BuildForwardContext(ctx, nextLeaderServer.GetAddr())
 	tsoClient, err := grpcPDClient.Tso(ctx)
 	c.Assert(err, IsNil)
 	defer tsoClient.CloseSend()
@@ -268,6 +296,9 @@ func (s *testNormalGlobalTSOSuite) TestDelaySyncTimestamp(c *C) {
 	resp, err := tsoClient.Recv()
 	c.Assert(err, IsNil)
 	c.Assert(resp.GetCount(), Equals, uint32(1))
+	res := resp.GetTimestamp()
+	c.Assert(res.GetPhysical(), Greater, int64(0))
+	c.Assert(uint32(res.GetLogical())>>res.GetSuffixBits(), GreaterEqual, req.GetCount())
 	failpoint.Disable("github.com/tikv/pd/server/tso/delaySyncTimestamp")
 }
 
@@ -309,12 +340,12 @@ func (s *testTimeFallBackSuite) TearDownSuite(c *C) {
 	s.cluster.Destroy()
 }
 
-func (s *testTimeFallBackSuite) testGetTimestamp(c *C, n int) *pdpb.Timestamp {
+func (s *testTimeFallBackSuite) testGetTimestamp(c *C, n uint32) *pdpb.Timestamp {
 	clusterID := s.server.GetClusterID()
 	req := &pdpb.TsoRequest{
 		Header:     testutil.NewRequestHeader(clusterID),
-		Count:      uint32(n),
-		DcLocation: config.GlobalDCLocation,
+		Count:      n,
+		DcLocation: tso.GlobalDCLocation,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -327,11 +358,9 @@ func (s *testTimeFallBackSuite) testGetTimestamp(c *C, n int) *pdpb.Timestamp {
 	resp, err := tsoClient.Recv()
 	c.Assert(err, IsNil)
 	c.Assert(resp.GetCount(), Equals, uint32(n))
-
 	res := resp.GetTimestamp()
-	c.Assert(res.GetLogical(), Greater, int64(0))
-	c.Assert(res.GetPhysical(), Greater, time.Now().UnixNano()/int64(time.Millisecond))
-
+	c.Assert(tsoutil.CompareTimestamp(res, tsoutil.GenerateTimestamp(time.Now(), 0)), Equals, 1)
+	c.Assert(uint32(res.GetLogical())>>res.GetSuffixBits(), GreaterEqual, req.GetCount())
 	return res
 }
 
@@ -349,10 +378,7 @@ func (s *testTimeFallBackSuite) TestTimeFallBack(c *C) {
 
 			for j := 0; j < 30; j++ {
 				ts := s.testGetTimestamp(c, 10)
-				c.Assert(ts.GetPhysical(), Not(Less), last.GetPhysical())
-				if ts.GetPhysical() == last.GetPhysical() {
-					c.Assert(ts.GetLogical(), Greater, last.GetLogical())
-				}
+				c.Assert(tsoutil.CompareTimestamp(ts, last), Equals, 1)
 				last = ts
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -402,10 +428,11 @@ func (s *testFollowerTsoSuite) TestRequest(c *C) {
 	req := &pdpb.TsoRequest{
 		Header:     testutil.NewRequestHeader(clusterID),
 		Count:      1,
-		DcLocation: config.GlobalDCLocation,
+		DcLocation: tso.GlobalDCLocation,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = grpcutil.BuildForwardContext(ctx, followerServer.GetAddr())
 	tsoClient, err := grpcPDClient.Tso(ctx)
 	c.Assert(err, IsNil)
 	defer tsoClient.CloseSend()
@@ -445,8 +472,8 @@ func (s *testSynchronizedGlobalTSO) TestSynchronizedGlobalTSO(c *C) {
 	}
 	dcLocationNum := len(dcLocationConfig)
 	cluster, err := tests.NewTestCluster(s.ctx, dcLocationNum, func(conf *config.Config, serverName string) {
-		conf.LocalTSO.EnableLocalTSO = true
-		conf.LocalTSO.DCLocation = dcLocationConfig[serverName]
+		conf.EnableLocalTSO = true
+		conf.Labels[config.ZoneLabel] = dcLocationConfig[serverName]
 	})
 	defer cluster.Destroy()
 	c.Assert(err, IsNil)
@@ -454,59 +481,48 @@ func (s *testSynchronizedGlobalTSO) TestSynchronizedGlobalTSO(c *C) {
 	err = cluster.RunInitialServers()
 	c.Assert(err, IsNil)
 
-	cluster.WaitLeader()
-	// To speed up the test, we force to do the check
-	for _, server := range cluster.GetServers() {
-		server.GetTSOAllocatorManager().ClusterDCLocationChecker()
-	}
-	for _, dcLocation := range dcLocationConfig {
-		var pdName string
-		testutil.WaitUntil(c, func(c *C) bool {
-			pdName = cluster.WaitAllocatorLeader(dcLocation)
-			return len(pdName) > 0
-		})
-		s.dcClientMap[dcLocation] = testutil.MustNewGrpcClient(c, cluster.GetServer(pdName).GetAddr())
-	}
+	cluster.WaitAllLeaders(c, dcLocationConfig)
+
 	s.leaderServer = cluster.GetServer(cluster.GetLeader())
 	c.Assert(s.leaderServer, NotNil)
-	s.dcClientMap[config.GlobalDCLocation] = testutil.MustNewGrpcClient(c, s.leaderServer.GetAddr())
+	s.dcClientMap[tso.GlobalDCLocation] = testutil.MustNewGrpcClient(c, s.leaderServer.GetAddr())
+	for _, dcLocation := range dcLocationConfig {
+		pdName := s.leaderServer.GetAllocatorLeader(dcLocation).GetName()
+		s.dcClientMap[dcLocation] = testutil.MustNewGrpcClient(c, cluster.GetServer(pdName).GetAddr())
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// Get some local TSOs first
 	oldLocalTSOs := make([]*pdpb.Timestamp, 0, dcLocationNum)
 	for _, dcLocation := range dcLocationConfig {
-		oldLocalTSOs = append(oldLocalTSOs, s.testGetTimestamp(ctx, c, tsoCount, dcLocation))
+		oldLocalTSOs = append(oldLocalTSOs, s.testGetTimestamp(ctx, c, cluster, tsoCount, dcLocation))
 	}
 	// Get a global TSO then
-	globalTSO := s.testGetTimestamp(ctx, c, tsoCount, config.GlobalDCLocation)
+	globalTSO := s.testGetTimestamp(ctx, c, cluster, tsoCount, tso.GlobalDCLocation)
 	for _, oldLocalTSO := range oldLocalTSOs {
-		c.Assert(globalTSO.GetPhysical(), GreaterEqual, oldLocalTSO.GetPhysical())
-		if globalTSO.GetPhysical() == oldLocalTSO.GetPhysical() {
-			c.Assert(globalTSO.GetLogical(), Greater, oldLocalTSO.GetLogical())
-		}
+		c.Assert(tsoutil.CompareTimestamp(globalTSO, oldLocalTSO), Equals, 1)
 	}
 	// Get some local TSOs again
 	newLocalTSOs := make([]*pdpb.Timestamp, 0, dcLocationNum)
 	for _, dcLocation := range dcLocationConfig {
-		newLocalTSOs = append(newLocalTSOs, s.testGetTimestamp(ctx, c, tsoCount, dcLocation))
+		newLocalTSOs = append(newLocalTSOs, s.testGetTimestamp(ctx, c, cluster, tsoCount, dcLocation))
 	}
 	for _, newLocalTSO := range newLocalTSOs {
-		c.Assert(globalTSO.GetPhysical(), LessEqual, newLocalTSO.GetPhysical())
-		if globalTSO.GetPhysical() == newLocalTSO.GetPhysical() {
-			c.Assert(globalTSO.GetLogical(), Less, newLocalTSO.GetLogical())
-		}
+		c.Assert(tsoutil.CompareTimestamp(globalTSO, newLocalTSO), Equals, -1)
 	}
 }
 
-func (s *testSynchronizedGlobalTSO) testGetTimestamp(ctx context.Context, c *C, n int, dcLocation string) *pdpb.Timestamp {
+func (s *testSynchronizedGlobalTSO) testGetTimestamp(ctx context.Context, c *C, cluster *tests.TestCluster, n uint32, dcLocation string) *pdpb.Timestamp {
 	req := &pdpb.TsoRequest{
 		Header:     testutil.NewRequestHeader(s.leaderServer.GetClusterID()),
-		Count:      tsoCount,
+		Count:      n,
 		DcLocation: dcLocation,
 	}
 	pdClient, ok := s.dcClientMap[dcLocation]
 	c.Assert(ok, IsTrue)
+	forwardedHost := cluster.GetServer(s.leaderServer.GetAllocatorLeader(dcLocation).GetName()).GetAddr()
+	ctx = grpcutil.BuildForwardContext(ctx, forwardedHost)
 	tsoClient, err := pdClient.Tso(ctx)
 	c.Assert(err, IsNil)
 	defer tsoClient.CloseSend()
@@ -516,6 +532,41 @@ func (s *testSynchronizedGlobalTSO) testGetTimestamp(ctx context.Context, c *C, 
 	c.Assert(err, IsNil)
 	c.Assert(resp.GetCount(), Equals, uint32(n))
 	res := resp.GetTimestamp()
-	c.Assert(res.GetLogical(), Greater, int64(0))
+	c.Assert(res.GetPhysical(), Greater, int64(0))
+	c.Assert(uint32(res.GetLogical())>>res.GetSuffixBits(), GreaterEqual, req.GetCount())
 	return res
+}
+
+func (s *testSynchronizedGlobalTSO) TestSynchronizedGlobalTSOOverflow(c *C) {
+	dcLocationConfig := map[string]string{
+		"pd1": "dc-1",
+		"pd2": "dc-2",
+		"pd3": "dc-3",
+	}
+	dcLocationNum := len(dcLocationConfig)
+	cluster, err := tests.NewTestCluster(s.ctx, dcLocationNum, func(conf *config.Config, serverName string) {
+		conf.EnableLocalTSO = true
+		conf.Labels[config.ZoneLabel] = dcLocationConfig[serverName]
+	})
+	defer cluster.Destroy()
+	c.Assert(err, IsNil)
+
+	err = cluster.RunInitialServers()
+	c.Assert(err, IsNil)
+
+	cluster.WaitAllLeaders(c, dcLocationConfig)
+
+	s.leaderServer = cluster.GetServer(cluster.GetLeader())
+	c.Assert(s.leaderServer, NotNil)
+	s.dcClientMap[tso.GlobalDCLocation] = testutil.MustNewGrpcClient(c, s.leaderServer.GetAddr())
+	for _, dcLocation := range dcLocationConfig {
+		pdName := s.leaderServer.GetAllocatorLeader(dcLocation).GetName()
+		s.dcClientMap[dcLocation] = testutil.MustNewGrpcClient(c, cluster.GetServer(pdName).GetAddr())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Assert(failpoint.Enable("github.com/tikv/pd/server/tso/globalTSOOverflow", `return(true)`), IsNil)
+	s.testGetTimestamp(ctx, c, cluster, tsoCount, tso.GlobalDCLocation)
+	failpoint.Disable("github.com/tikv/pd/server/tso/globalTSOOverflow")
 }

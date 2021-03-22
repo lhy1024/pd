@@ -67,8 +67,8 @@ func (s *serverTestSuite) TestMemberDelete(c *C) {
 	}
 	dcLocationNum := len(dcLocationConfig)
 	cluster, err := tests.NewTestCluster(s.ctx, dcLocationNum, func(conf *config.Config, serverName string) {
-		conf.LocalTSO.EnableLocalTSO = true
-		conf.LocalTSO.DCLocation = dcLocationConfig[serverName]
+		conf.EnableLocalTSO = true
+		conf.Labels[config.ZoneLabel] = dcLocationConfig[serverName]
 	})
 	defer cluster.Destroy()
 	c.Assert(err, IsNil)
@@ -333,9 +333,7 @@ func (s *leaderTestSuite) TestGetLeader(c *C) {
 func (s *leaderTestSuite) sendRequest(c *C, addr string) {
 	defer s.wg.Done()
 
-	req := &pdpb.AllocIDRequest{
-		Header: testutil.NewRequestHeader(0),
-	}
+	req := &pdpb.AllocIDRequest{Header: testutil.NewRequestHeader(0)}
 
 	for {
 		select {

@@ -15,6 +15,7 @@ package mockcluster
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -88,9 +89,9 @@ func (mc *Cluster) LoadRegion(regionID uint64, followerIds ...uint64) {
 	mc.PutRegion(r)
 }
 
-// GetStoresStats gets stores statistics.
-func (mc *Cluster) GetStoresStats() *statistics.StoresStats {
-	return mc.HotStat.StoresStats
+// GetStoresLoads gets stores load statistics.
+func (mc *Cluster) GetStoresLoads() map[uint64][]float64 {
+	return mc.HotStat.GetStoresLoads()
 }
 
 // GetStoreRegionCount gets region count with a given store.
@@ -109,13 +110,15 @@ func (mc *Cluster) IsRegionHot(region *core.RegionInfo) bool {
 }
 
 // RegionReadStats returns hot region's read stats.
+// The result only includes peers that are hot enough.
 func (mc *Cluster) RegionReadStats() map[uint64][]*statistics.HotPeerStat {
-	return mc.HotCache.RegionStats(statistics.ReadFlow)
+	return mc.HotCache.RegionStats(statistics.ReadFlow, mc.GetHotRegionCacheHitsThreshold())
 }
 
 // RegionWriteStats returns hot region's write stats.
+// The result only includes peers that are hot enough.
 func (mc *Cluster) RegionWriteStats() map[uint64][]*statistics.HotPeerStat {
-	return mc.HotCache.RegionStats(statistics.WriteFlow)
+	return mc.HotCache.RegionStats(statistics.WriteFlow, mc.GetHotRegionCacheHitsThreshold())
 }
 
 // RandHotRegionFromStore random picks a hot region in specify store.
@@ -143,7 +146,7 @@ func (mc *Cluster) AllocPeer(storeID uint64) (*metapb.Peer, error) {
 
 func (mc *Cluster) initRuleManager() {
 	if mc.RuleManager == nil {
-		mc.RuleManager = placement.NewRuleManager(core.NewStorage(kv.NewMemoryKV()))
+		mc.RuleManager = placement.NewRuleManager(core.NewStorage(kv.NewMemoryKV()), mc)
 		mc.RuleManager.Initialize(int(mc.GetReplicationConfig().MaxReplicas), mc.GetReplicationConfig().LocationLabels)
 	}
 }
@@ -162,7 +165,7 @@ func (mc *Cluster) GetRuleManager() *placement.RuleManager {
 func (mc *Cluster) SetStoreUp(storeID uint64) {
 	store := mc.GetStore(storeID)
 	newStore := store.Clone(
-		core.SetStoreState(metapb.StoreState_Up),
+		core.UpStore(),
 		core.SetLastHeartbeatTS(time.Now()),
 	)
 	mc.PutStore(newStore)
@@ -172,7 +175,7 @@ func (mc *Cluster) SetStoreUp(storeID uint64) {
 func (mc *Cluster) SetStoreDisconnect(storeID uint64) {
 	store := mc.GetStore(storeID)
 	newStore := store.Clone(
-		core.SetStoreState(metapb.StoreState_Up),
+		core.UpStore(),
 		core.SetLastHeartbeatTS(time.Now().Add(-time.Second*30)),
 	)
 	mc.PutStore(newStore)
@@ -182,7 +185,7 @@ func (mc *Cluster) SetStoreDisconnect(storeID uint64) {
 func (mc *Cluster) SetStoreDown(storeID uint64) {
 	store := mc.GetStore(storeID)
 	newStore := store.Clone(
-		core.SetStoreState(metapb.StoreState_Up),
+		core.UpStore(),
 		core.SetLastHeartbeatTS(time.Time{}),
 	)
 	mc.PutStore(newStore)
@@ -191,7 +194,7 @@ func (mc *Cluster) SetStoreDown(storeID uint64) {
 // SetStoreOffline sets store state to be offline.
 func (mc *Cluster) SetStoreOffline(storeID uint64) {
 	store := mc.GetStore(storeID)
-	newStore := store.Clone(core.SetStoreState(metapb.StoreState_Offline))
+	newStore := store.Clone(core.OfflineStore(false))
 	mc.PutStore(newStore)
 }
 
@@ -583,7 +586,11 @@ func (mc *Cluster) CheckLabelProperty(typ string, labels []*metapb.StoreLabel) b
 
 // PutRegionStores mocks method.
 func (mc *Cluster) PutRegionStores(id uint64, stores ...uint64) {
-	meta := &metapb.Region{Id: id}
+	meta := &metapb.Region{
+		Id:       id,
+		StartKey: []byte(strconv.FormatUint(id, 10)),
+		EndKey:   []byte(strconv.FormatUint(id+1, 10)),
+	}
 	for _, s := range stores {
 		meta.Peers = append(meta.Peers, &metapb.Peer{StoreId: s})
 	}

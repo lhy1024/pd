@@ -25,14 +25,14 @@ require (
 	github.com/opentracing/opentracing-go v1.1.0
 	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
 	github.com/phf/go-queue v0.0.0-20170504031614-9abe38d0371d
-	github.com/pingcap-incubator/tidb-dashboard v0.0.0-20201126111827-6c8be2240067
 	github.com/pingcap/check v0.0.0-20200212061837-5e12011dc712
 	github.com/pingcap/errcode v0.3.0
 	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3
 	github.com/pingcap/failpoint v0.0.0-20200702092429-9f69995143ce
-	github.com/pingcap/kvproto v0.0.0-20201210033455-35030157bad5
+	github.com/pingcap/kvproto v0.0.0-20210219064844-c1844a4775d6
 	github.com/pingcap/log v0.0.0-20201112100606-8f1e84a3abc8
-	github.com/pingcap/sysutil v0.0.0-20201130064824-f0c8aa6a6966
+	github.com/pingcap/sysutil v0.0.0-20210315073920-cc0985d983a3
+	github.com/pingcap/tidb-dashboard v0.0.0-20210312062513-eef5d6404638
 	github.com/prometheus/client_golang v1.2.1
 	github.com/prometheus/common v0.9.1
 	github.com/sasha-s/go-deadlock v0.2.0
@@ -53,6 +53,7 @@ require (
 )
 
 replace (
+	github.com/oleiade/reflections => github.com/oleiade/reflections v1.0.1
 	github.com/sirupsen/logrus => github.com/sirupsen/logrus v1.2.0
 	go.etcd.io/bbolt => go.etcd.io/bbolt v1.3.5
 )
