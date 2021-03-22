@@ -1058,16 +1058,23 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 }
 func (bs *balanceSolver) generateAdditionalInfos() (additionalInfos map[string]string) {
 	additionalInfos = make(map[string]string, 6)
-	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
-	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
+	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred
+	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred
 	peer := bs.cur.srcPeerStat
-	additionalInfos["srcByteRate"] = strconv.FormatFloat(srcLd.ByteRate, 'f', 2, 64)
-	additionalInfos["srcPending"] = strconv.FormatFloat(bs, 'f', 2, 64)
-	additionalInfos["srcKeyRate"] = strconv.FormatFloat(srcLd.KeyRate, 'f', 2, 64)
-	additionalInfos["dstByteRate"] = strconv.FormatFloat(dstLd.ByteRate, 'f', 2, 64)
-	additionalInfos["dstKeyRate"] = strconv.FormatFloat(dstLd.KeyRate, 'f', 2, 64)
+
+	additionalInfos["srcByteCurrent"] = strconv.FormatFloat(srcLd.Current.ByteRate, 'f', 2, 64)
+	additionalInfos["srcByteFuture"] = strconv.FormatFloat(srcLd.Future.ByteRate, 'f', 2, 64)
+	additionalInfos["srcKeyCurrent"] = strconv.FormatFloat(srcLd.Current.KeyRate, 'f', 2, 64)
+	additionalInfos["srcKeyFuture"] = strconv.FormatFloat(srcLd.Future.KeyRate, 'f', 2, 64)
+
+	additionalInfos["dstByteCurrent"] = strconv.FormatFloat(dstLd.Current.ByteRate, 'f', 2, 64)
+	additionalInfos["dstByteFuture"] = strconv.FormatFloat(dstLd.Future.ByteRate, 'f', 2, 64)
+	additionalInfos["dstKeyCurrent"] = strconv.FormatFloat(dstLd.Current.KeyRate, 'f', 2, 64)
+	additionalInfos["dstKeyFuture"] = strconv.FormatFloat(dstLd.Future.KeyRate, 'f', 2, 64)
+
 	additionalInfos["peerByteRate"] = strconv.FormatFloat(peer.ByteRate, 'f', 2, 64)
 	additionalInfos["peerKeyRate"] = strconv.FormatFloat(peer.KeyRate, 'f', 2, 64)
+
 	additionalInfos["keyDecRatio"] = strconv.FormatFloat(bs.cur.keyDecRatio, 'f', 2, 64)
 	additionalInfos["byteDecRatio"] = strconv.FormatFloat(bs.cur.byteDecRatio, 'f', 2, 64)
 	return additionalInfos
