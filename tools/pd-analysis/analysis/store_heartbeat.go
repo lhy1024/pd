@@ -16,7 +16,6 @@ package analysis
 import (
 	"regexp"
 	"strconv"
-	"time"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
@@ -125,7 +124,7 @@ func (c *heartbeatCollector) CompileRegex() (*regexp.Regexp, error) {
 		"byte-rate",
 		"byte-rate-instant",
 	}
-	r := ".*?region heartbeat update.*?"
+	r := ".*?hot_peer.go:120.*?"
 	for _, typ := range typs {
 		r += typ + "=([0-9]*).*?"
 	}
@@ -200,15 +199,15 @@ func (c *heartbeatCollector) drawBaseLine(stats []*stat, kind rateKind) (*charts
 		}
 		l.AddSeries("origin2", scoreData)
 	}
-	{
-		t := movingaverage.NewTimeMedian(2, 5, 10)
-		scoreData := make([]opts.LineData, 0, len(stats))
-		for _, stat := range stats {
-			t.Add(float64(stat.byteInstant)*float64(time.Duration(stat.interval)), time.Duration(stat.interval)*time.Second)
-			scoreData = append(scoreData, opts.LineData{Value: t.Get()})
-		}
-		l.AddSeries("TM", scoreData)
-	}
+	// {
+	// 	t := movingaverage.NewTimeMedian(2, 5, 10)
+	// 	scoreData := make([]opts.LineData, 0, len(stats))
+	// 	for _, stat := range stats {
+	// 		t.Add(float64(stat.byteInstant)*float64(time.Duration(stat.interval)), time.Duration(stat.interval)*time.Second)
+	// 		scoreData = append(scoreData, opts.LineData{Value: t.Get()})
+	// 	}
+	// 	l.AddSeries("TM", scoreData)
+	// }
 	// todo 需要对比 sum(f(region)) 和 f(store) 的情况，这里不能用 f(sum(region)) 替代，因为 hma 不是线性函数
 	// {
 	// 	aot := movingaverage.NewAvgOverTime(time.Second * 20) // 稳定的时候，10和20没影响，带不带也没影响
