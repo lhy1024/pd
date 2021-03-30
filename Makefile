@@ -111,7 +111,7 @@ pd-server-basic:
 install-go-tools: export GO111MODULE=on
 install-go-tools:
 	@mkdir -p $(GO_TOOLS_BIN_PATH)
-	@which golangci-lint >/dev/null 2>&1 || curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(GO_TOOLS_BIN_PATH) v1.27.0
+	@which golangci-lint >/dev/null 2>&1 || curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(GO_TOOLS_BIN_PATH) v1.38.0
 	@grep '_' tools.go | sed 's/"//g' | awk '{print $$2}' | xargs go install
 
 swagger-spec: export GO111MODULE=on
@@ -175,12 +175,12 @@ check-plugin:
 	cd ./plugin/scheduler_example && $(MAKE) evictLeaderPlugin.so && rm evictLeaderPlugin.so
 
 static: export GO111MODULE=on
-static:
+static: install-go-tools
 	@ # Not running vet and fmt through metalinter becauase it ends up looking at vendor
 	gofmt -s -l -d $$($(PACKAGE_DIRECTORIES)) 2>&1 | $(GOCHECKER)
 	golangci-lint run $$($(PACKAGE_DIRECTORIES))
 
-lint:
+lint: install-go-tools
 	@echo "linting"
 	revive -formatter friendly -config revive.toml $$($(PACKAGES))
 

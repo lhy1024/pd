@@ -848,6 +848,32 @@ func (s *testBalanceRegionSchedulerSuite) TestStoreWeight(c *C) {
 	testutil.CheckTransferPeer(c, sb.Schedule(tc)[0], operator.OpKind(0), 1, 3)
 }
 
+// Ref Issue: https://github.com/tikv/pd/issues/3544
+func (s *testBalanceRegionSchedulerSuite) TestUsageRatio(c *C) {
+	opt := config.NewTestOptions()
+	tc := mockcluster.NewCluster(opt)
+	// TODO: enable placementrules
+	tc.SetPlacementRuleEnabled(false)
+	tc.DisableFeature(versioninfo.JointConsensus)
+	oc := schedule.NewOperatorController(s.ctx, nil, nil)
+
+	sb, err := schedule.CreateScheduler(BalanceRegionType, oc, core.NewStorage(kv.NewMemoryKV()), schedule.ConfigSliceDecoder(BalanceRegionType, []string{"", ""}))
+	c.Assert(err, IsNil)
+	opt.SetMaxReplicas(1)
+
+	tc.AddRegionStore(1, 200)
+	tc.AddRegionStore(2, 100)
+	tc.AddRegionStore(3, 100)
+	tc.AddRegionStore(4, 50)
+	tc.AddLeaderRegion(1, 1)
+	testutil.CheckTransferPeer(c, sb.Schedule(tc)[0], operator.OpKind(0), 1, 4)
+
+	defaultRegionSize := 96 * (1 << 20) // 96MB
+	// make store 4 have a higher compression ratio
+	tc.UpdateStoreRegionSizeAlone(4, int64(defaultRegionSize*300))
+	testutil.CheckTransferPeer(c, sb.Schedule(tc)[0], operator.OpKind(0), 1, 4)
+}
+
 func (s *testBalanceRegionSchedulerSuite) TestReplacePendingRegion(c *C) {
 	opt := config.NewTestOptions()
 	tc := mockcluster.NewCluster(opt)

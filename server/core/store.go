@@ -302,24 +302,33 @@ func (s *StoreInfo) regionScoreV1(highSpaceRatio, lowSpaceRatio float64, delta i
 }
 
 func (s *StoreInfo) regionScoreV2(delta int64, deviation int) float64 {
+	var amplification float64
 	A := float64(float64(s.GetAvgAvailable())-float64(deviation)*float64(s.GetAvailableDeviation())) / gb
 	C := float64(s.GetCapacity()) / gb
-	R := float64(s.GetRegionSize() + delta)
 	var (
 		K, M float64 = 1, 256 // Experience value to control the weight of the available influence on score
 		F    float64 = 20     // Experience value to prevent some nodes from running out of disk space prematurely.
 	)
+	used := float64(s.GetUsedSize()) / mb
+	if s.GetRegionSize() == 0 || used == 0 {
+		amplification = 1
+	} else {
+		// because of rocksdb compression, region size is larger than actual used size
+		amplification = float64(s.GetRegionSize()) / used
+	}
 
+	// As the delta, not directly use the used size.
+	U := float64(s.GetRegionSize()+delta) / amplification
 	var score float64
 	if A >= C || C < 1 {
-		score = R
+		score = U
 	} else if A > F {
 		// As the amount of data increases (available becomes smaller), the weight of region size on total score
 		// increases. Ideally, all nodes converge at the position where remaining space is F (default 20GiB).
-		score = (K + M*(math.Log(C)-math.Log(A-F+1))/(C-A+F-1)) * R
+		score = (K + M*(math.Log(C)-math.Log(A-F+1))/(C-A+F-1)) * U
 	} else {
 		// When remaining space is less then F, the score is mainly determined by available space.
-		score = (K+M*math.Log(C)/C)*R + (F-A)*(K+M*math.Log(F)/F)
+		score = (K+M*math.Log(C)/C)*U + (F-A)*(K+M*math.Log(F)/F)
 	}
 	return score / math.Max(s.GetRegionWeight(), minWeight)
 }
