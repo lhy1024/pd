@@ -36,6 +36,26 @@ func IsSelectedDim(dim int) bool {
 	return dim == ByteDim || dim == KeyDim
 }
 
+func FirstPriority() int {
+	// TODO: configure
+	return KeyDim
+}
+
+func SecondPriority() int {
+	// TODO: configure
+	return ByteDim
+}
+
+func CpuFirstPriorityDim() int {
+	// TODO: configure
+	return KeyDim
+}
+
+func CpuSecondDim() int {
+	// TODO: configure
+	return ByteDim
+}
+
 type dimStat struct {
 	typ         RegionStatKind
 	Rolling     *movingaverage.TimeMedian  // it's used to statistic hot degree and average speed.
