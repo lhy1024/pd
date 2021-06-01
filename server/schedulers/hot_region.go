@@ -870,6 +870,16 @@ func (bs *balanceSolver) calcProgressiveRank() {
 	bs.cur.progressiveRank = rank
 }
 
+func (bs *balanceSolver) getMinRate(dim int) float64 {
+	switch dim {
+	case statistics.KeyDim:
+		return bs.sche.conf.GetMinHotKeyRate()
+	case statistics.ByteDim:
+		return bs.sche.conf.GetMinHotByteRate()
+	}
+	return -1
+}
+
 // betterThan checks if `bs.cur` is a better solution than `old`.
 func (bs *balanceSolver) betterThan(old *solution) bool {
 	if old == nil {
