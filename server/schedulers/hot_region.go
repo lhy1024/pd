@@ -452,10 +452,8 @@ type balanceSolver struct {
 	minDst   *storeLoad
 	rankStep *storeLoad
 
-	firstPriority     int
-	secondPriority    int
-	cpuFirstPriority  int
-	cpuSecondPriority int
+	firstPriority  int
+	secondPriority int
 }
 
 type solution struct {
@@ -511,8 +509,6 @@ func (bs *balanceSolver) init() {
 
 	bs.firstPriority = statistics.FirstPriority()
 	bs.secondPriority = statistics.SecondPriority()
-	bs.cpuFirstPriority = statistics.CpuFirstPriorityDim()
-	bs.cpuSecondPriority = statistics.CpuSecondDim()
 }
 
 func newBalanceSolver(sche *hotScheduler, cluster opt.Cluster, rwTy rwType, opTy opType) *balanceSolver {
@@ -823,9 +819,9 @@ func (bs *balanceSolver) calcProgressiveRank() {
 	if bs.rwTy == write && bs.opTy == transferLeader {
 		// In this condition, CPU usage is the matter.
 		// Only consider about key rate.
-		srcKeyRate := srcLd.Loads[bs.cpuFirstPriority]
-		dstKeyRate := dstLd.Loads[bs.cpuFirstPriority]
-		peerKeyRate := peer.GetLoad(getRegionStatKind(bs.rwTy, bs.cpuFirstPriority))
+		srcKeyRate := srcLd.Loads[bs.firstPriority]
+		dstKeyRate := dstLd.Loads[bs.firstPriority]
+		peerKeyRate := peer.GetLoad(getRegionStatKind(bs.rwTy, bs.firstPriority))
 		if srcKeyRate-peerKeyRate >= dstKeyRate+peerKeyRate {
 			rank = -1
 		}
@@ -941,7 +937,7 @@ func (bs *balanceSolver) getMinRate(dim int) float64 {
 	case statistics.KeyDim:
 		return bs.sche.conf.GetMinHotKeyRate()
 	case statistics.ByteDim:
-		return bs.sche.conf.GetMinHotKeyRate()
+		return bs.sche.conf.GetMinHotByteRate()
 	case statistics.QueryDim:
 		return bs.sche.conf.GetMinHotQueryRate()
 	}
@@ -956,13 +952,13 @@ func (bs *balanceSolver) compareSrcStore(st1, st2 uint64) int {
 		if bs.rwTy == write && bs.opTy == transferLeader {
 			lpCmp = sliceLPCmp(
 				minLPCmp(negLoadCmp(sliceLoadCmp(
-					stLdRankCmp(stLdRate(bs.cpuFirstPriority), stepRank(bs.maxSrc.Loads[bs.cpuFirstPriority], bs.rankStep.Loads[bs.cpuFirstPriority])),
-					stLdRankCmp(stLdRate(bs.cpuSecondPriority), stepRank(bs.maxSrc.Loads[bs.cpuSecondPriority], bs.rankStep.Loads[bs.cpuSecondPriority])),
+					stLdRankCmp(stLdRate(bs.firstPriority), stepRank(bs.maxSrc.Loads[bs.firstPriority], bs.rankStep.Loads[bs.firstPriority])),
+					stLdRankCmp(stLdRate(bs.secondPriority), stepRank(bs.maxSrc.Loads[bs.secondPriority], bs.rankStep.Loads[bs.secondPriority])),
 				))),
 				diffCmp(sliceLoadCmp(
 					stLdRankCmp(stLdCount, stepRank(0, bs.rankStep.Count)),
-					stLdRankCmp(stLdRate(bs.cpuFirstPriority), stepRank(0, bs.rankStep.Loads[bs.cpuFirstPriority])),
-					stLdRankCmp(stLdRate(bs.cpuSecondPriority), stepRank(0, bs.rankStep.Loads[bs.cpuSecondPriority])),
+					stLdRankCmp(stLdRate(bs.firstPriority), stepRank(0, bs.rankStep.Loads[bs.firstPriority])),
+					stLdRankCmp(stLdRate(bs.secondPriority), stepRank(0, bs.rankStep.Loads[bs.secondPriority])),
 				)),
 			)
 		} else {
@@ -991,13 +987,13 @@ func (bs *balanceSolver) compareDstStore(st1, st2 uint64) int {
 		if bs.rwTy == write && bs.opTy == transferLeader {
 			lpCmp = sliceLPCmp(
 				maxLPCmp(sliceLoadCmp(
-					stLdRankCmp(stLdRate(bs.cpuFirstPriority), stepRank(bs.minDst.Loads[bs.cpuFirstPriority], bs.rankStep.Loads[bs.cpuFirstPriority])),
-					stLdRankCmp(stLdRate(bs.cpuSecondPriority), stepRank(bs.minDst.Loads[bs.cpuSecondPriority], bs.rankStep.Loads[bs.cpuSecondPriority])),
+					stLdRankCmp(stLdRate(bs.firstPriority), stepRank(bs.minDst.Loads[bs.firstPriority], bs.rankStep.Loads[bs.firstPriority])),
+					stLdRankCmp(stLdRate(bs.secondPriority), stepRank(bs.minDst.Loads[bs.secondPriority], bs.rankStep.Loads[bs.secondPriority])),
 				)),
 				diffCmp(sliceLoadCmp(
 					stLdRankCmp(stLdCount, stepRank(0, bs.rankStep.Count)),
-					stLdRankCmp(stLdRate(bs.cpuFirstPriority), stepRank(0, bs.rankStep.Loads[bs.cpuFirstPriority])),
-					stLdRankCmp(stLdRate(bs.cpuSecondPriority), stepRank(0, bs.rankStep.Loads[bs.cpuSecondPriority])),
+					stLdRankCmp(stLdRate(bs.firstPriority), stepRank(0, bs.rankStep.Loads[bs.firstPriority])),
+					stLdRankCmp(stLdRate(bs.secondPriority), stepRank(0, bs.rankStep.Loads[bs.secondPriority])),
 				)))
 		} else {
 			lpCmp = sliceLPCmp(
