@@ -33,22 +33,22 @@ const (
 // IsSelectedDim return whether the dim is selected for hot scheduler
 func IsSelectedDim(dim int) bool {
 	// TODO: configure
-	return dim == ByteDim || dim == KeyDim
+	return dim == ByteDim || dim == QueryDim
 }
 
 func FirstPriority() int {
 	// TODO: configure
-	return ByteDim
+	return QueryDim
 }
 
 func SecondPriority() int {
 	// TODO: configure
-	return KeyDim
+	return ByteDim
 }
 
 func CpuPriority() int {
 	// TODO: configure
-	return KeyDim
+	return QueryDim
 }
 
 func AnotherPriority() int {
