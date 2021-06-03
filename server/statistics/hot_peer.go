@@ -38,10 +38,20 @@ func IsSelectedDim(dim int) bool {
 
 func FirstPriority() int {
 	// TODO: configure
-	return KeyDim
+	return ByteDim
 }
 
 func SecondPriority() int {
+	// TODO: configure
+	return KeyDim
+}
+
+func CpuPriority() int {
+	// TODO: configure
+	return KeyDim
+}
+
+func AnotherPriority() int {
 	// TODO: configure
 	return ByteDim
 }
