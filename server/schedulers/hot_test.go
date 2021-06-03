@@ -343,18 +343,18 @@ func (s *testHotWriteRegionSchedulerSuite) TestWithKeyRate(c *C) {
 	for i := 0; i < 100; i++ {
 		hb.(*hotScheduler).clearPendingInfluence()
 		op := hb.Schedule(tc)[0]
-		// byteDecRatio <= 0.95 && keyDecRatio <= 0.95
+		// secondPriorityDecRatio <= 0.95 && firstPriorityDecRatio <= 0.95
 		testutil.CheckTransferPeer(c, op, operator.OpHotRegion, 1, 4)
 		// store byte rate (min, max): (10, 10.5) | 9.5 | 9.5 | (9, 9.5) | 8.9
 		// store key rate (min, max):  (10, 10.5) | 9.5 | 9.8 | (9, 9.5) | 9.2
 
 		op = hb.Schedule(tc)[0]
-		// byteDecRatio <= 0.99 && keyDecRatio <= 0.95
+		// secondPriorityDecRatio <= 0.99 && firstPriorityDecRatio <= 0.95
 		testutil.CheckTransferPeer(c, op, operator.OpHotRegion, 3, 5)
 		// store byte rate (min, max): (10, 10.5) | 9.5 | (9.45, 9.5) | (9, 9.5) | (8.9, 8.95)
 		// store key rate (min, max):  (10, 10.5) | 9.5 | (9.7, 9.8) | (9, 9.5) | (9.2, 9.3)
 
-		// byteDecRatio <= 0.95
+		// secondPriorityDecRatio <= 0.95
 		// op = hb.Schedule(tc)[0]
 		// FIXME: cover this case
 		// testutil.CheckTransferPeerWithLeaderTransfer(c, op, operator.OpHotRegion, 1, 5)
@@ -437,7 +437,7 @@ func (s *testHotWriteRegionSchedulerSuite) TestCheckHot(c *C) {
 	addRegionInfo(tc, write, []testRegionInfo{
 		{1, []uint64{1, 2, 3}, 90, 0.5 * MB},       // no hot
 		{1, []uint64{2, 1, 3}, 90, 0.5 * MB},       // no hot
-		{2, []uint64{3, 2, 1}, 0.5 * MB, 0.5 * MB}, // byteDecRatio is greater than greatDecRatio
+		{2, []uint64{3, 2, 1}, 0.5 * MB, 0.5 * MB}, // secondPriorityDecRatio is greater than greatDecRatio
 	})
 
 	c.Check(hb.Schedule(tc), HasLen, 0)
@@ -795,18 +795,18 @@ func (s *testHotReadRegionSchedulerSuite) TestWithKeyRate(c *C) {
 	for i := 0; i < 100; i++ {
 		hb.(*hotScheduler).clearPendingInfluence()
 		op := hb.Schedule(tc)[0]
-		// byteDecRatio <= 0.95 && keyDecRatio <= 0.95
+		// secondPriorityDecRatio <= 0.95 && firstPriorityDecRatio <= 0.95
 		testutil.CheckTransferLeader(c, op, operator.OpHotRegion, 1, 4)
 		// store byte rate (min, max): (10, 10.5) | 9.5 | 9.5 | (9, 9.5) | 8.9
 		// store key rate (min, max):  (10, 10.5) | 9.5 | 9.8 | (9, 9.5) | 9.2
 
 		op = hb.Schedule(tc)[0]
-		// byteDecRatio <= 0.99 && keyDecRatio <= 0.95
+		// secondPriorityDecRatio <= 0.99 && firstPriorityDecRatio <= 0.95
 		testutil.CheckTransferLeader(c, op, operator.OpHotRegion, 3, 5)
 		// store byte rate (min, max): (10, 10.5) | 9.5 | (9.45, 9.5) | (9, 9.5) | (8.9, 8.95)
 		// store key rate (min, max):  (10, 10.5) | 9.5 | (9.7, 9.8) | (9, 9.5) | (9.2, 9.3)
 
-		// byteDecRatio <= 0.95
+		// secondPriorityDecRatio <= 0.95
 		// FIXME: cover this case
 		// op = hb.Schedule(tc)[0]
 		// testutil.CheckTransferPeerWithLeaderTransfer(c, op, operator.OpHotRegion, 1, 5)

@@ -658,7 +658,7 @@ func (bs *balanceSolver) filterHotPeers() []*statistics.HotPeerStat {
 	copy(firstPrioritySort, ret)
 	sort.Slice(firstPrioritySort, func(i, j int) bool {
 		k := getRegionStatKind(bs.rwTy, bs.firstPriority)
-		return secondPrioritySort[i].GetLoad(k) > secondPrioritySort[j].GetLoad(k)
+		return firstPrioritySort[i].GetLoad(k) > firstPrioritySort[j].GetLoad(k)
 	})
 
 	union := make(map[*statistics.HotPeerStat]struct{}, maxPeerNum)
@@ -826,8 +826,8 @@ func (bs *balanceSolver) calcProgressiveRank() {
 			rank = -1
 		}
 	} else {
-		// we use DecRatio(Decline Ratio) to expect that the dst store's (key/byte) rate should still be less
-		// than the src store's (key/byte) rate after scheduling one peer.
+		// we use DecRatio(Decline Ratio) to expect that the dst store's (key/byte/query) rate should still be less
+		// than the src store's (key/byte/query) rate after scheduling one peer.
 		getSrcDecRate := func(a, b float64) float64 {
 			if a-b <= 0 {
 				return 1
@@ -864,6 +864,18 @@ func (bs *balanceSolver) calcProgressiveRank() {
 		zap.Uint64("to-store-id", bs.cur.dstStoreID),
 		zap.Int64("rank", rank))
 	bs.cur.progressiveRank = rank
+}
+
+func (bs *balanceSolver) getMinRate(dim int) float64 {
+	switch dim {
+	case statistics.KeyDim:
+		return bs.sche.conf.GetMinHotKeyRate()
+	case statistics.ByteDim:
+		return bs.sche.conf.GetMinHotByteRate()
+	case statistics.QueryDim:
+		return bs.sche.conf.GetMinHotQueryRate()
+	}
+	return -1
 }
 
 // betterThan checks if `bs.cur` is a better solution than `old`.
@@ -907,22 +919,22 @@ func (bs *balanceSolver) betterThan(old *solution) bool {
 			firstPriorityRkCmp := rankCmp(bs.cur.srcPeerStat.GetLoad(fk), old.srcPeerStat.GetLoad(fk), stepRank(0, 10))
 
 			switch bs.cur.progressiveRank {
-			case -2: // greatDecRatio < byteDecRatio <= minorDecRatio && keyDecRatio <= greatDecRatio
+			case -2: // greatDecRatio < secondPriorityDecRatio <= minorDecRatio && firstPriorityDecRatio <= greatDecRatio
 				if firstPriorityRkCmp != 0 {
 					return firstPriorityRkCmp > 0
 				}
 				if secondPriorityRkCmp != 0 {
-					// prefer smaller byte rate, to reduce oscillation
+					// prefer smaller second priority rate, to reduce oscillation
 					return secondPriorityRkCmp < 0
 				}
-			case -3: // byteDecRatio <= greatDecRatio && keyDecRatio <= greatDecRatio
+			case -3: // secondPriorityDecRatio <= greatDecRatio && firstPriorityDecRatio <= greatDecRatio
 				if firstPriorityRkCmp != 0 {
 					return firstPriorityRkCmp > 0
 				}
 				fallthrough
-			case -1: // byteDecRatio <= greatDecRatio
+			case -1: // secondPriorityDecRatio <= greatDecRatio
 				if secondPriorityRkCmp != 0 {
-					// prefer region with larger byte rate, to converge faster
+					// prefer region with larger second priority rate, to converge faster
 					return secondPriorityRkCmp > 0
 				}
 			}
@@ -930,18 +942,6 @@ func (bs *balanceSolver) betterThan(old *solution) bool {
 	}
 
 	return false
-}
-
-func (bs *balanceSolver) getMinRate(dim int) float64 {
-	switch dim {
-	case statistics.KeyDim:
-		return bs.sche.conf.GetMinHotKeyRate()
-	case statistics.ByteDim:
-		return bs.sche.conf.GetMinHotByteRate()
-	case statistics.QueryDim:
-		return bs.sche.conf.GetMinHotQueryRate()
-	}
-	return -1
 }
 
 // smaller is better
