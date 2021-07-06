@@ -25,7 +25,6 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/server/core"
@@ -540,6 +539,7 @@ func (bs *balanceSolver) init() {
 			return dim == statistics.KeyDim || dim == statistics.ByteDim
 		}
 	}
+
 }
 
 func newBalanceSolver(sche *hotScheduler, cluster opt.Cluster, rwTy rwType, opTy opType) *balanceSolver {
@@ -1119,20 +1119,24 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 		return nil, nil
 	}
 	var (
-		op       *operator.Operator
-		counters []prometheus.Counter
-		err      error
+		op          *operator.Operator
+		err         error
+		typ         string
+		sourceLabel string
+		targetLabel string
 	)
 
 	switch bs.opTy {
 	case movePeer:
 		srcPeer := bs.cur.region.GetStorePeer(bs.cur.srcStoreID) // checked in getRegionAndSrcPeer
 		dstPeer := &metapb.Peer{StoreId: bs.cur.dstStoreID, Role: srcPeer.Role}
-		typ := "move-peer"
+		sourceLabel = strconv.FormatUint(bs.cur.srcStoreID, 10)
+		targetLabel = strconv.FormatUint(dstPeer.GetStoreId(), 10)
 		if bs.rwTy == read && bs.cur.region.GetLeader().StoreId == bs.cur.srcStoreID { // move read leader
 			if !bs.sche.allowBalanceLeader(bs.cluster) {
 				return nil, nil
 			}
+			typ = "move-leader"
 			op, err = operator.CreateMoveLeaderOperator(
 				"move-hot-read-leader",
 				bs.cluster,
@@ -1140,9 +1144,9 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 				operator.OpHotRegion,
 				bs.cur.srcStoreID,
 				dstPeer)
-			typ = "move-leader"
 		} else {
 			desc := "move-hot-" + bs.rwTy.String() + "-peer"
+			typ = "move-peer"
 			op, err = operator.CreateMovePeerOperator(
 				desc,
 				bs.cluster,
@@ -1151,15 +1155,13 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 				bs.cur.srcStoreID,
 				dstPeer)
 		}
-		op.AdditionalInfos = bs.generateAdditionalInfos()
-		counters = append(counters,
-			hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out", op.AdditionalInfos["type"]),
-			hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), strconv.FormatUint(dstPeer.GetStoreId(), 10), "in", op.AdditionalInfos["type"]))
 	case transferLeader:
 		if bs.cur.region.GetStoreVoter(bs.cur.dstStoreID) == nil {
 			return nil, nil
 		}
 		desc := "transfer-hot-" + bs.rwTy.String() + "-leader"
+		sourceLabel = strconv.FormatUint(bs.cur.srcStoreID, 10)
+		targetLabel = strconv.FormatUint(bs.cur.dstStoreID, 10)
 		op, err = operator.CreateTransferLeaderOperator(
 			desc,
 			bs.cluster,
@@ -1167,10 +1169,6 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 			bs.cur.srcStoreID,
 			bs.cur.dstStoreID,
 			operator.OpHotRegion)
-		op.AdditionalInfos = bs.generateAdditionalInfos()
-		counters = append(counters,
-			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out", op.AdditionalInfos["type"]),
-			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.dstStoreID, 10), "in", op.AdditionalInfos["type"]))
 	}
 
 	if err != nil {
@@ -1180,7 +1178,11 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 	}
 
 	op.SetPriorityLevel(core.HighPriority)
-	op.Counters = append(op.Counters, counters...)
+	op.AdditionalInfos = bs.generateAdditionalInfos()
+	op.FinishedCounters = append(op.FinishedCounters,
+		hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), sourceLabel, "out", op.AdditionalInfos["type"]),
+		hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), targetLabel, "in", op.AdditionalInfos["type"]),
+		balanceDirectionCounter.WithLabelValues(bs.sche.GetName(), sourceLabel, targetLabel))
 	op.Counters = append(op.Counters,
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), "new-operator"),
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), bs.opTy.String()))
