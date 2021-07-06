@@ -1125,6 +1125,15 @@ func (bs *balanceSolver) generateAdditionalInfos() (additionalInfos map[string]s
 		additionalInfos[name] = strconv.FormatFloat(peer.GetLoad(stat), 'f', 2, 64)
 	}
 	additionalInfos["rank"] = strconv.FormatInt(bs.cur.progressiveRank, 10)
+	if bs.firstPriorityIsBetter && bs.secondPriorityIsBetter {
+		additionalInfos["type"] = "both"
+	} else if bs.firstPriorityIsBetter {
+		additionalInfos["type"] = statistics.DimToString(bs.firstPriority)
+	} else if bs.secondPriorityIsBetter {
+		additionalInfos["type"] = statistics.DimToString(bs.secondPriority)
+	} else {
+		additionalInfos["type"] = ""
+	}
 	return additionalInfos
 }
 
@@ -1165,9 +1174,10 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 				bs.cur.srcStoreID,
 				dstPeer)
 		}
+		op.AdditionalInfos = bs.generateAdditionalInfos()
 		counters = append(counters,
-			hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
-			hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), strconv.FormatUint(dstPeer.GetStoreId(), 10), "in"))
+			hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out", op.AdditionalInfos["type"]),
+			hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), strconv.FormatUint(dstPeer.GetStoreId(), 10), "in", op.AdditionalInfos["type"]))
 	case transferLeader:
 		if bs.cur.region.GetStoreVoter(bs.cur.dstStoreID) == nil {
 			return nil, nil
@@ -1180,9 +1190,10 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 			bs.cur.srcStoreID,
 			bs.cur.dstStoreID,
 			operator.OpHotRegion)
+		op.AdditionalInfos = bs.generateAdditionalInfos()
 		counters = append(counters,
-			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out"),
-			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.dstStoreID, 10), "in"))
+			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), "out", op.AdditionalInfos["type"]),
+			hotDirectionCounter.WithLabelValues("transfer-leader", bs.rwTy.String(), strconv.FormatUint(bs.cur.dstStoreID, 10), "in", op.AdditionalInfos["type"]))
 	}
 
 	if err != nil {
@@ -1190,7 +1201,7 @@ func (bs *balanceSolver) buildOperators() ([]*operator.Operator, []Influence) {
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), "create-operator-fail").Inc()
 		return nil, nil
 	}
-	op.AdditionalInfos = bs.generateAdditionalInfos()
+
 	op.SetPriorityLevel(core.HighPriority)
 	op.Counters = append(op.Counters, counters...)
 	op.Counters = append(op.Counters,
