@@ -231,11 +231,15 @@ const maxScore = 1024 * 1024 * 1024
 
 // LeaderScore returns the store's leader score.
 func (s *StoreInfo) LeaderScore(policy SchedulePolicy, delta int64) float64 {
+	weight := math.Max(s.GetLeaderWeight(), minWeight)
+	if weight == minWeight && s.GetLeaderCount() != 0 {
+		return math.MaxFloat64
+	}
 	switch policy {
 	case BySize:
-		return float64(s.GetLeaderSize()+delta) / math.Max(s.GetLeaderWeight(), minWeight)
+		return float64(s.GetLeaderSize()+delta) / weight
 	case ByCount:
-		return float64(int64(s.GetLeaderCount())+delta) / math.Max(s.GetLeaderWeight(), minWeight)
+		return float64(int64(s.GetLeaderCount())+delta) / weight
 	default:
 		return 0
 	}
