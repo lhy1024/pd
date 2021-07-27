@@ -280,6 +280,7 @@ func summaryStoresLoad(
 			loads[statistics.ByteDim] = storeLoads[statistics.StoreReadBytes]
 			loads[statistics.KeyDim] = storeLoads[statistics.StoreReadKeys]
 			loads[statistics.QueryDim] = storeLoads[statistics.StoreReadQuery]
+			log.Info("loads", zap.Float64("read-bytes", loads[statistics.ByteDim]), zap.Float64("read-keys", loads[statistics.KeyDim]), zap.Float64("read-query", loads[statistics.QueryDim]))
 		case write:
 			loads[statistics.ByteDim] = storeLoads[statistics.StoreWriteBytes]
 			loads[statistics.KeyDim] = storeLoads[statistics.StoreWriteKeys]
@@ -347,7 +348,9 @@ func summaryStoresLoad(
 		for i := range expectLoads {
 			v := storeLoads[i] - expectLoads[i]
 			allLoadSum2[i] += v * v
-			log.Info("dim", zap.Int("dim", i), zap.Float64("storeLoads", storeLoads[i]), zap.Float64("expectLoads", expectLoads[i]), zap.Float64("v", v))
+			if rwTy == read {
+				log.Info("dim", zap.Int("dim", i), zap.Float64("storeLoads", storeLoads[i]), zap.Float64("expectLoads", expectLoads[i]), zap.Float64("v", v))
+			}
 		}
 	}
 	stddevLoads := make([]float64, statistics.DimLen)
@@ -360,7 +363,9 @@ func summaryStoresLoad(
 		detail.LoadPred.Expect.Count = allCount / storeLen
 		detail.LoadPred.Stddev.Loads = stddevLoads
 		detail.LoadPred.Stddev.Count = allCount / storeLen
-		log.Info("std", zap.Float64("query", stddevLoads[statistics.QueryDim]), zap.Float64("key", stddevLoads[statistics.KeyDim]), zap.Float64("byte", stddevLoads[statistics.ByteDim]))
+		if rwTy == read {
+			log.Info("std", zap.Float64("query", stddevLoads[statistics.QueryDim]), zap.Float64("key", stddevLoads[statistics.KeyDim]), zap.Float64("byte", stddevLoads[statistics.ByteDim]))
+		}
 		// Debug
 		{
 			ty := "exp-byte-rate-" + rwTy.String() + "-" + kind.String()
