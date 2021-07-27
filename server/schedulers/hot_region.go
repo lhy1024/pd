@@ -500,7 +500,7 @@ func (bs *balanceSolver) addPendingInfluence() bool {
 	if bs.best == nil {
 		return false
 	}
-	return bs.sche.addPendingInfluence(bs.op, bs.best.srcStoreID, bs.best.dstStoreID, bs.infl)
+	return bs.sche.addPendingInfluence(bs.ops[0], bs.best.srcStoreID, bs.best.dstStoreID, bs.infl)
 }
 
 func (bs *balanceSolver) init() {
