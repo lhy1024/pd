@@ -1244,8 +1244,7 @@ func (h *hotScheduler) calcPendingWeight(op *operator.Operator) float64 {
 		if zombieDur >= maxZombieDur {
 			return 0
 		}
-		// TODO: use store statistics update time to make a more accurate estimation
-		return float64(maxZombieDur-zombieDur) / float64(maxZombieDur)
+		return 1
 	default:
 		return 0
 	}
