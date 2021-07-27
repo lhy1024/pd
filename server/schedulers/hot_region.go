@@ -270,6 +270,7 @@ func summaryStoresLoad(
 	// loadDetail stores the storeID -> hotPeers stat and its current and future stat(rate,count)
 	loadDetail := make(map[uint64]*storeLoadDetail, len(storesLoads))
 	allLoadSum := make([]float64, statistics.DimLen)
+	allLoadSum2 := make([]float64, statistics.DimLen)
 	allCount := 0.0
 
 	// Stores without byte rate statistics is not available to schedule.
@@ -337,14 +338,24 @@ func summaryStoresLoad(
 	}
 	storeLen := float64(len(storesLoads))
 	// store expectation byte/key rate and count for each store-load detail.
+	for _, storeLoads := range storesLoads {
+		for i := range allLoadSum {
+			v := storeLoads[i] - allLoadSum[i]/storeLen
+			allLoadSum2[i] += v * v
+		}
+	}
 	for id, detail := range loadDetail {
 		expectLoads := make([]float64, len(allLoadSum))
+		stddevLoads := make([]float64, len(allLoadSum))
 		for i := range expectLoads {
 			expectLoads[i] = allLoadSum[i] / storeLen
+			stddevLoads[i] = math.Sqrt(stddevLoads[i]/storeLen) / expectLoads[i]
 		}
 		expectCount := allCount / storeLen
 		detail.LoadPred.Expect.Loads = expectLoads
 		detail.LoadPred.Expect.Count = expectCount
+		detail.LoadPred.Stddev.Loads = stddevLoads
+		detail.LoadPred.Stddev.Count = expectCount
 		// Debug
 		{
 			ty := "exp-byte-rate-" + rwTy.String() + "-" + kind.String()
@@ -357,6 +368,18 @@ func summaryStoresLoad(
 		{
 			ty := "exp-query-rate-" + rwTy.String() + "-" + kind.String()
 			hotPeerSummary.WithLabelValues(ty, fmt.Sprintf("%v", id)).Set(expectLoads[statistics.QueryDim])
+		}
+		{
+			ty := "std-byte-rate-" + rwTy.String() + "-" + kind.String()
+			hotPeerSummary.WithLabelValues(ty, fmt.Sprintf("%v", id)).Set(stddevLoads[statistics.ByteDim])
+		}
+		{
+			ty := "std-key-rate-" + rwTy.String() + "-" + kind.String()
+			hotPeerSummary.WithLabelValues(ty, fmt.Sprintf("%v", id)).Set(stddevLoads[statistics.KeyDim])
+		}
+		{
+			ty := "std-query-rate-" + rwTy.String() + "-" + kind.String()
+			hotPeerSummary.WithLabelValues(ty, fmt.Sprintf("%v", id)).Set(stddevLoads[statistics.QueryDim])
 		}
 		{
 			ty := "exp-count-rate-" + rwTy.String() + "-" + kind.String()

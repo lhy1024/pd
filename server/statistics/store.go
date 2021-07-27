@@ -119,7 +119,7 @@ const (
 	// DefaultWriteMfSize is default size of write median filter
 	DefaultWriteMfSize = 5
 	// defaultReadMfSize is default size of read median filter
-	defaultReadMfSize = 3
+	defaultReadMfSize = 5
 )
 
 // NewRollingStoreStats creates a RollingStoreStats.
