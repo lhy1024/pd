@@ -917,7 +917,9 @@ func (bs *balanceSolver) calcProgressiveRank() {
 
 func (bs *balanceSolver) isTolerance(src, dst *storeLoadPred, dim int) bool {
 	region := statistics.MinHotThresholds[getRegionStatKind(bs.rwTy, dim)]
-	return src.min_min().Loads[dim] > dst.max_max().Loads[dim]+0*region
+	srcRatio := math.Min(bs.sche.conf.GetSrcToleranceRatio(), 1)
+	dstRatio := math.Min(bs.sche.conf.GetDstToleranceRatio(), 1)
+	return src.min_min().Loads[dim]/srcRatio > dst.max_max().Loads[dim]*dstRatio+region*0
 }
 
 func (bs *balanceSolver) getMinRate(dim int) float64 {
