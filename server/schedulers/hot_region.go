@@ -76,7 +76,7 @@ const (
 	minHotScheduleInterval = time.Second
 	maxHotScheduleInterval = 20 * time.Second
 
-	stddevThreshold = 0.05
+	stddevThreshold = 0.08
 )
 
 // schedulePeerPr the probability of schedule the hot peer.
