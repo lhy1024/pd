@@ -344,7 +344,7 @@ func summaryStoresLoad(
 	}
 	allLoadSum2 := make([]float64, statistics.DimLen)
 	for _, storeLoads := range storesLoads {
-		for i := range allLoadSum {
+		for i := range expectLoads {
 			v := storeLoads[i] - expectLoads[i]
 			allLoadSum2[i] += v * v
 		}
@@ -384,10 +384,6 @@ func summaryStoresLoad(
 		{
 			ty := "std-query-rate-" + rwTy.String() + "-" + kind.String()
 			hotPeerSummary.WithLabelValues(ty, fmt.Sprintf("%v", id)).Set(stddevLoads[statistics.QueryDim])
-		}
-		{
-			ty := "exp-count-rate-" + rwTy.String() + "-" + kind.String()
-			hotPeerSummary.WithLabelValues(ty, fmt.Sprintf("%v", id)).Set(expectCount)
 		}
 	}
 	return loadDetail
