@@ -339,14 +339,15 @@ func summaryStoresLoad(
 	// store expectation byte/key rate and count for each store-load detail.
 
 	expectLoads := make([]float64, statistics.DimLen)
-	for i := range expectLoads { //todo write leader
+	for i := range expectLoads {
 		expectLoads[i] = allLoadSum[i] / storeLen
 	}
 	allLoadSum2 := make([]float64, statistics.DimLen)
-	for _, storeLoads := range storesLoads {
+	for _, storeLoads := range storesLoads { //todo write leader
 		for i := range expectLoads {
 			v := storeLoads[i] - expectLoads[i]
 			allLoadSum2[i] += v * v
+			log.Info("dim", zap.Int("dim", i), zap.Float64("storeLoads", storeLoads[i]), zap.Float64("expectLoads", expectLoads[i]), zap.Float64("v", v))
 		}
 	}
 	stddevLoads := make([]float64, statistics.DimLen)
