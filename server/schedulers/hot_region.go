@@ -641,11 +641,11 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*storeLoadDetail {
 			continue
 		}
 		minLoad := detail.LoadPred.min()
-		if slice.AllOf(minLoad.Loads, func(i int) bool {
+		if slice.AnyOf(minLoad.Loads, func(i int) bool {
 			if bs.isSelectedDim(i) {
 				return minLoad.Loads[i] > bs.sche.conf.GetSrcToleranceRatio()*detail.LoadPred.Expect.Loads[i]
 			}
-			return true
+			return false
 		}) {
 			ret[id] = detail
 			hotSchedulerResultCounter.WithLabelValues("src-store-succ", strconv.FormatUint(id, 10)).Inc()
@@ -830,11 +830,11 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*co
 		if filter.Target(bs.cluster.GetOpts(), store, filters) {
 			detail := bs.stLoadDetail[store.GetID()]
 			maxLoads := detail.LoadPred.max().Loads
-			if slice.AllOf(maxLoads, func(i int) bool {
+			if slice.AnyOf(maxLoads, func(i int) bool {
 				if bs.isSelectedDim(i) {
 					return maxLoads[i]*dstToleranceRatio < detail.LoadPred.Expect.Loads[i]
 				}
-				return true
+				return false
 			}) {
 				ret[store.GetID()] = bs.stLoadDetail[store.GetID()]
 				hotSchedulerResultCounter.WithLabelValues("dst-store-succ", strconv.FormatUint(store.GetID(), 10)).Inc()
