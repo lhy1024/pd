@@ -280,7 +280,6 @@ func summaryStoresLoad(
 			loads[statistics.ByteDim] = storeLoads[statistics.StoreReadBytes]
 			loads[statistics.KeyDim] = storeLoads[statistics.StoreReadKeys]
 			loads[statistics.QueryDim] = storeLoads[statistics.StoreReadQuery]
-			log.Info("loads", zap.Float64("read-bytes", loads[statistics.ByteDim]), zap.Float64("read-keys", loads[statistics.KeyDim]), zap.Float64("read-query", loads[statistics.QueryDim]))
 		case write:
 			loads[statistics.ByteDim] = storeLoads[statistics.StoreWriteBytes]
 			loads[statistics.KeyDim] = storeLoads[statistics.StoreWriteKeys]
@@ -359,9 +358,6 @@ func summaryStoresLoad(
 		detail.LoadPred.Expect.Count = allCount / storeLen
 		detail.LoadPred.Stddev.Loads = stddevLoads
 		detail.LoadPred.Stddev.Count = allCount / storeLen
-		if rwTy == read {
-			log.Info("std", zap.Float64("query", stddevLoads[statistics.QueryDim]), zap.Float64("key", stddevLoads[statistics.KeyDim]), zap.Float64("byte", stddevLoads[statistics.ByteDim]))
-		}
 		// Debug
 		{
 			ty := "exp-byte-rate-" + rwTy.String() + "-" + kind.String()
@@ -437,9 +433,7 @@ func (h *hotScheduler) balanceHotReadRegions(cluster opt.Cluster) []*operator.Op
 	if len(peerOps) == 0 && leaderSolver.addPendingInfluence() {
 		return leaderOps
 	}
-	log.Info("len", zap.Int("leader", len(leaderOps)), zap.Int("peerOps", len(peerOps)))
 	leaderSolver.cur = leaderSolver.best
-	log.Info("isNil", zap.Bool("cur", leaderSolver.cur == nil))
 	if leaderSolver.betterThan(peerSolver.best) {
 		if leaderSolver.addPendingInfluence() {
 			return leaderOps
@@ -676,7 +670,12 @@ func (bs *balanceSolver) allowBalance() bool {
 // its expectation * ratio, the store would be selected as hot source store
 func (bs *balanceSolver) filterSrcStores() map[uint64]*storeLoadDetail {
 	ret := make(map[uint64]*storeLoadDetail)
+	srcRatio := math.Min(bs.sche.conf.GetSrcToleranceRatio(), 1)
 	for id, detail := range bs.stLoadDetail {
+		if detail.LoadPred.Stddev.Loads[bs.firstPriority] <= (srcRatio-1) && detail.LoadPred.Stddev.Loads[bs.secondPriority] <= (srcRatio-1) {
+			hotSchedulerResultCounter.WithLabelValues("src-store-exp", strconv.FormatUint(id, 10)).Inc()
+			continue
+		}
 		if bs.cluster.GetStore(id) == nil {
 			log.Error("failed to get the source store", zap.Uint64("store-id", id), errs.ZapError(errs.ErrGetSourceStore))
 			continue
@@ -687,7 +686,7 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*storeLoadDetail {
 		minLoad := detail.LoadPred.min()
 		if slice.AnyOf(minLoad.Loads, func(i int) bool {
 			if bs.isSelectedDim(i) {
-				return minLoad.Loads[i] > bs.sche.conf.GetSrcToleranceRatio()*detail.LoadPred.Expect.Loads[i]
+				return minLoad.Loads[i] > srcRatio*detail.LoadPred.Expect.Loads[i]
 			}
 			return false
 		}) {
@@ -983,7 +982,6 @@ func (bs *balanceSolver) betterThan(old *solution) bool {
 	if old == nil {
 		return true
 	}
-	log.Info("isNil", zap.Bool("cur", bs.cur == nil))
 	switch {
 	case bs.cur.progressiveRank < old.progressiveRank:
 		return true
