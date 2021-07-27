@@ -356,6 +356,7 @@ func summaryStoresLoad(
 		detail.LoadPred.Expect.Count = expectCount
 		detail.LoadPred.Stddev.Loads = stddevLoads
 		detail.LoadPred.Stddev.Count = expectCount
+		log.Info("std", zap.Float64("query", stddevLoads[statistics.QueryDim]), zap.Float64("key", stddevLoads[statistics.KeyDim]), zap.Float64("byte", stddevLoads[statistics.ByteDim]))
 		// Debug
 		{
 			ty := "exp-byte-rate-" + rwTy.String() + "-" + kind.String()
