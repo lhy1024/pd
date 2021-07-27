@@ -848,18 +848,24 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*co
 // calcProgressiveRank calculates `bs.cur.progressiveRank`.
 // See the comments of `solution.progressiveRank` for more about progressive rank.
 func (bs *balanceSolver) calcProgressiveRank() {
-	srcLd := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred.min()
-	dstLd := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred.max()
+	src := bs.stLoadDetail[bs.cur.srcStoreID].LoadPred
+	dst := bs.stLoadDetail[bs.cur.dstStoreID].LoadPred
+	bs.cur.progressiveRank = 0
+	srcLd := src.min()
+	dstLd := dst.max()
 	peer := bs.cur.srcPeerStat
-	rank := int64(0)
+
 	if bs.rwTy == write && bs.opTy == transferLeader {
 		// In this condition, CPU usage is the matter.
 		// Only consider about key rate.
+		if !bs.isTolerance(src, dst, bs.cpuPriority) {
+			return
+		}
 		srcKeyRate := srcLd.Loads[bs.cpuPriority]
 		dstKeyRate := dstLd.Loads[bs.cpuPriority]
 		peerKeyRate := peer.GetLoad(getRegionStatKind(bs.rwTy, bs.cpuPriority))
 		if srcKeyRate-peerKeyRate >= dstKeyRate+peerKeyRate {
-			rank = -1
+			bs.cur.progressiveRank = -1
 		}
 	} else {
 		// we use DecRatio(Decline Ratio) to expect that the dst store's (key/byte/query) rate should still be less
@@ -884,21 +890,34 @@ func (bs *balanceSolver) calcProgressiveRank() {
 		greatDecRatio, minorDecRatio := bs.sche.conf.GetGreatDecRatio(), bs.sche.conf.GetMinorGreatDecRatio()
 		switch {
 		case firstPriorityHot && firstPriorityDecRatio <= greatDecRatio && secondPriorityHot && secondPriorityDecRatio <= greatDecRatio:
+			if !bs.isTolerance(src, dst, bs.firstPriority) || !bs.isTolerance(src, dst, bs.secondPriority) {
+				return
+			}
 			// If belong to the case, two dim will be more balanced, the best choice.
-			rank = -3
+			bs.cur.progressiveRank = -3
 			bs.firstPriorityIsBetter = true
 			bs.secondPriorityIsBetter = true
 		case firstPriorityDecRatio <= minorDecRatio && secondPriorityHot && secondPriorityDecRatio <= greatDecRatio:
+			if !bs.isTolerance(src, dst, bs.secondPriority) {
+				return
+			}
 			// If belong to the case, first priority dim will be not worsened, second priority dim will be more balanced.
-			rank = -2
+			bs.cur.progressiveRank = -2
 			bs.secondPriorityIsBetter = true
 		case firstPriorityHot && firstPriorityDecRatio <= greatDecRatio:
+			if !bs.isTolerance(src, dst, bs.firstPriority) {
+				return
+			}
 			// If belong to the case, first priority dim  will be more balanced, ignore the second priority dim.
-			rank = -1
+			bs.cur.progressiveRank = -1
 			bs.firstPriorityIsBetter = true
 		}
 	}
-	bs.cur.progressiveRank = rank
+}
+
+func (bs *balanceSolver) isTolerance(src, dst *storeLoadPred, dim int) bool {
+	region := statistics.MinHotThresholds[getRegionStatKind(bs.rwTy, dim)]
+	return src.min_min().Loads[dim] > dst.max_max().Loads[dim]+0*region
 }
 
 func (bs *balanceSolver) getMinRate(dim int) float64 {

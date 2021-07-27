@@ -333,6 +333,30 @@ func (lp *storeLoadPred) max() *storeLoad {
 	return maxLoad(&lp.Current, &lp.Future)
 }
 
+func (lp *storeLoadPred) max_max() *storeLoad {
+	mx, mn := lp.max(), lp.min()
+	loads := make([]float64, len(mx.Loads))
+	for i := range loads {
+		loads[i] = (mx.Loads[i]-mn.Loads[i])*5 + mx.Loads[i]
+	}
+	return &storeLoad{
+		Loads: loads,
+		Count: mx.Count,
+	}
+}
+
+func (lp *storeLoadPred) min_min() *storeLoad {
+	mx, mn := lp.max(), lp.min()
+	loads := make([]float64, len(mx.Loads))
+	for i := range loads {
+		loads[i] = -(mx.Loads[i]-mn.Loads[i])*5 + mn.Loads[i]
+	}
+	return &storeLoad{
+		Loads: loads,
+		Count: mx.Count,
+	}
+}
+
 func (lp *storeLoadPred) diff() *storeLoad {
 	mx, mn := lp.max(), lp.min()
 	loads := make([]float64, len(mx.Loads))

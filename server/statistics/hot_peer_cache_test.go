@@ -279,7 +279,7 @@ func (t *testHotPeerCache) TestUpdateHotPeerStat(c *C) {
 }
 
 func (t *testHotPeerCache) TestThresholdWithUpdateHotPeerStat(c *C) {
-	byteRate := minHotThresholds[RegionReadBytes] * 2
+	byteRate := MinHotThresholds[RegionReadBytes] * 2
 	expectThreshold := byteRate * HotThresholdRatio
 	t.testMetrics(c, 120., byteRate, expectThreshold)
 	t.testMetrics(c, 60., byteRate, expectThreshold)
@@ -291,7 +291,7 @@ func (t *testHotPeerCache) TestThresholdWithUpdateHotPeerStat(c *C) {
 func (t *testHotPeerCache) testMetrics(c *C, interval, byteRate, expectThreshold float64) {
 	cache := NewHotPeerCache(ReadFlow)
 	storeID := uint64(1)
-	c.Assert(byteRate, GreaterEqual, minHotThresholds[RegionReadBytes])
+	c.Assert(byteRate, GreaterEqual, MinHotThresholds[RegionReadBytes])
 	for i := uint64(1); i < TopNN+10; i++ {
 		var oldItem *HotPeerStat
 		for {
@@ -315,7 +315,7 @@ func (t *testHotPeerCache) testMetrics(c *C, interval, byteRate, expectThreshold
 		}
 		thresholds := cache.calcHotThresholds(storeID)
 		if i < TopNN {
-			c.Assert(thresholds[RegionReadBytes], Equals, minHotThresholds[RegionReadBytes])
+			c.Assert(thresholds[RegionReadBytes], Equals, MinHotThresholds[RegionReadBytes])
 		} else {
 			c.Assert(thresholds[RegionReadBytes], Equals, expectThreshold)
 		}
