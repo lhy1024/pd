@@ -349,7 +349,7 @@ func summaryStoresLoad(
 		stddevLoads := make([]float64, len(allLoadSum))
 		for i := range expectLoads {
 			expectLoads[i] = allLoadSum[i] / storeLen
-			stddevLoads[i] = math.Sqrt(stddevLoads[i]/storeLen) / expectLoads[i]
+			stddevLoads[i] = math.Sqrt(allLoadSum2[i]/storeLen) / expectLoads[i]
 		}
 		expectCount := allCount / storeLen
 		detail.LoadPred.Expect.Loads = expectLoads
