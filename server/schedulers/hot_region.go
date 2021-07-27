@@ -465,7 +465,7 @@ type balanceSolver struct {
 
 	cur  *solution
 	best *solution
-	op   *operator.Operator
+	ops  []*operator.Operator
 	infl Influence
 
 	maxSrc   *storeLoad
@@ -606,7 +606,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 	}
 	bs.cur = &solution{}
 	bs.best = nil
-	bs.op = nil
+	bs.ops = []*operator.Operator{}
 	for srcStoreID := range bs.filterSrcStores() {
 		bs.cur.srcStoreID = srcStoreID
 
@@ -621,7 +621,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 				bs.calcProgressiveRank()
 				if bs.cur.progressiveRank < 0 && bs.betterThan(bs.best) {
 					if newOp, newInfl := bs.buildOperator(); newOp != nil {
-						bs.op = newOp
+						bs.ops = []*operator.Operator{newOp}
 						bs.infl = *newInfl
 						clone := *bs.cur
 						bs.best = &clone
@@ -630,7 +630,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 			}
 		}
 	}
-	return []*operator.Operator{bs.op}
+	return bs.ops
 }
 
 // allowBalance check whether the operator count have exceed the hot region limit by type
