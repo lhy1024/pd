@@ -412,7 +412,9 @@ func (h *hotScheduler) balanceHotReadRegions(cluster opt.Cluster) []*operator.Op
 	if len(peerOps) == 0 && leaderSolver.addPendingInfluence() {
 		return leaderOps
 	}
+	log.Info("len", zap.Int("leader", len(leaderOps)), zap.Int("peerOps", len(peerOps)))
 	leaderSolver.cur = leaderSolver.best
+	log.Info("isNil", zap.Bool("cur", leaderSolver.cur == nil))
 	if leaderSolver.betterThan(peerSolver.best) {
 		if leaderSolver.addPendingInfluence() {
 			return leaderOps
@@ -956,7 +958,7 @@ func (bs *balanceSolver) betterThan(old *solution) bool {
 	if old == nil {
 		return true
 	}
-
+	log.Info("isNil", zap.Bool("cur", bs.cur == nil))
 	switch {
 	case bs.cur.progressiveRank < old.progressiveRank:
 		return true
