@@ -672,6 +672,7 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*storeLoadDetail {
 	ret := make(map[uint64]*storeLoadDetail)
 	srcRatio := math.Min(bs.sche.conf.GetSrcToleranceRatio(), 1)
 	for id, detail := range bs.stLoadDetail {
+		log.Info("stddev", zap.Float64("first", detail.LoadPred.Stddev.Loads[bs.firstPriority]), zap.Float64("second", detail.LoadPred.Stddev.Loads[bs.secondPriority]), zap.Float64("thre", (srcRatio-1)))
 		if detail.LoadPred.Stddev.Loads[bs.firstPriority] <= (srcRatio-1) && detail.LoadPred.Stddev.Loads[bs.secondPriority] <= (srcRatio-1) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-exp", strconv.FormatUint(id, 10)).Inc()
 			continue
