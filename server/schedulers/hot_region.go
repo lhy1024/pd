@@ -346,6 +346,9 @@ func summaryStoresLoad(
 	allLoadSum2 := make([]float64, statistics.DimLen)
 	for _, detail := range loadDetail {
 		for i := range expectLoads {
+			if detail.LoadPred.Current.Loads[i] < statistics.MinHotThresholds[i] {
+				continue
+			}
 			v := detail.LoadPred.Current.Loads[i] - expectLoads[i]
 			allLoadSum2[i] += v * v
 		}
