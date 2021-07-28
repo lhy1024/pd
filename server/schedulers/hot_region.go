@@ -953,7 +953,7 @@ func (bs *balanceSolver) calcProgressiveRank() {
 			if !bs.isTolerance(src, dst, bs.firstPriority) {
 				return
 			}
-			if dstLd.Loads[bs.firstPriority] <= stddevThreshold {
+			if dst.Stddev.Loads[bs.firstPriority] <= stddevThreshold {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-exp", strconv.FormatUint(bs.cur.dstStoreID, 10)).Inc()
 				return
 			}
