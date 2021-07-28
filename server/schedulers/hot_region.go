@@ -953,6 +953,10 @@ func (bs *balanceSolver) calcProgressiveRank() {
 			if !bs.isTolerance(src, dst, bs.firstPriority) {
 				return
 			}
+			if dstLd.Loads[bs.firstPriority] <= stddevThreshold {
+				hotSchedulerResultCounter.WithLabelValues("dst-store-exp", strconv.FormatUint(bs.cur.dstStoreID, 10)).Inc()
+				return
+			}
 			// If belong to the case, first priority dim  will be more balanced, ignore the second priority dim.
 			bs.cur.progressiveRank = -1
 			bs.firstPriorityIsBetter = true
