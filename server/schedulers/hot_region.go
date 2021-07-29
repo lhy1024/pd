@@ -896,7 +896,7 @@ func (bs *balanceSolver) calcProgressiveRank() {
 			if !bs.isTolerance(src, dst, bs.firstPriority) {
 				return
 			}
-			if dst.Stddev.Loads[bs.firstPriority] <= stddevThreshold {
+			if dst.Stddev.Loads[bs.firstPriority] <= stddevThreshold/2 {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-exp", strconv.FormatUint(bs.cur.dstStoreID, 10)).Inc()
 				return
 			}
@@ -908,10 +908,12 @@ func (bs *balanceSolver) calcProgressiveRank() {
 }
 
 func (bs *balanceSolver) isTolerance(src, dst *storeLoadPred, dim int) bool {
-	region := statistics.MinHotThresholds[getRegionStatKind(bs.rwTy, dim)]
-	srcRatio := math.Min(bs.sche.conf.GetSrcToleranceRatio(), 1)
-	dstRatio := math.Min(bs.sche.conf.GetDstToleranceRatio(), 1)
-	return src.min_min().Loads[dim]/srcRatio > dst.max_max().Loads[dim]*dstRatio+region*0
+	srcRate := src.Current.Loads[dim]
+	dstRate := dst.Current.Loads[dim]
+	srcPending := src.pending().Loads[dim]
+	dstPending := dst.pending().Loads[dim]
+	pendingRate := (1 + 8*srcRate/(srcRate-dstRate))
+	return srcRate-pendingRate*srcPending > dstRate+pendingRate*dstPending
 }
 
 func (bs *balanceSolver) getMinRate(dim int) float64 {
