@@ -458,7 +458,7 @@ type balanceSolver struct {
 
 	cur  *solution
 	best *solution
-	op   *operator.Operator
+	ops  []*operator.Operator
 	infl Influence
 
 	maxSrc   *storeLoad
@@ -488,10 +488,10 @@ type solution struct {
 }
 
 func (bs *balanceSolver) addPendingInfluence() bool {
-	if bs.best == nil {
+	if bs.best == nil || len(bs.ops) == 0 {
 		return false
 	}
-	return bs.sche.addPendingInfluence(bs.op, bs.best.srcStoreID, bs.best.dstStoreID, bs.infl)
+	return bs.sche.addPendingInfluence(bs.ops[0], bs.best.srcStoreID, bs.best.dstStoreID, bs.infl)
 }
 
 func (bs *balanceSolver) init() {
@@ -602,7 +602,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 				bs.calcProgressiveRank()
 				if bs.cur.progressiveRank < 0 && bs.betterThan(bs.best) {
 					if newOp, newInfl := bs.buildOperator(); newOp != nil {
-						bs.op = newOp
+						bs.ops = []*operator.Operator{newOp}
 						bs.infl = *newInfl
 						clone := *bs.cur
 						bs.best = &clone
@@ -611,7 +611,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 			}
 		}
 	}
-	return []*operator.Operator{bs.op}
+	return bs.ops
 }
 
 // filterSrcStores compare the min rate and the ratio * expectation rate, if both key and byte rate is greater than
