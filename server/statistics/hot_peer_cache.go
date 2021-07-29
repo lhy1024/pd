@@ -51,6 +51,12 @@ var MinHotThresholds = [RegionStatCount]float64{
 	RegionReadQuery:  128,
 }
 
+var StoreMinHotThreshold = [DimLen]float64{
+	ByteDim:  512 * 1024,
+	KeyDim:   128,
+	QueryDim: 128,
+}
+
 // hotPeerCache saves the hot peer's statistics.
 type hotPeerCache struct {
 	kind               FlowKind

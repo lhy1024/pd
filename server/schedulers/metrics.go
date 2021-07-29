@@ -87,6 +87,14 @@ var balanceDirectionCounter = prometheus.NewCounterVec(
 		Help:      "Counter of direction of balance related schedulers.",
 	}, []string{"type", "source", "target"})
 
+var hotPendingCounter = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Namespace: "pd",
+		Subsystem: "scheduler",
+		Name:      "hot_pending",
+		Help:      "Counter of direction of balance related schedulers.",
+	}, []string{"type", "source", "target"})
+
 var hotDirectionCounter = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Namespace: "pd",
