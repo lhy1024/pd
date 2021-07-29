@@ -30,16 +30,31 @@ const (
 	DimLen
 )
 
+// DimToString returns string with dim
 func DimToString(dim int) string {
 	switch dim {
 	case ByteDim:
-		return "ByteRate"
+		return "byte"
 	case KeyDim:
-		return "KeyRate"
+		return "key"
 	case QueryDim:
-		return "QueryRate"
+		return "qps"
 	default:
 		return ""
+	}
+}
+
+// StringToDim returns dim with string
+func StringToDim(name string) int {
+	switch name {
+	case DimToString(ByteDim):
+		return ByteDim
+	case DimToString(KeyDim):
+		return KeyDim
+	case DimToString(QueryDim):
+		return QueryDim
+	default:
+		return DimLen
 	}
 }
 

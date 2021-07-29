@@ -987,7 +987,6 @@ var DefaultSchedulers = SchedulerConfigs{
 	{Type: "balance-region"},
 	{Type: "balance-leader"},
 	{Type: "hot-region"},
-	{Type: "label"},
 }
 
 // IsDefaultScheduler checks whether the scheduler is enable by default.

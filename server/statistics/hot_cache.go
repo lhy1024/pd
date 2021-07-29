@@ -15,6 +15,7 @@ package statistics
 
 import (
 	"context"
+
 	"github.com/tikv/pd/server/core"
 )
 
