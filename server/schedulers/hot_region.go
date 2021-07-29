@@ -313,8 +313,7 @@ func summaryStoresLoad(
 	allLoadSum2 := make([]float64, statistics.DimLen)
 	for _, detail := range loadDetail {
 		for i := range expectLoads {
-			log.Info("expect", zap.Float64("detail", detail.LoadPred.Current.Loads[i]), zap.Float64("thre", statistics.StoreMinHotThreshold[i]))
-			if detail.LoadPred.Current.Loads[i] < statistics.StoreMinHotThreshold[i] {
+			if detail.LoadPred.Current.Loads[i] <= statistics.StoreMinHotThreshold[i] {
 				continue
 			}
 			v := detail.LoadPred.Current.Loads[i] - expectLoads[i]
@@ -323,6 +322,10 @@ func summaryStoresLoad(
 	}
 	stddevLoads := make([]float64, statistics.DimLen)
 	for i := range allLoadSum2 {
+		if allLoadSum2[i] < storeLen*statistics.StoreMinHotThreshold[i]*statistics.StoreMinHotThreshold[i] {
+			stddevLoads[i] = 0
+			continue
+		}
 		stddevLoads[i] = math.Sqrt(allLoadSum2[i]/storeLen) / expectLoads[i]
 	}
 
