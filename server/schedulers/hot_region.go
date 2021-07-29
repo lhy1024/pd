@@ -687,13 +687,13 @@ func (bs *balanceSolver) sortHotPeers(ret []*statistics.HotPeerStat, maxPeerNum 
 	firstPrioritySort := make([]*statistics.HotPeerStat, len(ret))
 	copy(firstPrioritySort, ret)
 	sort.Slice(firstPrioritySort, func(i, j int) bool {
-		k := getRegionStatKind(bs.rwTy, statistics.ByteDim)
+		k := getRegionStatKind(bs.rwTy, bs.firstPriority)
 		return firstPrioritySort[i].GetLoad(k) > firstPrioritySort[j].GetLoad(k)
 	})
 	secondPrioritySort := make([]*statistics.HotPeerStat, len(ret))
 	copy(secondPrioritySort, ret)
 	sort.Slice(secondPrioritySort, func(i, j int) bool {
-		k := getRegionStatKind(bs.rwTy, statistics.KeyDim)
+		k := getRegionStatKind(bs.rwTy, bs.secondPriority)
 		return secondPrioritySort[i].GetLoad(k) > secondPrioritySort[j].GetLoad(k)
 	})
 
