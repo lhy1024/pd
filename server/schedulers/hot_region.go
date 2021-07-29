@@ -322,6 +322,7 @@ func summaryStoresLoad(
 	}
 	stddevLoads := make([]float64, statistics.DimLen)
 	for i := range allLoadSum2 {
+		// log.Info("expect2", zap.Float64("sum", allLoadSum2[i]), zap.Float64("thre", statistics.StoreMinHotThreshold[i]))
 		if allLoadSum2[i] < storeLen*statistics.StoreMinHotThreshold[i]*statistics.StoreMinHotThreshold[i] {
 			stddevLoads[i] = 0
 			continue
@@ -917,7 +918,7 @@ func (bs *balanceSolver) isTolerance(src, dst *storeLoadPred, dim int) bool {
 	srcPending := src.pending().Loads[dim]
 	dstPending := dst.pending().Loads[dim]
 	pendingRate := (1 + 8*srcRate/(srcRate-dstRate))
-	hotPendingStatue.WithLabelValues(bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), strconv.FormatUint(bs.cur.dstStoreID, 10)).Set(float64(pendingRate))
+	hotPendingStatus.WithLabelValues(bs.rwTy.String(), strconv.FormatUint(bs.cur.srcStoreID, 10), strconv.FormatUint(bs.cur.dstStoreID, 10)).Set(float64(pendingRate))
 	return srcRate-pendingRate*srcPending > dstRate+pendingRate*dstPending
 }
 
@@ -1104,6 +1105,7 @@ func (bs *balanceSolver) buildOperator() (op *operator.Operator, infl *Influence
 		targetLabel = strconv.FormatUint(dstPeer.GetStoreId(), 10)
 
 		if bs.rwTy == read && bs.cur.region.GetLeader().StoreId == bs.cur.srcStoreID { // move read leader
+			typ = "move-leader"
 			op, err = operator.CreateMoveLeaderOperator(
 				"move-hot-read-leader",
 				bs.cluster,

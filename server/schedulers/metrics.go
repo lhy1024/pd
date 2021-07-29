@@ -87,7 +87,7 @@ var balanceDirectionCounter = prometheus.NewCounterVec(
 		Help:      "Counter of direction of balance related schedulers.",
 	}, []string{"type", "source", "target"})
 
-var hotPendingStatue = prometheus.NewGaugeVec(
+var hotPendingStatus = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Namespace: "pd",
 		Subsystem: "scheduler",
@@ -132,4 +132,5 @@ func init() {
 	prometheus.MustRegister(scatterRangeRegionCounter)
 	prometheus.MustRegister(opInfluenceStatus)
 	prometheus.MustRegister(tolerantResourceStatus)
+	prometheus.MustRegister(hotPendingStatus)
 }
