@@ -329,6 +329,44 @@ func (s *testHotWriteRegionSchedulerSuite) checkByteRateOnly(c *C, tc *mockclust
 	hb.(*hotScheduler).clearPendingInfluence()
 }
 
+func (s *testHotWriteRegionSchedulerSuite) TestWithQuery(c *C) {
+	originValue := schedulePeerPr
+	defer func() {
+		schedulePeerPr = originValue
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	statistics.Denoising = false
+	opt := config.NewTestOptions()
+	hb, err := schedule.CreateScheduler(HotWriteRegionType, schedule.NewOperatorController(ctx, nil, nil), core.NewStorage(kv.NewMemoryKV()), nil)
+	c.Assert(err, IsNil)
+	hb.(*hotScheduler).conf.SetSrcToleranceRatio(1)
+	hb.(*hotScheduler).conf.SetDstToleranceRatio(1)
+	hb.(*hotScheduler).conf.WriteLeaderPriorities = []string{"qps", "byte"}
+
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.SetHotRegionCacheHitsThreshold(0)
+	tc.AddRegionStore(1, 20)
+	tc.AddRegionStore(2, 20)
+	tc.AddRegionStore(3, 20)
+
+	tc.UpdateStorageWriteQuery(1, 11000*statistics.StoreHeartBeatReportInterval)
+	tc.UpdateStorageWriteQuery(2, 10000*statistics.StoreHeartBeatReportInterval)
+	tc.UpdateStorageWriteQuery(3, 9000*statistics.StoreHeartBeatReportInterval)
+
+	addRegionInfo(tc, write, []testRegionInfo{
+		{1, []uint64{1, 2, 3}, 500, 0, 500},
+		{2, []uint64{1, 2, 3}, 500, 0, 500},
+		{3, []uint64{2, 1, 3}, 500, 0, 500},
+	})
+	schedulePeerPr = 0.0
+	for i := 0; i < 100; i++ {
+		hb.(*hotScheduler).clearPendingInfluence()
+		op := hb.Schedule(tc)[0]
+		testutil.CheckTransferLeader(c, op, operator.OpHotRegion, 1, 3)
+	}
+}
+
 func (s *testHotWriteRegionSchedulerSuite) TestWithKeyRate(c *C) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

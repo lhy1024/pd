@@ -669,7 +669,6 @@ func summaryStoresLoadByEngine(
 			ty = "query-rate-" + rwTy.String() + "-" + kind.String()
 			hotPeerSummary.WithLabelValues(ty, fmt.Sprintf("%v", id)).Set(peerLoadSum[statistics.QueryDim])
 		}
-
 		loads := collector.GetLoads(storeLoads, peerLoadSum, rwTy, kind)
 		for i := range allStoreLoadSum {
 			allStoreLoadSum[i] += loads[i]
