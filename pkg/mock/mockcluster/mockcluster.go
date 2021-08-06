@@ -490,11 +490,9 @@ func (mc *Cluster) UpdateRegionCount(storeID uint64, regionCount int) {
 
 // UpdateSnapshotCount updates store snapshot count.
 func (mc *Cluster) UpdateSnapshotCount(storeID uint64, snapshotCount int) {
-	store := mc.GetStore(storeID)
-	newStats := proto.Clone(store.GetStoreStats()).(*pdpb.StoreStats)
-	newStats.ReceivingSnapCount = uint32(snapshotCount)
-	newStore := store.Clone(core.SetStoreStats(newStats))
-	mc.PutStore(newStore)
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.ReceivingSnapCount = uint32(snapshotCount)
+	})
 }
 
 // UpdatePendingPeerCount updates store pending peer count.
@@ -506,91 +504,89 @@ func (mc *Cluster) UpdatePendingPeerCount(storeID uint64, pendingPeerCount int) 
 
 // UpdateStorageRatio updates store storage ratio count.
 func (mc *Cluster) UpdateStorageRatio(storeID uint64, usedRatio, availableRatio float64) {
-	store := mc.GetStore(storeID)
-	newStats := proto.Clone(store.GetStoreStats()).(*pdpb.StoreStats)
-	newStats.Capacity = defaultStoreCapacity
-	newStats.UsedSize = uint64(float64(newStats.Capacity) * usedRatio)
-	newStats.Available = uint64(float64(newStats.Capacity) * availableRatio)
-	newStore := store.Clone(core.SetStoreStats(newStats))
-	mc.PutStore(newStore)
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.Capacity = defaultStoreCapacity
+		newStats.UsedSize = uint64(float64(newStats.Capacity) * usedRatio)
+		newStats.Available = uint64(float64(newStats.Capacity) * availableRatio)
+	})
 }
 
 // UpdateStorageWrittenStats updates store written bytes.
 func (mc *Cluster) UpdateStorageWrittenStats(storeID, bytesWritten, keysWritten uint64) {
-	store := mc.GetStore(storeID)
-	newStats := proto.Clone(store.GetStoreStats()).(*pdpb.StoreStats)
-	newStats.BytesWritten = bytesWritten
-	newStats.KeysWritten = keysWritten
-	now := time.Now().Second()
-	interval := &pdpb.TimeInterval{StartTimestamp: uint64(now - statistics.StoreHeartBeatReportInterval), EndTimestamp: uint64(now)}
-	newStats.Interval = interval
-	newStore := store.Clone(core.SetStoreStats(newStats))
-	mc.Set(storeID, newStats)
-	mc.PutStore(newStore)
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.BytesWritten = bytesWritten
+		newStats.KeysWritten = keysWritten
+	})
 }
 
 // UpdateStorageReadStats updates store written bytes.
 func (mc *Cluster) UpdateStorageReadStats(storeID, bytesRead, keysRead uint64) {
-	store := mc.GetStore(storeID)
-	newStats := proto.Clone(store.GetStoreStats()).(*pdpb.StoreStats)
-	newStats.BytesRead = bytesRead
-	newStats.KeysRead = keysRead
-	now := time.Now().Second()
-	interval := &pdpb.TimeInterval{StartTimestamp: uint64(now - statistics.StoreHeartBeatReportInterval), EndTimestamp: uint64(now)}
-	newStats.Interval = interval
-	newStore := store.Clone(core.SetStoreStats(newStats))
-	mc.Set(storeID, newStats)
-	mc.PutStore(newStore)
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.BytesRead = bytesRead
+		newStats.KeysRead = keysRead
+	})
 }
 
 // UpdateStorageWrittenBytes updates store written bytes.
 func (mc *Cluster) UpdateStorageWrittenBytes(storeID uint64, bytesWritten uint64) {
-	store := mc.GetStore(storeID)
-	newStats := proto.Clone(store.GetStoreStats()).(*pdpb.StoreStats)
-	newStats.BytesWritten = bytesWritten
-	newStats.KeysWritten = bytesWritten / 100
-	now := time.Now().Second()
-	interval := &pdpb.TimeInterval{StartTimestamp: uint64(now - statistics.StoreHeartBeatReportInterval), EndTimestamp: uint64(now)}
-	newStats.Interval = interval
-	newStore := store.Clone(core.SetStoreStats(newStats))
-	mc.Set(storeID, newStats)
-	mc.PutStore(newStore)
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.BytesWritten = bytesWritten
+		newStats.KeysWritten = bytesWritten / 100
+	})
 }
 
 // UpdateStorageReadBytes updates store read bytes.
 func (mc *Cluster) UpdateStorageReadBytes(storeID uint64, bytesRead uint64) {
-	store := mc.GetStore(storeID)
-	newStats := proto.Clone(store.GetStoreStats()).(*pdpb.StoreStats)
-	newStats.BytesRead = bytesRead
-	newStats.KeysRead = bytesRead / 100
-	now := time.Now().Second()
-	interval := &pdpb.TimeInterval{StartTimestamp: uint64(now - statistics.StoreHeartBeatReportInterval), EndTimestamp: uint64(now)}
-	newStats.Interval = interval
-	newStore := store.Clone(core.SetStoreStats(newStats))
-	mc.Set(storeID, newStats)
-	mc.PutStore(newStore)
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.BytesRead = bytesRead
+		newStats.KeysRead = bytesRead / 100
+	})
 }
 
 // UpdateStorageWrittenKeys updates store written keys.
 func (mc *Cluster) UpdateStorageWrittenKeys(storeID uint64, keysWritten uint64) {
-	store := mc.GetStore(storeID)
-	newStats := proto.Clone(store.GetStoreStats()).(*pdpb.StoreStats)
-	newStats.KeysWritten = keysWritten
-	newStats.BytesWritten = keysWritten * 100
-	now := time.Now().Second()
-	interval := &pdpb.TimeInterval{StartTimestamp: uint64(now - statistics.StoreHeartBeatReportInterval), EndTimestamp: uint64(now)}
-	newStats.Interval = interval
-	newStore := store.Clone(core.SetStoreStats(newStats))
-	mc.Set(storeID, newStats)
-	mc.PutStore(newStore)
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.KeysWritten = keysWritten
+		newStats.BytesWritten = keysWritten * 100
+	})
 }
 
 // UpdateStorageReadKeys updates store read bytes.
 func (mc *Cluster) UpdateStorageReadKeys(storeID uint64, keysRead uint64) {
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.KeysRead = keysRead
+		newStats.BytesRead = keysRead * 100
+	})
+}
+
+// UpdateStorageReadQuery updates store read query.
+func (mc *Cluster) UpdateStorageReadQuery(storeID uint64, queryRead uint64) {
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.QueryStats = &pdpb.QueryStats{
+			Coprocessor: queryRead / 3,
+			Scan:        queryRead / 3,
+			Get:         queryRead / 3,
+		}
+		newStats.BytesRead = queryRead * 100
+	})
+}
+
+// UpdateStorageWriteQuery updates store write query.
+func (mc *Cluster) UpdateStorageWriteQuery(storeID uint64, queryWrite uint64) {
+	mc.updateStorageStatistics(storeID, func(newStats *pdpb.StoreStats) {
+		newStats.QueryStats = &pdpb.QueryStats{
+			Put:         queryWrite / 3,
+			Delete:      queryWrite / 3,
+			DeleteRange: queryWrite / 3,
+		}
+		newStats.BytesWritten = queryWrite * 100
+	})
+}
+
+func (mc *Cluster) updateStorageStatistics(storeID uint64, update func(*pdpb.StoreStats)) {
 	store := mc.GetStore(storeID)
 	newStats := proto.Clone(store.GetStoreStats()).(*pdpb.StoreStats)
-	newStats.KeysRead = keysRead
-	newStats.BytesRead = keysRead * 100
+	update(newStats)
 	now := time.Now().Second()
 	interval := &pdpb.TimeInterval{StartTimestamp: uint64(now - statistics.StoreHeartBeatReportInterval), EndTimestamp: uint64(now)}
 	newStats.Interval = interval
