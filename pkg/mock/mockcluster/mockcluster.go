@@ -332,13 +332,14 @@ func (mc *Cluster) AddLeaderRegionWithRange(regionID uint64, startKey string, en
 // AddRegionWithReadInfo adds region with specified leader, followers and read info.
 func (mc *Cluster) AddRegionWithReadInfo(
 	regionID uint64, LeaderStoreID uint64,
-	readBytes, readKeys uint64,
+	readBytes, readKeys, readQuery uint64,
 	reportInterval uint64,
 	otherPeerStoreIDs []uint64, filledNums ...int) []*statistics.HotPeerStat {
 	r := mc.newMockRegionInfo(regionID, LeaderStoreID, otherPeerStoreIDs...)
 	r = r.Clone(core.SetReadBytes(readBytes))
 	r = r.Clone(core.SetReadKeys(readKeys))
 	r = r.Clone(core.SetReportInterval(reportInterval))
+	r = r.Clone(core.SetReadQuery(readQuery))
 	filledNum := mc.HotCache.GetFilledPeriod(statistics.ReadFlow)
 	if len(filledNums) > 0 {
 		filledNum = filledNums[0]
@@ -380,12 +381,13 @@ func (mc *Cluster) AddRegionWithPeerReadInfo(regionID, LeaderStoreID, targetStor
 // AddRegionLeaderWithReadInfo add region leader read info
 func (mc *Cluster) AddRegionLeaderWithReadInfo(
 	regionID uint64, LeaderStoreID uint64,
-	readBytes, readKeys uint64,
+	readBytes, readKeys, readQuery uint64,
 	reportInterval uint64,
 	otherPeerStoreIDs []uint64, filledNums ...int) []*statistics.HotPeerStat {
 	r := mc.newMockRegionInfo(regionID, LeaderStoreID, otherPeerStoreIDs...)
 	r = r.Clone(core.SetReadBytes(readBytes))
 	r = r.Clone(core.SetReadKeys(readKeys))
+	r = r.Clone(core.SetReadQuery(readQuery))
 	r = r.Clone(core.SetReportInterval(reportInterval))
 	filledNum := mc.HotCache.GetFilledPeriod(statistics.ReadFlow)
 	if len(filledNums) > 0 {
@@ -406,13 +408,14 @@ func (mc *Cluster) AddRegionLeaderWithReadInfo(
 // AddLeaderRegionWithWriteInfo adds region with specified leader and peers write info.
 func (mc *Cluster) AddLeaderRegionWithWriteInfo(
 	regionID uint64, LeaderStoreID uint64,
-	writtenBytes, writtenKeys uint64,
+	writtenBytes, writtenKeys, writtenQuery uint64,
 	reportInterval uint64,
 	otherPeerStoreIDs []uint64, filledNums ...int) []*statistics.HotPeerStat {
 	r := mc.newMockRegionInfo(regionID, LeaderStoreID, otherPeerStoreIDs...)
 	r = r.Clone(core.SetWrittenBytes(writtenBytes))
 	r = r.Clone(core.SetWrittenKeys(writtenKeys))
 	r = r.Clone(core.SetReportInterval(reportInterval))
+	r = r.Clone(core.SetWrittenQuery(writtenQuery))
 
 	filledNum := mc.HotCache.GetFilledPeriod(statistics.WriteFlow)
 	if len(filledNums) > 0 {
