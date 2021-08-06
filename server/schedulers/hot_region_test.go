@@ -830,6 +830,38 @@ func (s *testHotReadRegionSchedulerSuite) TestByteRateOnly(c *C) {
 	hb.(*hotScheduler).clearPendingInfluence()
 }
 
+func (s *testHotReadRegionSchedulerSuite) TestWithQuery(c *C) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	statistics.Denoising = false
+	opt := config.NewTestOptions()
+	hb, err := schedule.CreateScheduler(HotReadRegionType, schedule.NewOperatorController(ctx, nil, nil), core.NewStorage(kv.NewMemoryKV()), nil)
+	c.Assert(err, IsNil)
+	hb.(*hotScheduler).conf.SetSrcToleranceRatio(1)
+	hb.(*hotScheduler).conf.SetDstToleranceRatio(1)
+
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.SetHotRegionCacheHitsThreshold(0)
+	tc.AddRegionStore(1, 20)
+	tc.AddRegionStore(2, 20)
+	tc.AddRegionStore(3, 20)
+
+	tc.UpdateStorageReadQuery(1, 10500*statistics.StoreHeartBeatReportInterval)
+	tc.UpdateStorageReadQuery(2, 10000*statistics.StoreHeartBeatReportInterval)
+	tc.UpdateStorageReadQuery(3, 9000*statistics.StoreHeartBeatReportInterval)
+
+	addRegionInfo(tc, read, []testRegionInfo{
+		{1, []uint64{1, 2, 3}, 0, 0, 500},
+		{2, []uint64{2, 1, 3}, 0, 0, 500},
+	})
+
+	for i := 0; i < 100; i++ {
+		hb.(*hotScheduler).clearPendingInfluence()
+		op := hb.Schedule(tc)[0]
+		testutil.CheckTransferLeader(c, op, operator.OpHotRegion, 1, 3)
+	}
+}
+
 func (s *testHotReadRegionSchedulerSuite) TestWithKeyRate(c *C) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -881,38 +913,6 @@ func (s *testHotReadRegionSchedulerSuite) TestWithKeyRate(c *C) {
 		// testutil.CheckTransferPeerWithLeaderTransfer(c, op, operator.OpHotRegion, 1, 5)
 		// store byte rate (min, max): (9.5, 10.5) | 9.5 | (9.45, 9.5) | (9, 9.5) | (8.9, 9.45)
 		// store key rate (min, max):  (9.2, 10.2) | 9.5 | (9.7, 9.8) | (9, 9.5) | (9.2, 9.8)
-	}
-}
-
-func (s *testHotReadRegionSchedulerSuite) TestWithQuery(c *C) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	statistics.Denoising = false
-	opt := config.NewTestOptions()
-	hb, err := schedule.CreateScheduler(HotReadRegionType, schedule.NewOperatorController(ctx, nil, nil), core.NewStorage(kv.NewMemoryKV()), nil)
-	c.Assert(err, IsNil)
-	hb.(*hotScheduler).conf.SetSrcToleranceRatio(1)
-	hb.(*hotScheduler).conf.SetDstToleranceRatio(1)
-
-	tc := mockcluster.NewCluster(ctx, opt)
-	tc.SetHotRegionCacheHitsThreshold(0)
-	tc.AddRegionStore(1, 20)
-	tc.AddRegionStore(2, 20)
-	tc.AddRegionStore(3, 20)
-
-	tc.UpdateStorageReadQuery(1, 10500*statistics.StoreHeartBeatReportInterval)
-	tc.UpdateStorageReadQuery(2, 10000*statistics.StoreHeartBeatReportInterval)
-	tc.UpdateStorageReadQuery(3, 9000*statistics.StoreHeartBeatReportInterval)
-
-	addRegionInfo(tc, read, []testRegionInfo{
-		{1, []uint64{1, 2, 3}, 0, 0, 500},
-		{2, []uint64{2, 1, 3}, 0, 0, 500},
-	})
-
-	for i := 0; i < 100; i++ {
-		hb.(*hotScheduler).clearPendingInfluence()
-		op := hb.Schedule(tc)[0]
-		testutil.CheckTransferLeader(c, op, operator.OpHotRegion, 1, 3)
 	}
 }
 
