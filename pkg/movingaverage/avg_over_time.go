@@ -101,6 +101,11 @@ func (aot *AvgOverTime) IsFull() bool {
 	return aot.intervalSum >= aot.avgInterval
 }
 
+// GetIntervalSum returns the sum of interval
+func (aot *AvgOverTime) GetIntervalSum() time.Duration {
+	return aot.intervalSum
+}
+
 // Clone returns a copy of AvgOverTime
 func (aot *AvgOverTime) Clone() *AvgOverTime {
 	que := aot.que.Clone()

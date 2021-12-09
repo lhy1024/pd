@@ -104,6 +104,9 @@ type HotPeerStat struct {
 	thresholds             [dimLen]float64
 	peers                  []uint64
 	lastTransferLeaderTime time.Time
+	source                 sourceKind
+	fromAdopt              bool
+	isUncertain            bool
 }
 
 // ID returns region ID. Implementing TopNItem.
@@ -130,6 +133,8 @@ func (stat *HotPeerStat) Log(str string, level func(msg string, fields ...zap.Fi
 		zap.Uint64("interval", stat.interval),
 		zap.Uint64("region-id", stat.RegionID),
 		zap.Uint64("store", stat.StoreID),
+		zap.Bool("is-leader", stat.isLeader),
+		zap.String("type", stat.Kind.String()),
 		zap.Float64("byte-rate", stat.GetByteRate()),
 		zap.Float64("byte-rate-instant", stat.ByteRate),
 		zap.Float64("byte-rate-threshold", stat.thresholds[byteDim]),
@@ -138,10 +143,12 @@ func (stat *HotPeerStat) Log(str string, level func(msg string, fields ...zap.Fi
 		zap.Float64("key-rate-threshold", stat.thresholds[keyDim]),
 		zap.Int("hot-degree", stat.HotDegree),
 		zap.Int("hot-anti-count", stat.AntiCount),
-		zap.Bool("just-transfer-leader", stat.justTransferLeader),
-		zap.Bool("is-leader", stat.isLeader),
+		zap.Duration("sum-interval", stat.GetIntervalSum()),
 		zap.Bool("need-delete", stat.IsNeedDelete()),
-		zap.String("type", stat.Kind.String()),
+		zap.String("source", stat.source.String()),
+		zap.Bool("from-adopt", stat.fromAdopt),
+		zap.Bool("is-uncertain", stat.isUncertain),
+		zap.Bool("just-transfer-leader", stat.justTransferLeader),
 		zap.Time("last-transfer-leader-time", stat.lastTransferLeaderTime))
 }
 
@@ -179,6 +186,14 @@ func (stat *HotPeerStat) GetKeyRate() float64 {
 		return math.Round(stat.KeyRate)
 	}
 	return math.Round(stat.rollingKeyRate.Get())
+}
+
+// GetByteRate returns denoised BytesRate if possible.
+func (stat *HotPeerStat) GetIntervalSum() time.Duration {
+	if stat.rollingByteRate == nil {
+		return 0
+	}
+	return stat.rollingByteRate.LastAverage.GetIntervalSum()
 }
 
 // GetThresholds returns thresholds

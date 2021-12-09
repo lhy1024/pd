@@ -179,26 +179,26 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			interval:           interval,
 			peers:              peers,
 			thresholds:         thresholds,
+			source:             direct,
 		}
 
-		source := direct
 		if oldItem == nil {
 			if tmpItem != nil { // use the tmpItem cached from the store where this region was in before
 				oldItem = tmpItem
-				source = inherit
 				tmpItem = nil
+				newItem.source = inherit
 			} else { // new item is new peer after adding replica
 				for _, storeID := range storeIDs {
 					oldItem = f.getOldHotPeerStat(region.GetID(), storeID)
-					if oldItem != nil {
-						source = adopt
+					if oldItem != nil && !(oldItem.fromAdopt && oldItem.isUncertain) {
+						newItem.source = adopt
 						break
 					}
 				}
 			}
 		}
 
-		newItem = f.updateHotPeerStat(newItem, oldItem, source, bytes, keys, time.Duration(interval)*time.Second)
+		newItem = f.updateHotPeerStat(newItem, oldItem, bytes, keys, time.Duration(interval)*time.Second)
 		if newItem != nil {
 			ret = append(ret, newItem)
 		}
@@ -382,7 +382,7 @@ func (f *hotPeerCache) getDefaultTimeMedian() *movingaverage.TimeMedian {
 	return movingaverage.NewTimeMedian(DefaultAotSize, rollingWindowsSize, RegionHeartBeatReportInterval*time.Second)
 }
 
-func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, source sourceKind, bytes, keys float64, interval time.Duration) *HotPeerStat {
+func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, keys float64, interval time.Duration) *HotPeerStat {
 	if newItem.needDelete {
 		return newItem
 	}
@@ -398,6 +398,8 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, source s
 		if interval.Seconds() >= RegionHeartBeatReportInterval {
 			newItem.HotDegree = 1
 			newItem.AntiCount = hotRegionAntiCount
+		} else {
+			newItem.isUncertain = true
 		}
 		newItem.isNew = true
 		newItem.rollingByteRate = newDimStat(byteDim)
@@ -410,12 +412,14 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, source s
 		return newItem
 	}
 
-	if source == adopt {
+	if newItem.source == adopt {
 		newItem.rollingByteRate = oldItem.rollingByteRate.Clone()
 		newItem.rollingKeyRate = oldItem.rollingKeyRate.Clone()
+		newItem.fromAdopt = true
 	} else {
 		newItem.rollingByteRate = oldItem.rollingByteRate
 		newItem.rollingKeyRate = oldItem.rollingKeyRate
+		newItem.fromAdopt = oldItem.fromAdopt
 	}
 
 	if newItem.justTransferLeader {
@@ -423,6 +427,7 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, source s
 		// maintain anticount and hotdegree to avoid store threshold and hot peer are unstable.
 		newItem.HotDegree = oldItem.HotDegree
 		newItem.AntiCount = oldItem.AntiCount
+		newItem.isUncertain = oldItem.isUncertain
 		newItem.lastTransferLeaderTime = time.Now()
 		return newItem
 	}
@@ -435,11 +440,13 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, source s
 		// not update hot degree and anti count
 		newItem.HotDegree = oldItem.HotDegree
 		newItem.AntiCount = oldItem.AntiCount
+		newItem.isUncertain = oldItem.isUncertain
 	} else {
 		if f.isOldColdPeer(oldItem, newItem.StoreID) {
 			if newItem.isFullAndHot() {
 				newItem.HotDegree = 1
 				newItem.AntiCount = hotRegionAntiCount
+				newItem.isUncertain = false
 			} else {
 				newItem.needDelete = true
 			}
@@ -447,9 +454,12 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, source s
 			if newItem.isFullAndHot() {
 				newItem.HotDegree = oldItem.HotDegree + 1
 				newItem.AntiCount = hotRegionAntiCount
+				newItem.isUncertain = oldItem.isUncertain
+				newItem.fromAdopt = false
 			} else {
 				newItem.HotDegree = oldItem.HotDegree - 1
 				newItem.AntiCount = oldItem.AntiCount - 1
+				newItem.isUncertain = oldItem.isUncertain
 				if newItem.AntiCount <= 0 {
 					newItem.needDelete = true
 				}
