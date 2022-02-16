@@ -20,6 +20,7 @@ import (
 	"time"
 
 	. "github.com/pingcap/check"
+	. "github.com/tikv/pd/pkg/heap"
 )
 
 var _ = Suite(&testTopNSuite{})

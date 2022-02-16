@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/tikv/pd/pkg/heap"
 	"github.com/tikv/pd/pkg/movingaverage"
 	"github.com/tikv/pd/pkg/slice"
 	"go.uber.org/zap"
@@ -120,7 +121,7 @@ func (stat *HotPeerStat) ID() uint64 {
 }
 
 // Less compares two HotPeerStat.Implementing TopNItem.
-func (stat *HotPeerStat) Less(k int, than TopNItem) bool {
+func (stat *HotPeerStat) Less(k int, than heap.TopNItem) bool {
 	return stat.GetLoad(RegionStatKind(k)) < than.(*HotPeerStat).GetLoad(RegionStatKind(k))
 }
 

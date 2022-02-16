@@ -20,15 +20,9 @@ import (
 	"fmt"
 	"sync"
 	"time"
-)
 
-// TopNItem represents a single object in TopN.
-type TopNItem interface {
-	// ID is used to check identity.
-	ID() uint64
-	// Less tests whether the current item is less than the given argument in the `k`th dimension.
-	Less(k int, than TopNItem) bool
-}
+	. "github.com/tikv/pd/pkg/heap"
+)
 
 // TopN maintains the N largest items of multiple dimensions.
 type TopN struct {
@@ -130,16 +124,16 @@ func (tn *TopN) maintain() {
 type singleTopN struct {
 	k    int
 	n    int
-	topn *indexedHeap
-	rest *indexedHeap
+	topn *IndexedHeap
+	rest *IndexedHeap
 }
 
 func newSingleTopN(k, n int) *singleTopN {
 	return &singleTopN{
 		k:    k,
 		n:    n,
-		topn: newTopNHeap(k, n),
-		rest: newRevTopNHeap(k, n),
+		topn: NewMinHeap(k, n),
+		rest: NewMaxHeap(k, n),
 	}
 }
 
@@ -209,115 +203,6 @@ func (stn *singleTopN) maintain() {
 		rest1 = stn.rest.Top()
 		topn1 = stn.topn.Top()
 	}
-}
-
-// indexedHeap is a heap with index.
-type indexedHeap struct {
-	k     int
-	rev   bool
-	items []TopNItem
-	index map[uint64]int
-}
-
-func newTopNHeap(k, hint int) *indexedHeap {
-	return &indexedHeap{
-		k:     k,
-		rev:   false,
-		items: make([]TopNItem, 0, hint),
-		index: map[uint64]int{},
-	}
-}
-
-func newRevTopNHeap(k, hint int) *indexedHeap {
-	return &indexedHeap{
-		k:     k,
-		rev:   true,
-		items: make([]TopNItem, 0, hint),
-		index: map[uint64]int{},
-	}
-}
-
-// Implementing heap.Interface.
-func (hp *indexedHeap) Len() int {
-	return len(hp.items)
-}
-
-// Implementing heap.Interface.
-func (hp *indexedHeap) Less(i, j int) bool {
-	if !hp.rev {
-		return hp.items[i].Less(hp.k, hp.items[j])
-	}
-	return hp.items[j].Less(hp.k, hp.items[i])
-}
-
-// Implementing heap.Interface.
-func (hp *indexedHeap) Swap(i, j int) {
-	lid := hp.items[i].ID()
-	rid := hp.items[j].ID()
-	hp.items[i], hp.items[j] = hp.items[j], hp.items[i]
-	hp.index[lid] = j
-	hp.index[rid] = i
-}
-
-// Implementing heap.Interface.
-func (hp *indexedHeap) Push(x interface{}) {
-	item := x.(TopNItem)
-	hp.index[item.ID()] = hp.Len()
-	hp.items = append(hp.items, item)
-}
-
-// Implementing heap.Interface.
-func (hp *indexedHeap) Pop() interface{} {
-	l := hp.Len()
-	item := hp.items[l-1]
-	hp.items = hp.items[:l-1]
-	delete(hp.index, item.ID())
-	return item
-}
-
-// Top returns the top item.
-func (hp *indexedHeap) Top() TopNItem {
-	if hp.Len() <= 0 {
-		return nil
-	}
-	return hp.items[0]
-}
-
-// Get returns item with the given ID.
-func (hp *indexedHeap) Get(id uint64) TopNItem {
-	idx, ok := hp.index[id]
-	if !ok {
-		return nil
-	}
-	item := hp.items[idx]
-	return item
-}
-
-// GetAll returns all the items.
-func (hp *indexedHeap) GetAll() []TopNItem {
-	all := make([]TopNItem, len(hp.items))
-	copy(all, hp.items)
-	return all
-}
-
-// Put inserts item or updates the old item if it exists.
-func (hp *indexedHeap) Put(item TopNItem) (isUpdate bool) {
-	if idx, ok := hp.index[item.ID()]; ok {
-		hp.items[idx] = item
-		heap.Fix(hp, idx)
-		return true
-	}
-	heap.Push(hp, item)
-	return false
-}
-
-// Remove deletes item by ID and returns it.
-func (hp *indexedHeap) Remove(id uint64) TopNItem {
-	if idx, ok := hp.index[id]; ok {
-		item := heap.Remove(hp, idx)
-		return item.(TopNItem)
-	}
-	return nil
 }
 
 type ttlItem struct {
