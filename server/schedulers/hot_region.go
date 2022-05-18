@@ -379,6 +379,10 @@ func (s *solution) getPeersRateFromCache(dim int) float64 {
 	return s.cachedPeersRate[dim]
 }
 
+func (s *solution) isAvailable() bool {
+	return s.progressiveRank < -1 || (s.progressiveRank < 0 && len(s.revertRegions) == 0)
+}
+
 type balanceSolver struct {
 	schedule.Cluster
 	sche         *hotScheduler
@@ -494,7 +498,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 
 	bs.cur = &solution{}
 	tryUpdateBestSolution := func() {
-		if bs.cur.progressiveRank < 0 && bs.betterThan(bs.best) {
+		if bs.cur.isAvailable() && bs.betterThan(bs.best) {
 			if newOps, newInfl := bs.buildOperators(); len(newOps) > 0 {
 				bs.ops = newOps
 				bs.infl = *newInfl
@@ -952,12 +956,11 @@ func (bs *balanceSolver) betterThan(old *solution) bool {
 	if old == nil {
 		return true
 	}
-
-	switch {
-	case bs.cur.progressiveRank < old.progressiveRank:
-		return true
-	case bs.cur.progressiveRank > old.progressiveRank:
-		return false
+	if bs.cur.progressiveRank != old.progressiveRank {
+		return bs.cur.progressiveRank < old.progressiveRank
+	}
+	if len(bs.cur.revertRegions) != len(old.revertRegions) {
+		return len(bs.cur.revertRegions) < len(old.revertRegions)
 	}
 
 	if r := bs.compareSrcStore(bs.cur.srcStore, old.srcStore); r < 0 {
