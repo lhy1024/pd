@@ -379,6 +379,9 @@ func (s *solution) getPeersRateFromCache(dim int) float64 {
 	return s.cachedPeersRate[dim]
 }
 
+// isAvailable returns the solution is available.
+// If the solution has no revertRegions, progressiveRank should < 0.
+// If the solution has some revertRegions, progressiveRank should < -1.
 func (s *solution) isAvailable() bool {
 	return s.progressiveRank < -1 || (s.progressiveRank < 0 && len(s.revertRegions) == 0)
 }
