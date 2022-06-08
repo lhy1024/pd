@@ -348,6 +348,11 @@ func (h *Handler) AddEvictSlowStoreScheduler() error {
 	return h.AddScheduler(schedulers.EvictSlowStoreType)
 }
 
+// AddSplitBucketScheduler adds a split-bucket-scheduler.
+func (h *Handler) AddSplitBucketScheduler() error {
+	return h.AddScheduler(schedulers.SplitBucketType)
+}
+
 // AddRandomMergeScheduler adds a random-merge-scheduler.
 func (h *Handler) AddRandomMergeScheduler() error {
 	return h.AddScheduler(schedulers.RandomMergeType)
@@ -1117,4 +1122,22 @@ func (h *Handler) AddEvictOrGrant(storeID float64, name string) error {
 		log.Info("update scheduler", zap.String("scheduler-name", name), zap.Uint64("store-id", uint64(storeID)))
 	}
 	return nil
+}
+
+// GetPausedSchedulerDelayAt returns paused unix timestamp when a scheduler is paused
+func (h *Handler) GetPausedSchedulerDelayAt(name string) (int64, error) {
+	rc, err := h.GetRaftCluster()
+	if err != nil {
+		return -1, err
+	}
+	return rc.GetPausedSchedulerDelayAt(name)
+}
+
+// GetPausedSchedulerDelayUntil returns resume unix timestamp when a scheduler is paused
+func (h *Handler) GetPausedSchedulerDelayUntil(name string) (int64, error) {
+	rc, err := h.GetRaftCluster()
+	if err != nil {
+		return -1, err
+	}
+	return rc.GetPausedSchedulerDelayUntil(name)
 }

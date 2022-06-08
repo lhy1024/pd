@@ -23,7 +23,7 @@ ifneq "$(PD_EDITION)" "Enterprise"
 endif
 endif
 
-ifneq ($(SWAGGER), 0)
+ifeq ($(SWAGGER), 1)
 	BUILD_TAGS += swagger_server
 endif
 
@@ -60,7 +60,7 @@ build: pd-server pd-ctl pd-recover
 tools: pd-tso-bench pd-heartbeat-bench regions-dump stores-dump
 
 PD_SERVER_DEP :=
-ifneq ($(SWAGGER), 0)
+ifeq ($(SWAGGER), 1)
 	PD_SERVER_DEP += swagger-spec
 endif
 ifneq ($(DASHBOARD_DISTRIBUTION_DIR),)
@@ -144,7 +144,7 @@ install-tools:
 
 #### Static checks ####
 
-check: install-tools static tidy check-plugin errdoc check-testing-t
+check: install-tools static tidy generate-errdoc check-plugin check-test
 
 static: install-tools
 	@ echo "gofmt ..."
@@ -158,22 +158,24 @@ static: install-tools
 
 tidy:
 	@ go mod tidy
+	git diff go.mod go.sum | cat
 	git diff --quiet go.mod go.sum
-	
+
 	@ for mod in $(SUBMODULES); do cd $$mod && $(MAKE) tidy && cd - > /dev/null; done
 
+generate-errdoc: install-tools
+	@echo "generating errors.toml..."
+	./scripts/generate-errdoc.sh
+
 check-plugin:
-	@echo "checking plugin"
+	@echo "checking plugin..."
 	cd ./plugin/scheduler_example && $(MAKE) evictLeaderPlugin.so && rm evictLeaderPlugin.so
 
-errdoc: install-tools
-	@echo "generator errors.toml"
-	./scripts/check-errdoc.sh
+check-test:
+	@echo "checking test..."
+	./scripts/check-test.sh
 
-check-testing-t:
-	./scripts/check-testing-t.sh
-
-.PHONY: check static tidy check-plugin errdoc docker-build-test check-testing-t
+.PHONY: check static tidy generate-errdoc check-plugin check-test
 
 #### Test utils ####
 
