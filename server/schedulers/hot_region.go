@@ -589,15 +589,15 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 				}
 			}
 		}
-		// The next solve is allowed to search-revert-regions only when the following conditions are met.
-		// * No best solution was found this time.
-		// * The progressiveRank of the best solution is -1.
-		// * The best solution contain revert regions.
-		searchRevertRegions = bs.best == nil || bs.best.progressiveRank >= -1 || len(bs.best.revertRegions) > 0
-		bs.sche.searchRevertRegions[bs.resourceTy] = searchRevertRegions
-		if searchRevertRegions {
-			schedulerCounter.WithLabelValues(bs.sche.GetName(), "allow-search-revert-regions").Inc()
-		}
+	}
+	// The next solve is allowed to search-revert-regions only when the following conditions are met.
+	// * No best solution was found this time.
+	// * The progressiveRank of the best solution is -1.
+	// * The best solution contain revert regions.
+	searchRevertRegions = bs.best == nil || bs.best.progressiveRank >= -1 || len(bs.best.revertRegions) > 0
+	bs.sche.searchRevertRegions[bs.resourceTy] = searchRevertRegions
+	if searchRevertRegions {
+		schedulerCounter.WithLabelValues(bs.sche.GetName(), "allow-search-revert-regions").Inc()
 	}
 	return bs.ops
 }
