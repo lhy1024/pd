@@ -889,6 +889,10 @@ func (bs *balanceSolver) isUniformSecondPriority(store *statistics.StoreLoadDeta
 func (bs *balanceSolver) calcProgressiveRank() {
 	bs.cur.progressiveRank = 1
 	bs.cur.calcPeersRate(bs.rwTy, bs.firstPriority, bs.secondPriority)
+	if bs.cur.getPeersRateFromCache(bs.firstPriority) < 0 {
+		// revertRegions cannot exceed the main region in the firstPriority.
+		return
+	}
 
 	if bs.resourceTy == writeLeader {
 		// For write leader, only compare the first priority.
@@ -936,10 +940,10 @@ func (bs *balanceSolver) isTolerance(dim int) bool {
 	return srcRate-pendingAmp*srcPending > dstRate+pendingAmp*dstPending
 }
 
-func (bs *balanceSolver) getHotDecRatioByPriorities(dim int) (bool, float64) {
+func (bs *balanceSolver) getHotDecRatioByPriorities(dim int) (isHot bool, decRatio float64) {
 	// we use DecRatio(Decline Ratio) to expect that the dst store's rate should still be less
 	// than the src store's rate after scheduling one peer.
-	getSrcDecRate := func(a, b float64) float64 {
+	getDecRate := func(a, b float64) float64 {
 		if a-b <= 0 {
 			return 1
 		}
@@ -947,9 +951,14 @@ func (bs *balanceSolver) getHotDecRatioByPriorities(dim int) (bool, float64) {
 	}
 	srcRate, dstRate := bs.cur.getExtremeLoad(dim)
 	peersRate := bs.cur.getPeersRateFromCache(dim)
-	isHot := peersRate >= bs.getMinRate(dim)
-	decRatio := (dstRate + peersRate) / getSrcDecRate(srcRate, peersRate)
-	return isHot, decRatio
+	if peersRate >= 0 {
+		isHot = peersRate >= bs.getMinRate(dim)
+		decRatio = (dstRate + peersRate) / getDecRate(srcRate, peersRate)
+	} else {
+		isHot = -peersRate >= bs.getMinRate(dim)
+		decRatio = (srcRate - peersRate) / getDecRate(dstRate, -peersRate)
+	}
+	return
 }
 
 func (bs *balanceSolver) isBetterForWriteLeader() bool {
