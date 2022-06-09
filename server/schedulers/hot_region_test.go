@@ -2099,9 +2099,8 @@ func (s *testHotWriteRegionSchedulerSuite) TestRevertRegionsDimFirstOnly(c *C) {
 		{6, []uint64{3, 2, 4}, 3 * MB, 0.1 * MB, 0},
 		{7, []uint64{1, 4, 5}, 0.1 * MB, 3 * MB, 0},
 	})
-	// No operators can be generated when StrictPickingStore is false.
+	// searchRevertRegions becomes true after the first `Schedule`.
 	hb.conf.StrictPickingStore = false
-	// searchRevertRegions becomes true after the first schedule.
 	ops := hb.Schedule(tc)
 	c.Assert(ops, HasLen, 1)
 	testutil.CheckTransferPeer(c, ops[0], operator.OpHotRegion, 2, 5)
