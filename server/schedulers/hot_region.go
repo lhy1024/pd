@@ -591,16 +591,21 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 			}
 		}
 	}
-	// The next solve is allowed to search-revert-regions only when the following conditions are met.
-	// * No best solution was found this time.
-	// * The progressiveRank of the best solution is -1.
-	// * The best solution contain revert regions.
-	searchRevertRegions = bs.best == nil || bs.best.progressiveRank >= -1 || len(bs.best.revertRegions) > 0
+	bs.logBestSolution()
+	searchRevertRegions = bs.allowSearchRevertRegions()
 	bs.sche.searchRevertRegions[bs.resourceTy] = searchRevertRegions
 	if searchRevertRegions {
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), "allow-search-revert-regions").Inc()
 	}
 	return bs.ops
+}
+
+func (bs *balanceSolver) allowSearchRevertRegions() bool {
+	// The next solve is allowed to search-revert-regions only when the following conditions are met.
+	// * No best solution was found this time.
+	// * The progressiveRank of the best solution is -1.
+	// * The best solution contain revert regions.
+	return bs.best == nil || bs.best.progressiveRank >= -1 || len(bs.best.revertRegions) > 0
 }
 
 func (bs *balanceSolver) tryAddPendingInfluence() bool {
@@ -890,8 +895,8 @@ func (bs *balanceSolver) isUniformSecondPriority(store *statistics.StoreLoadDeta
 func (bs *balanceSolver) calcProgressiveRank() {
 	bs.cur.progressiveRank = 1
 	bs.cur.calcPeersRate(bs.rwTy, bs.firstPriority, bs.secondPriority)
-	if bs.cur.getPeersRateFromCache(bs.firstPriority) < 0 {
-		// revertRegions cannot exceed the main region in the firstPriority.
+	if bs.cur.getPeersRateFromCache(bs.firstPriority) < bs.getMinRate(bs.firstPriority) &&
+		bs.cur.getPeersRateFromCache(bs.secondPriority) < bs.getMinRate(bs.secondPriority) {
 		return
 	}
 
@@ -1295,6 +1300,34 @@ func (bs *balanceSolver) decorateOperator(op *operator.Operator, isRevert bool, 
 		op.FinishedCounters = append(op.FinishedCounters,
 			hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), sourceLabel, "out-for-revert", dim),
 			hotDirectionCounter.WithLabelValues(typ, bs.rwTy.String(), targetLabel, "in-for-revert", dim))
+	}
+}
+
+func (bs *balanceSolver) logBestSolution() {
+	best := bs.best
+	if best == nil {
+		return
+	}
+
+	if len(best.revertRegions) > 0 {
+		// Log more information on solutions containing revertRegions
+		srcFirstRate, dstFirstRate := best.getExtremeLoad(bs.firstPriority)
+		srcSecondRate, dstSecondRate := best.getExtremeLoad(bs.secondPriority)
+		mainFirstRate := best.srcPeerStat.GetLoad(statistics.GetRegionStatKind(bs.rwTy, bs.firstPriority))
+		mainSecondRate := best.srcPeerStat.GetLoad(statistics.GetRegionStatKind(bs.rwTy, bs.secondPriority))
+		log.Info("use solution with revert regions",
+			zap.Uint64("src-store", best.srcStore.GetID()),
+			zap.Float64("src-first-rate", srcFirstRate),
+			zap.Float64("src-second-rate", srcSecondRate),
+			zap.Uint64("dst-store", best.dstStore.GetID()),
+			zap.Float64("dst-first-rate", dstFirstRate),
+			zap.Float64("dst-second-rate", dstSecondRate),
+			zap.Uint64("main-region", best.region.GetID()),
+			zap.Float64("main-first-rate", mainFirstRate),
+			zap.Float64("main-second-rate", mainSecondRate),
+			zap.Uint64("revert-regions", best.revertRegions[0].GetID()),
+			zap.Float64("peers-first-rate", best.getPeersRateFromCache(bs.firstPriority)),
+			zap.Float64("peers-second-rate", best.getPeersRateFromCache(bs.secondPriority)))
 	}
 }
 
