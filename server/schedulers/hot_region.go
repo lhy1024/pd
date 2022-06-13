@@ -351,8 +351,12 @@ type solution struct {
 }
 
 // getExtremeLoad returns the min load of the src store and the max load of the dst store.
+// If peersRate is negative, the direction is reversed.
 func (s *solution) getExtremeLoad(dim int) (src float64, dst float64) {
-	return s.srcStore.LoadPred.Min().Loads[dim], s.dstStore.LoadPred.Max().Loads[dim]
+	if s.getPeersRateFromCache(dim) >= 0 {
+		return s.srcStore.LoadPred.Min().Loads[dim], s.dstStore.LoadPred.Max().Loads[dim]
+	}
+	return s.srcStore.LoadPred.Max().Loads[dim], s.dstStore.LoadPred.Min().Loads[dim]
 }
 
 // getCurrentLoad returns the current load of the src store and the dst store.
@@ -963,21 +967,15 @@ func (bs *balanceSolver) isTolerance(dim int) bool {
 func (bs *balanceSolver) getHotDecRatioByPriorities(dim int) (isHot bool, decRatio float64) {
 	// we use DecRatio(Decline Ratio) to expect that the dst store's rate should still be less
 	// than the src store's rate after scheduling one peer.
-	getDecRate := func(a, b float64) float64 {
-		if a-b <= 0 {
-			return 1
-		}
-		return a - b
-	}
 	srcRate, dstRate := bs.cur.getExtremeLoad(dim)
 	peersRate := bs.cur.getPeersRateFromCache(dim)
 	// Rate may be negative after adding revertRegions, which should be regarded as moving from dst to src.
 	if peersRate >= 0 {
 		isHot = peersRate >= bs.getMinRate(dim)
-		decRatio = (dstRate + peersRate) / getDecRate(srcRate, peersRate)
+		decRatio = (dstRate + peersRate) / math.Max(srcRate-peersRate, 1)
 	} else {
 		isHot = -peersRate >= bs.getMinRate(dim)
-		decRatio = (srcRate - peersRate) / getDecRate(dstRate, -peersRate)
+		decRatio = (srcRate - peersRate) / math.Max(dstRate+peersRate, 1)
 	}
 	return
 }
