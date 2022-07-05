@@ -398,10 +398,10 @@ type balanceSolver struct {
 	opTy         opType
 	resourceTy   resourceType
 
-	cur  *solution
+	cur *solution
+
 	best *solution
 	ops  []*operator.Operator
-	infl statistics.Influence
 
 	maxSrc   *statistics.StoreLoad
 	minDst   *statistics.StoreLoad
@@ -519,9 +519,8 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 			return
 		}
 		if bs.cur.isAvailable() && bs.betterThan(bs.best) {
-			if newOps, newInfl := bs.buildOperators(); len(newOps) > 0 {
+			if newOps := bs.buildOperators(); len(newOps) > 0 {
 				bs.ops = newOps
-				bs.infl = *newInfl
 				clone := *bs.cur
 				bs.best = &clone
 			}
@@ -631,7 +630,22 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	default:
 		maxZombieDur = bs.sche.conf.GetStoreStatZombieDuration()
 	}
-	return bs.sche.tryAddPendingInfluence(bs.ops[0], bs.best.srcStore.GetID(), bs.best.dstStore.GetID(), bs.infl, maxZombieDur)
+
+	// main peer
+	srcStoreID := bs.best.srcStore.GetID()
+	dstStoreID := bs.best.dstStore.GetID()
+	infl := statistics.Influence{Loads: bs.cur.mainPeerStat.Loads, Count: 1}
+	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreID, dstStoreID, infl, maxZombieDur) {
+		return false
+	}
+	// revert peers
+	for i, revertPeerStat := range bs.best.revertPeersStat {
+		infl = statistics.Influence{Loads: revertPeerStat.Loads, Count: 1}
+		if !bs.sche.tryAddPendingInfluence(bs.ops[i+1], dstStoreID, srcStoreID, infl, maxZombieDur) {
+			return false
+		}
+	}
+	return true
 }
 
 // filterSrcStores compare the min rate and the ratio * expectation rate, if two dim rate is greater than
@@ -1164,9 +1178,9 @@ func (bs *balanceSolver) isReadyToBuild() bool {
 	return true
 }
 
-func (bs *balanceSolver) buildOperators() (ops []*operator.Operator, infl *statistics.Influence) {
+func (bs *balanceSolver) buildOperators() (ops []*operator.Operator) {
 	if !bs.isReadyToBuild() {
-		return nil, nil
+		return nil
 	}
 
 	srcStoreID := bs.cur.srcStore.GetID()
@@ -1197,28 +1211,20 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator, infl *stati
 	if err == nil {
 		bs.decorateOperator(currentOp, false, sourceLabel, targetLabel, typ, dim)
 		ops = []*operator.Operator{currentOp}
-		infl = &statistics.Influence{
-			Loads: append(bs.cur.mainPeerStat.Loads[:0:0], bs.cur.mainPeerStat.Loads...),
-			Count: 1,
-		}
-		for i, revertRegion := range bs.cur.revertRegions {
+		for _, revertRegion := range bs.cur.revertRegions {
 			currentOp, typ, err = createOperator(revertRegion, dstStoreID, srcStoreID)
 			if err != nil {
 				break
 			}
 			bs.decorateOperator(currentOp, true, targetLabel, sourceLabel, typ, dim)
 			ops = append(ops, currentOp)
-			for j, load := range bs.cur.revertPeersStat[i].Loads {
-				infl.Loads[j] += load
-			}
-			infl.Count++
 		}
 	}
 
 	if err != nil {
 		log.Debug("fail to create operator", zap.Stringer("rw-type", bs.rwTy), zap.Stringer("op-type", bs.opTy), errs.ZapError(err))
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), "create-operator-fail").Inc()
-		return nil, nil
+		return nil
 	}
 
 	return
