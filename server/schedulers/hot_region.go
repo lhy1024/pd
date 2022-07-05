@@ -331,13 +331,13 @@ func (h *hotScheduler) balanceHotWriteRegions(cluster schedule.Cluster) []*opera
 }
 
 type solution struct {
-	srcStore    *statistics.StoreLoadDetail
-	srcPeerStat *statistics.HotPeerStat
-	region      *core.RegionInfo // The region of the main balance effect. Relate srcPeerStat. srcStore -> dstStore
+	srcStore     *statistics.StoreLoadDetail
+	region       *core.RegionInfo // The region of the main balance effect. Relate mainPeerStat. srcStore -> dstStore
+	mainPeerStat *statistics.HotPeerStat
 
-	dstStore      *statistics.StoreLoadDetail
-	dstPeersStat  []*statistics.HotPeerStat
-	revertRegions []*core.RegionInfo // The regions to hedge back effects. Relate dstPeersStat. dstStore -> srcStore
+	dstStore        *statistics.StoreLoadDetail
+	revertRegions   []*core.RegionInfo // The regions to hedge back effects. Relate revertPeersStat. dstStore -> srcStore
+	revertPeersStat []*statistics.HotPeerStat
 
 	cachedPeersRate []float64
 
@@ -370,8 +370,8 @@ func (s *solution) calcPeersRate(rw statistics.RWType, dims ...int) {
 	s.cachedPeersRate = make([]float64, statistics.DimLen)
 	for _, dim := range dims {
 		kind := statistics.GetRegionStatKind(rw, dim)
-		peersRate := s.srcPeerStat.GetLoad(kind)
-		for _, revertPeer := range s.dstPeersStat {
+		peersRate := s.mainPeerStat.GetLoad(kind)
+		for _, revertPeer := range s.revertPeersStat {
 			peersRate -= revertPeer.GetLoad(kind)
 		}
 		s.cachedPeersRate[dim] = peersRate
@@ -549,14 +549,14 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 			hotSchedulerResultCounter.WithLabelValues("skip-uniform-store", strconv.FormatUint(srcStore.GetID(), 10)).Inc()
 			continue
 		}
-		for _, srcPeerStat := range bs.filterHotPeers(srcStore) {
-			if bs.cur.region = bs.getRegion(srcPeerStat, srcStoreID); bs.cur.region == nil {
+		for _, mainPeerStat := range bs.filterHotPeers(srcStore) {
+			if bs.cur.region = bs.getRegion(mainPeerStat, srcStoreID); bs.cur.region == nil {
 				continue
 			} else if bs.opTy == movePeer && bs.cur.region.GetApproximateSize() > bs.GetOpts().GetMaxMovableHotPeerSize() {
 				schedulerCounter.WithLabelValues(fmt.Sprintf("hot-region-%s", bs.rwTy), "hot_region_split").Inc()
 				continue
 			}
-			bs.cur.srcPeerStat = srcPeerStat
+			bs.cur.mainPeerStat = mainPeerStat
 
 			for _, dstStore := range bs.filterDstStores() {
 				bs.cur.dstStore = dstStore
@@ -574,18 +574,18 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 					//     * The current best solution contain revert regions.
 					schedulerCounter.WithLabelValues(bs.sche.GetName(), "search-revert-regions").Inc()
 					dstStoreID := dstStore.GetID()
-					for _, dstPeerStat := range bs.filterHotPeers(bs.cur.dstStore) {
-						revertRegion := bs.getRegion(dstPeerStat, dstStoreID)
+					for _, revertPeerStat := range bs.filterHotPeers(bs.cur.dstStore) {
+						revertRegion := bs.getRegion(revertPeerStat, dstStoreID)
 						if revertRegion == nil || revertRegion.GetID() == bs.cur.region.GetID() ||
 							!allowRevertRegion(revertRegion, srcStoreID) {
 							continue
 						}
-						bs.cur.dstPeersStat = []*statistics.HotPeerStat{dstPeerStat}
+						bs.cur.revertPeersStat = []*statistics.HotPeerStat{revertPeerStat}
 						bs.cur.revertRegions = []*core.RegionInfo{revertRegion}
 						bs.calcProgressiveRank()
 						tryUpdateBestSolution(isUniformFirstPriority)
 					}
-					bs.cur.dstPeersStat = nil
+					bs.cur.revertPeersStat = nil
 					bs.cur.revertRegions = nil
 				}
 			}
@@ -1021,7 +1021,7 @@ func (bs *balanceSolver) betterThan(old *solution) bool {
 		return false
 	}
 
-	if bs.cur.srcPeerStat != old.srcPeerStat {
+	if bs.cur.mainPeerStat != old.mainPeerStat {
 		// compare region
 		if bs.resourceTy == writeLeader {
 			return bs.cur.getPeersRateFromCache(bs.firstPriority) > old.getPeersRateFromCache(bs.firstPriority)
@@ -1150,14 +1150,14 @@ func stepRank(rk0 float64, step float64) func(float64) int64 {
 // 3. the region which owns the peer in the current solution is not nil, and its ID should equal to the peer's region ID
 func (bs *balanceSolver) isReadyToBuild() bool {
 	if !(bs.cur.srcStore != nil && bs.cur.dstStore != nil &&
-		bs.cur.srcPeerStat != nil && bs.cur.srcPeerStat.StoreID == bs.cur.srcStore.GetID() &&
-		bs.cur.region != nil && bs.cur.region.GetID() == bs.cur.srcPeerStat.ID()) {
+		bs.cur.mainPeerStat != nil && bs.cur.mainPeerStat.StoreID == bs.cur.srcStore.GetID() &&
+		bs.cur.region != nil && bs.cur.region.GetID() == bs.cur.mainPeerStat.ID()) {
 		return false
 	}
 	for i, revertRegion := range bs.cur.revertRegions {
-		dstPeerStat := bs.cur.dstPeersStat[i]
-		if !(dstPeerStat != nil && dstPeerStat.StoreID == bs.cur.dstStore.GetID() &&
-			revertRegion != nil && revertRegion.GetID() == dstPeerStat.ID()) {
+		revertPeerStat := bs.cur.revertPeersStat[i]
+		if !(revertPeerStat != nil && revertPeerStat.StoreID == bs.cur.dstStore.GetID() &&
+			revertRegion != nil && revertRegion.GetID() == revertPeerStat.ID()) {
 			return false
 		}
 	}
@@ -1198,7 +1198,7 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator, infl *stati
 		bs.decorateOperator(currentOp, false, sourceLabel, targetLabel, typ, dim)
 		ops = []*operator.Operator{currentOp}
 		infl = &statistics.Influence{
-			Loads: append(bs.cur.srcPeerStat.Loads[:0:0], bs.cur.srcPeerStat.Loads...),
+			Loads: append(bs.cur.mainPeerStat.Loads[:0:0], bs.cur.mainPeerStat.Loads...),
 			Count: 1,
 		}
 		for i, revertRegion := range bs.cur.revertRegions {
@@ -1208,7 +1208,7 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator, infl *stati
 			}
 			bs.decorateOperator(currentOp, true, targetLabel, sourceLabel, typ, dim)
 			ops = append(ops, currentOp)
-			for j, load := range bs.cur.dstPeersStat[i].Loads {
+			for j, load := range bs.cur.revertPeersStat[i].Loads {
 				infl.Loads[j] += load
 			}
 			infl.Count++
@@ -1313,8 +1313,8 @@ func (bs *balanceSolver) logBestSolution() {
 		// Log more information on solutions containing revertRegions
 		srcFirstRate, dstFirstRate := best.getExtremeLoad(bs.firstPriority)
 		srcSecondRate, dstSecondRate := best.getExtremeLoad(bs.secondPriority)
-		mainFirstRate := best.srcPeerStat.GetLoad(statistics.GetRegionStatKind(bs.rwTy, bs.firstPriority))
-		mainSecondRate := best.srcPeerStat.GetLoad(statistics.GetRegionStatKind(bs.rwTy, bs.secondPriority))
+		mainFirstRate := best.mainPeerStat.GetLoad(statistics.GetRegionStatKind(bs.rwTy, bs.firstPriority))
+		mainSecondRate := best.mainPeerStat.GetLoad(statistics.GetRegionStatKind(bs.rwTy, bs.secondPriority))
 		log.Info("use solution with revert regions",
 			zap.Uint64("src-store", best.srcStore.GetID()),
 			zap.Float64("src-first-rate", srcFirstRate),
