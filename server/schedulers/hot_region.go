@@ -515,10 +515,16 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 	}
 
 	bs.cur = &solution{}
-	tryUpdateBestSolution := func(isUniformFirstPriority bool) {
-		if bs.cur.progressiveRank == -1 && isUniformFirstPriority {
+	tryUpdateBestSolution := func(isUniformFirstPriority, isUniformSecondPriority bool) {
+		if isUniformFirstPriority && (bs.cur.progressiveRank == -1 || bs.cur.progressiveRank == -3) {
 			// Because region is available for src and dst, so stddev is the same for both, only need to calcurate one.
 			// If first priority dim is enough uniform, -1 is unnecessary and maybe lead to worse balance for second priority dim
+			hotSchedulerResultCounter.WithLabelValues("skip-uniform-store", strconv.FormatUint(bs.cur.dstStore.GetID(), 10)).Inc()
+			return
+		}
+		if isUniformSecondPriority && bs.cur.progressiveRank == -2 {
+			// Because region is available for src and dst, so stddev is the same for both, only need to calcurate one.
+			// If second priority dim is enough uniform, -2 is unnecessary and maybe lead to worse balance for first priority dim
 			hotSchedulerResultCounter.WithLabelValues("skip-uniform-store", strconv.FormatUint(bs.cur.dstStore.GetID(), 10)).Inc()
 			return
 		}
@@ -564,7 +570,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 			for _, dstStore := range bs.filterDstStores() {
 				bs.cur.dstStore = dstStore
 				bs.calcProgressiveRank()
-				tryUpdateBestSolution(isUniformFirstPriority)
+				tryUpdateBestSolution(isUniformFirstPriority, isUniformSecondPriority)
 
 				if searchRevertRegions && (bs.cur.progressiveRank >= -1 && bs.cur.progressiveRank <= 0) &&
 					(bs.best == nil || bs.best.progressiveRank >= -1 || len(bs.best.revertRegions) > 0) {
@@ -586,7 +592,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 						bs.cur.revertPeersStat = []*statistics.HotPeerStat{revertPeerStat}
 						bs.cur.revertRegions = []*core.RegionInfo{revertRegion}
 						bs.calcProgressiveRank()
-						tryUpdateBestSolution(isUniformFirstPriority)
+						tryUpdateBestSolution(isUniformFirstPriority, isUniformSecondPriority)
 					}
 					bs.cur.revertPeersStat = nil
 					bs.cur.revertRegions = nil
