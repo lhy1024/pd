@@ -594,7 +594,6 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 			}
 		}
 	}
-	bs.logBestSolution()
 	searchRevertRegions = bs.allowSearchRevertRegions()
 	bs.sche.searchRevertRegions[bs.resourceTy] = searchRevertRegions
 	if searchRevertRegions {
@@ -649,6 +648,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 			return false
 		}
 	}
+	bs.logBestSolution()
 	return true
 }
 
