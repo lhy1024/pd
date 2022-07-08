@@ -33,7 +33,7 @@ var _ = Suite(&testHotSchedulerSuite{})
 
 func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 	// load file
-	path := "/data2/lhy1024/1.txt"
+	path := "/data2/lhy1024/2.txt"
 	b, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Println(err)
