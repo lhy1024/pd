@@ -659,6 +659,18 @@ func (s *solution) compareDstStore(detail1, detail2 *statistics.StoreLoadDetail)
 	return 0
 }
 
+func (s *solution) logPriority(dim int, isMore bool) {
+	name := dimToString(dim)
+	log.Info(name, zap.Float64("rate", s.getPeerRate(s.rwTy, dim)), zap.Bool("is hot", s.isHot[dim]), zap.Float64("dec ratio", s.decRatio[dim]), zap.String("level", s.levels[dim].toString()))
+	if isMore {
+		srcRate, dstRate := s.getExtremeLoad(dim)
+		peerRate := s.getPeerRate(s.rwTy, dim)
+		log.Info("isHot", zap.Float64("peer rate", peerRate), zap.Float64("min rate", s.getMinRate(dim)))
+		log.Info("numerator", zap.Float64("dst", dstRate), zap.Float64("peer", peerRate), zap.Float64("dst + peer", dstRate+peerRate))
+		log.Info("denominator", zap.Float64("src", srcRate), zap.Float64("peer", peerRate), zap.Float64("src - peer", srcRate-peerRate))
+	}
+}
+
 func stepRank(rk0 float64, step float64) func(float64) int64 {
 	return func(rate float64) int64 {
 		return int64((rate - rk0) / step)

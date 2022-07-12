@@ -27,7 +27,6 @@ import (
 	"github.com/tikv/pd/server/schedule"
 	"github.com/tikv/pd/server/statistics"
 	"github.com/tikv/pd/server/storage"
-	"github.com/tikv/pd/server/versioninfo"
 	"go.uber.org/zap"
 )
 
@@ -39,8 +38,8 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 	rw := statistics.Read
 	op := transferLeader
 	src := uint64(1)
-	dst := uint64(5)
-	region := uint64(12222)
+	dst := uint64(6)
+	region := uint64(47404166)
 	// load file
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -64,10 +63,10 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 	hb.(*hotScheduler).conf.SetDstToleranceRatio(1)
 	hb.(*hotScheduler).conf.SetSrcToleranceRatio(1)
 	hb.(*hotScheduler).conf.SetStrictPickingStore(false)
+	hb.(*hotScheduler).conf.ReadPriorities = []string{dimToString(statistics.QueryDim), dimToString(statistics.ByteDim)}
 
 	tc := mockcluster.NewCluster(ctx, opt)
 	tc.SetHotRegionCacheHitsThreshold(0)
-	tc.SetClusterVersion(versioninfo.MinSupportedVersion(versioninfo.Version4_0))
 
 	var regions []testRegionInfo
 	var stores statistics.StoreHotPeersStat
@@ -105,9 +104,10 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 	addRegionInfo(tc, rw, regions)
 	hb.Schedule(tc, false) // prepare
 	clearPendingInfluence(hb.(*hotScheduler))
-
+	log.Info("==================================")
 	// check input
 	bs := newBalanceSolver(hb.(*hotScheduler), tc, rw, op)
+	bs.cur = bs.buildSolution()
 	srcStore, ok := bs.filterSrcStores()[src]
 	if !ok {
 		log.Info("src store not found in available stores", zap.Uint64s("available", toSlice(bs.filterSrcStores())))
@@ -127,15 +127,16 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 		return
 	}
 	bs.cur.dstStore = dstStore
+	// calculate
 	bs.cur.calcProgressiveRank()
 	if bs.filterUniformStore() {
 		log.Info("uniform store")
 		return
 	}
-	log.Info("result:", zap.Int64("rank", bs.cur.progressiveRank),
-		zap.Bool("query is hot", bs.cur.isHot[statistics.QueryDim]), zap.Float64("dec ratio", bs.cur.decRatio[statistics.QueryDim]), zap.String("level", bs.cur.levels[statistics.QueryDim].toString()),
-		zap.Bool("byte is hot", bs.cur.isHot[statistics.ByteDim]), zap.Float64("dec ratio", bs.cur.decRatio[statistics.ByteDim]), zap.String("level", bs.cur.levels[statistics.ByteDim].toString()),
-	)
+	log.Info("result:", zap.Uint64("src", src), zap.Uint64("dst", dst), zap.Uint64("region", region), zap.Int64("rank", bs.cur.progressiveRank))
+	bs.cur.logPriority(statistics.QueryDim, true /*is more*/)
+	bs.cur.logPriority(statistics.ByteDim, true /*is more*/)
+
 }
 
 func toSlice(stores map[uint64]*statistics.StoreLoadDetail) []uint64 {

@@ -36,6 +36,7 @@ import (
 	"go.uber.org/zap"
 )
 
+//todo dim.go
 const (
 	// BytePriority indicates hot-region-scheduler prefer byte dim
 	BytePriority = "byte"
