@@ -21,19 +21,27 @@ import (
 	"os"
 
 	. "github.com/pingcap/check"
+	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/mock/mockcluster"
 	"github.com/tikv/pd/server/config"
 	"github.com/tikv/pd/server/schedule"
 	"github.com/tikv/pd/server/statistics"
 	"github.com/tikv/pd/server/storage"
 	"github.com/tikv/pd/server/versioninfo"
+	"go.uber.org/zap"
 )
 
 var _ = Suite(&testHotSchedulerSuite{})
 
 func (s *testHotSchedulerSuite) TestFromFile(c *C) {
-	// load file
+	// input
 	path := "/data2/lhy1024/2.txt"
+	rw := statistics.Read
+	op := transferLeader
+	src := uint64(1)
+	dst := uint64(5)
+	region := uint64(12222)
+	// load file
 	b, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Println(err)
@@ -45,32 +53,46 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(len(infos.AsLeader))
 
 	// start cluster
-	rw := statistics.Read
 	statistics.Denoising = false
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	opt := config.NewTestOptions()
-	hb, err := schedule.CreateScheduler(statistics.Write.String(), schedule.NewOperatorController(ctx, nil, nil), storage.NewStorageWithMemoryBackend(), nil)
+	hb, err := schedule.CreateScheduler(statistics.Read.String(), schedule.NewOperatorController(ctx, nil, nil), storage.NewStorageWithMemoryBackend(), nil)
 	c.Assert(err, IsNil)
 	hb.(*hotScheduler).conf.SetDstToleranceRatio(1)
 	hb.(*hotScheduler).conf.SetSrcToleranceRatio(1)
+	hb.(*hotScheduler).conf.SetStrictPickingStore(false)
 
 	tc := mockcluster.NewCluster(ctx, opt)
 	tc.SetHotRegionCacheHitsThreshold(0)
 	tc.SetClusterVersion(versioninfo.MinSupportedVersion(versioninfo.Version4_0))
 
 	var regions []testRegionInfo
-	for storeID, store := range infos.AsLeader {
+	var stores statistics.StoreHotPeersStat
+	if op == transferLeader {
+		stores = infos.AsLeader
+	} else {
+		stores = infos.AsPeer
+	}
+
+	for storeID, store := range stores {
 		tc.AddRegionStore(storeID, store.Count)
 		if rw == statistics.Read {
-			tc.UpdateStorageReadBytes(storeID, uint64(store.StoreByteRate))
-			tc.UpdateStorageReadKeys(storeID, uint64(store.StoreKeyRate))
-			tc.UpdateStorageReadQuery(storeID, uint64(store.StoreQueryRate))
+			tc.UpdateStorageReadBytes(storeID, uint64(store.StoreByteRate)*statistics.StoreHeartBeatReportInterval)
+			tc.UpdateStorageReadKeys(storeID, uint64(store.StoreKeyRate)*statistics.StoreHeartBeatReportInterval)
+			tc.UpdateStorageReadQuery(storeID, uint64(store.StoreQueryRate)*statistics.StoreHeartBeatReportInterval)
 		}
 		for _, region := range store.Stats {
+			stores := []uint64{ // leaderID
+				storeID,
+			}
+			for _, peerStoreID := range region.Stores {
+				if peerStoreID != storeID {
+					stores = append(stores, peerStoreID)
+				}
+			}
 			regions = append(regions, testRegionInfo{
 				id:        region.RegionID,
 				peers:     region.Stores,
@@ -81,6 +103,45 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 		}
 	}
 	addRegionInfo(tc, rw, regions)
-	ops, _ := hb.Schedule(tc, false)
-	c.Check(ops, HasLen, 0)
+	hb.Schedule(tc, false) // prepare
+	clearPendingInfluence(hb.(*hotScheduler))
+
+	// check input
+	bs := newBalanceSolver(hb.(*hotScheduler), tc, rw, op)
+	srcStore, ok := bs.filterSrcStores()[src]
+	if !ok {
+		log.Info("src store not found in available stores", zap.Uint64s("available", toSlice(bs.filterSrcStores())))
+		return
+	}
+	srcPeerStat, ok := bs.filterHotPeers(srcStore)[region]
+	if !ok {
+		log.Info("region not found in hot peers of src store")
+		return
+	}
+	bs.cur.region = bs.getRegion(srcPeerStat, src)
+	bs.cur.srcStore = srcStore
+	bs.cur.hotPeerStat = srcPeerStat
+	dstStore, ok := bs.filterDstStores()[dst]
+	if !ok {
+		log.Info("dst store not found in available stores", zap.Uint64s("available", toSlice(bs.filterDstStores())))
+		return
+	}
+	bs.cur.dstStore = dstStore
+	bs.cur.calcProgressiveRank()
+	if bs.filterUniformStore() {
+		log.Info("uniform store")
+		return
+	}
+	log.Info("result:", zap.Int64("rank", bs.cur.progressiveRank),
+		zap.Bool("query is hot", bs.cur.isHot[statistics.QueryDim]), zap.Float64("dec ratio", bs.cur.decRatio[statistics.QueryDim]), zap.String("level", bs.cur.levels[statistics.QueryDim].toString()),
+		zap.Bool("byte is hot", bs.cur.isHot[statistics.ByteDim]), zap.Float64("dec ratio", bs.cur.decRatio[statistics.ByteDim]), zap.String("level", bs.cur.levels[statistics.ByteDim].toString()),
+	)
+}
+
+func toSlice(stores map[uint64]*statistics.StoreLoadDetail) []uint64 {
+	ret := make([]uint64, 0)
+	for store := range stores {
+		ret = append(ret, store)
+	}
+	return ret
 }
