@@ -37,9 +37,10 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 	path := "/data2/lhy1024/2.txt"
 	rw := statistics.Read
 	op := transferLeader
-	src := uint64(1)
-	dst := uint64(6)
-	region := uint64(47404166)
+	src := uint64(5)
+	dst := uint64(4)
+	region := uint64(47192363)
+
 	// load file
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -105,8 +106,12 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 	hb.Schedule(tc, false) // prepare
 	clearPendingInfluence(hb.(*hotScheduler))
 	log.Info("==================================")
-	// check input
-	bs := newBalanceSolver(hb.(*hotScheduler), tc, rw, op)
+	trySchedule(hb.(*hotScheduler), tc, rw, transferLeader, src, dst, region)
+	trySchedule(hb.(*hotScheduler), tc, rw, movePeer, src, dst, region) // read is the same between leader and peer
+}
+
+func trySchedule(hb *hotScheduler, tc *mockcluster.Cluster, rw statistics.RWType, op opType, src, dst, region uint64) {
+	bs := newBalanceSolver(hb, tc, rw, op)
 	bs.cur = bs.buildSolution()
 	srcStore, ok := bs.filterSrcStores()[src]
 	if !ok {
@@ -133,10 +138,10 @@ func (s *testHotSchedulerSuite) TestFromFile(c *C) {
 		log.Info("uniform store")
 		return
 	}
+	//bs.cur.betterThan(bs.cur.srcStore, bs.cur.dstStore)
 	log.Info("result:", zap.Uint64("src", src), zap.Uint64("dst", dst), zap.Uint64("region", region), zap.Int64("rank", bs.cur.progressiveRank))
 	bs.cur.logPriority(statistics.QueryDim, true /*is more*/)
 	bs.cur.logPriority(statistics.ByteDim, true /*is more*/)
-
 }
 
 func toSlice(stores map[uint64]*statistics.StoreLoadDetail) []uint64 {
