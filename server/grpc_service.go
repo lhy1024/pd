@@ -593,6 +593,7 @@ func (s *GrpcServer) StoreHeartbeat(ctx context.Context, request *pdpb.StoreHear
 	fn := func(ctx context.Context, client *grpc.ClientConn) (interface{}, error) {
 		return pdpb.NewPDClient(client).StoreHeartbeat(ctx, request)
 	}
+	log.Info("store heartbeat", zap.Stringer("request", request))
 	if rsp, err := s.unaryMiddleware(ctx, request.GetHeader(), fn); err != nil {
 		return nil, err
 	} else if rsp != nil {
@@ -629,6 +630,7 @@ func (s *GrpcServer) StoreHeartbeat(ctx context.Context, request *pdpb.StoreHear
 
 		err := rc.HandleStoreHeartbeat(request.GetStats())
 		if err != nil {
+			log.Info("handle store heartbeat failed", zap.Uint64("store", storeID), zap.Error(err))
 			return &pdpb.StoreHeartbeatResponse{
 				Header: s.wrapErrorToHeader(pdpb.ErrorType_UNKNOWN,
 					err.Error()),
