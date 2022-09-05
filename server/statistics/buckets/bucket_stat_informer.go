@@ -29,7 +29,7 @@ import (
 var minHotThresholds = [statistics.RegionStatCount]uint64{
 	statistics.RegionReadBytes:  8 * units.KiB,
 	statistics.RegionReadKeys:   128,
-	statistics.RegionReadQuery:  128,
+	statistics.RegionReadQuery:  16,
 	statistics.RegionWriteBytes: 1 * units.KiB,
 	statistics.RegionWriteKeys:  32,
 	statistics.RegionWriteQuery: 32,
