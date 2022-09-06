@@ -631,9 +631,10 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 				continue
 			}
 			bs.cur.mainPeerStat = mainPeerStat
-
+			stores := make([]uint64, 0)
 			for _, dstStore := range bs.filterDstStores() {
 				bs.cur.dstStore = dstStore
+				stores = append(stores, dstStore)
 				bs.calcProgressiveRank()
 				tryUpdateBestSolution()
 
@@ -664,6 +665,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 					bs.cur.revertRegion = nil
 				}
 			}
+			hotLogger.Info("bs.filterDstStores()", zap.Uint64s("dst stores", stores))
 		}
 	}
 	searchRevertRegions = bs.allowSearchRevertRegions()
@@ -1402,7 +1404,13 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator) {
 	}
 
 	if err != nil {
-		hotLogger.Warn("fail to create operator", zap.Stringer("rw-type", bs.rwTy), zap.Stringer("op-type", bs.opTy), errs.ZapError(err))
+		hotLogger.Warn("fail to create operator",
+			zap.Stringer("rw-type", bs.rwTy),
+			zap.Stringer("op-type", bs.opTy),
+			zap.Uint64("src store", srcStoreID),
+			zap.Uint64("dst store", dstStoreID),
+			zap.Uint64("region", bs.cur.region.GetID()),
+			errs.ZapError(err))
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), "create-operator-fail").Inc()
 		return nil
 	}
