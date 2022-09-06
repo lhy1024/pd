@@ -634,7 +634,7 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 			stores := make([]uint64, 0)
 			for _, dstStore := range bs.filterDstStores() {
 				bs.cur.dstStore = dstStore
-				stores = append(stores, dstStore)
+				stores = append(stores, dstStore.GetID())
 				bs.calcProgressiveRank()
 				tryUpdateBestSolution()
 
