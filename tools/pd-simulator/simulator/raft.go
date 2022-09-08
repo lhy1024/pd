@@ -16,11 +16,14 @@ package simulator
 
 import (
 	"context"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/syncutil"
 	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/statistics"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/cases"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/simutil"
 	"go.uber.org/zap"
@@ -31,12 +34,14 @@ type RaftEngine struct {
 	syncutil.RWMutex
 	regionsInfo       *core.RegionsInfo
 	conn              *Connection
+	client            Client
 	regionChange      map[uint64][]uint64
 	schedulerStats    *schedulerStatistics
 	regionSplitSize   int64
 	regionSplitKeys   int64
 	storeConfig       *SimConfig
 	useTiDBEncodedKey bool
+	startTime         time.Time
 }
 
 // NewRaftEngine creates the initialized raft with the configuration.
@@ -70,17 +75,26 @@ func NewRaftEngine(conf *cases.Case, conn *Connection, storeConfig *SimConfig) *
 		if i < len(conf.Regions)-1 {
 			meta.EndKey = []byte(splitKeys[i])
 		}
+		regionSize := storeConfig.Coprocessor.RegionSplitSize
 		regionInfo := core.NewRegionInfo(
 			meta,
 			region.Leader,
-			core.SetApproximateSize(region.Size),
-			core.SetApproximateKeys(region.Keys),
+			core.SetApproximateSize(int64(regionSize)),
+			core.SetApproximateKeys(int64(storeConfig.Coprocessor.RegionSplitKey)),
+			core.SetReadBytes(uint64(region.Loads[statistics.RegionReadBytes])),
+			core.SetReadKeys(uint64(region.Loads[statistics.RegionReadKeys])),
+			core.SetWrittenBytes(uint64(region.Loads[statistics.RegionWriteBytes])),
+			core.SetWrittenKeys(uint64(region.Loads[statistics.RegionWriteKeys])),
+			core.SetQueryNum(uint64(region.Loads[statistics.RegionReadQuery]), uint64(region.Loads[statistics.RegionWriteQuery])),
 		)
 		r.SetRegion(regionInfo)
 		peers := region.Peers
-		regionSize := uint64(region.Size)
 		for _, peer := range peers {
-			r.conn.Nodes[peer.StoreId].incUsedSize(regionSize)
+			node, ok := r.conn.Nodes[peer.StoreId]
+			if !ok {
+				log.Fatal("unknown store id", zap.Uint64("store id", peer.StoreId))
+			}
+			node.incUsedSize(uint64(regionSize))
 		}
 	}
 
@@ -150,6 +164,11 @@ func (r *RaftEngine) stepSplit(region *core.RegionInfo) {
 		core.WithIncVersion(),
 		core.SetApproximateKeys(region.GetApproximateKeys()/2),
 		core.SetApproximateSize(region.GetApproximateSize()/2),
+		core.SetReadBytes(region.GetBytesRead()/2),
+		core.SetReadKeys(region.GetKeysRead()/2),
+		core.SetWrittenBytes(region.GetBytesWritten()/2),
+		core.SetWrittenKeys(region.GetKeysWritten()/2),
+		core.SetQueryNum(region.GetReadQueryNum()/2, region.GetWriteQueryNum()/2),
 		core.WithPendingPeers(nil),
 		core.WithDownPeers(nil),
 		core.WithEndKey(splitKey),
@@ -158,6 +177,11 @@ func (r *RaftEngine) stepSplit(region *core.RegionInfo) {
 		core.WithIncVersion(),
 		core.SetApproximateKeys(region.GetApproximateKeys()/2),
 		core.SetApproximateSize(region.GetApproximateSize()/2),
+		core.SetReadBytes(region.GetBytesRead()/2),
+		core.SetReadKeys(region.GetKeysRead()/2),
+		core.SetWrittenBytes(region.GetBytesWritten()/2),
+		core.SetWrittenKeys(region.GetKeysWritten()/2),
+		core.SetQueryNum(region.GetReadQueryNum()/2, region.GetWriteQueryNum()/2),
 		core.WithStartKey(splitKey),
 	)
 

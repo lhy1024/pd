@@ -24,6 +24,9 @@ import (
 	"github.com/docker/go-units"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/log"
+	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/statistics"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/cases"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/info"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/simutil"
@@ -32,7 +35,6 @@ import (
 
 const (
 	storeHeartBeatPeriod  = 10
-	regionHeartBeatPeriod = 60
 	compactionDelayPeriod = 600
 )
 
@@ -54,7 +56,7 @@ type Node struct {
 }
 
 // NewNode returns a Node.
-func NewNode(s *cases.Store, pdAddr string, ioRate int64) (*Node, error) {
+func NewNode(s *cases.Store, pdAddr string, config *SimConfig) (*Node, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &metapb.Store{
 		Id:      s.ID,
@@ -66,13 +68,27 @@ func NewNode(s *cases.Store, pdAddr string, ioRate int64) (*Node, error) {
 	stats := &info.StoreStats{
 		StoreStats: pdpb.StoreStats{
 			StoreId:   s.ID,
-			Capacity:  s.Capacity,
-			Available: s.Available,
+			Capacity:  uint64(config.RaftStore.Capacity),
+			Available: uint64(config.RaftStore.Available),
 			StartTime: uint32(time.Now().Unix()),
 		},
 	}
 	tag := fmt.Sprintf("store %d", s.ID)
-	client, receiveRegionHeartbeatCh, err := NewClient(pdAddr, tag)
+	var (
+		client                   Client
+		receiveRegionHeartbeatCh <-chan *pdpb.RegionHeartbeatResponse
+		err                      error
+	)
+
+	// Client should wait if PD server is not ready.
+	for i := 0; i < maxInitClusterRetries; i++ {
+		client, receiveRegionHeartbeatCh, err = NewClient(pdAddr, tag)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+
 	if err != nil {
 		cancel()
 		return nil, err
@@ -85,7 +101,7 @@ func NewNode(s *cases.Store, pdAddr string, ioRate int64) (*Node, error) {
 		cancel:                   cancel,
 		tasks:                    make(map[uint64]Task),
 		receiveRegionHeartbeatCh: receiveRegionHeartbeatCh,
-		ioRate:                   ioRate * units.MiB,
+		ioRate:                   config.StoreIOMBPerSecond * units.MiB,
 		tick:                     uint64(rand.Intn(storeHeartBeatPeriod)),
 	}, nil
 }
@@ -152,10 +168,14 @@ func (n *Node) stepTask() {
 }
 
 func (n *Node) stepHeartBeat() {
-	if n.tick%storeHeartBeatPeriod == 0 {
+	config := n.raftEngine.storeConfig
+
+	period := uint64(config.RaftStore.StoreHeartBeatInterval.Duration / config.SimTickInterval.Duration)
+	if n.tick%period == 0 {
 		n.storeHeartBeat()
 	}
-	if n.tick%regionHeartBeatPeriod == 0 {
+	period = uint64(config.RaftStore.RegionHeartBeatInterval.Duration / config.SimTickInterval.Duration)
+	if n.tick%period == 0 {
 		n.regionHeartBeat()
 	}
 }
@@ -171,13 +191,53 @@ func (n *Node) storeHeartBeat() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(n.ctx, pdTimeout)
+	n.collectLoad()
 	err := n.client.StoreHeartbeat(ctx, &n.stats.StoreStats)
 	if err != nil {
 		simutil.Logger.Info("report heartbeat error",
 			zap.Uint64("node-id", n.GetId()),
 			zap.Error(err))
 	}
+	log.Debug("updateStoreReadLoads", zap.Uint64("store id", n.Id),
+		zap.Uint64("byte", n.stats.GetBytesRead()),
+		zap.Uint64("key", n.stats.GetKeysRead()),
+		zap.Uint64("query", core.GetReadQueryNum(n.stats.GetQueryStats())),
+		zap.Error(err))
 	cancel()
+}
+
+func (n *Node) collectLoad() {
+	storeReadBytes, storeReadKeys, storeReadQueryNum := uint64(0), uint64(0), uint64(0)
+	storeWriteBytes, storeWriteKeys, storeWriteQueryNum := uint64(0), uint64(0), uint64(0)
+	hotPeers := make([]*pdpb.PeerStat, 0)
+	regions := n.raftEngine.GetRegions()
+	for _, region := range regions {
+		if region.GetLeader() != nil && region.GetLeader().GetStoreId() == n.Id {
+			storeReadBytes += region.GetBytesRead()
+			storeReadKeys += region.GetKeysRead()
+			storeReadQueryNum += region.GetReadQueryNum()
+			storeWriteBytes += region.GetBytesWritten()
+			storeWriteKeys += region.GetKeysWritten()
+			storeWriteQueryNum += region.GetWriteQueryNum()
+			if region.GetBytesRead()/storeHeartBeatPeriod >= uint64(statistics.MinHotThresholds[statistics.RegionReadBytes]) ||
+				region.GetKeysRead()/storeHeartBeatPeriod >= uint64(statistics.MinHotThresholds[statistics.RegionReadKeys]) ||
+				region.GetReadQueryNum()/storeHeartBeatPeriod >= uint64(statistics.MinHotThresholds[statistics.RegionReadQuery]) {
+				hotPeers = append(hotPeers, &pdpb.PeerStat{
+					RegionId:   region.GetID(),
+					ReadBytes:  region.GetBytesRead(),
+					ReadKeys:   region.GetKeysRead(),
+					QueryStats: core.RandomKindReadQuery(region.GetReadQueryNum()),
+				})
+			}
+		}
+	}
+	now := time.Now().Second()
+	n.stats.StoreStats.Interval = &pdpb.TimeInterval{
+		StartTimestamp: uint64(now - storeHeartBeatPeriod), EndTimestamp: uint64(now)}
+	n.stats.StoreStats.BytesRead = storeReadBytes
+	n.stats.StoreStats.KeysRead = storeReadKeys
+	n.stats.StoreStats.QueryStats = core.RandomKindReadQuery(storeReadQueryNum)
+	n.stats.StoreStats.PeerStats = hotPeers
 }
 
 func (n *Node) compaction() {

@@ -104,6 +104,7 @@ func (c *client) initClusterID() error {
 		members, err := c.getMembers(ctx)
 		if err != nil || members.GetHeader() == nil {
 			simutil.Logger.Error("failed to get cluster id", zap.String("tag", c.tag), zap.Error(err))
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		c.clusterID = members.GetHeader().GetClusterId()

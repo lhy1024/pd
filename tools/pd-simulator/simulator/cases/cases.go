@@ -15,6 +15,8 @@
 package cases
 
 import (
+	"sort"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/pd/server/core"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/info"
@@ -31,6 +33,29 @@ type Store struct {
 	LeaderWeight float32
 	RegionWeight float32
 	Version      string
+	Loads        []float64
+}
+
+type storeInfo struct {
+	storeID    uint64
+	simulateID uint64
+	leaderNum  int
+	peerNum    int
+}
+
+type storeInfos []*storeInfo
+
+func (s storeInfos) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+func (s storeInfos) Len() int           { return len(s) }
+func (s storeInfos) Less(i, j int) bool { return s[i].peerNum < s[j].peerNum }
+
+func sortStoreInfos(ss map[uint64]*storeInfo) storeInfos {
+	res := make(storeInfos, 0)
+	for _, s := range ss {
+		res = append(res, s)
+	}
+	sort.Sort(res)
+	return res
 }
 
 // Region is used to simulate a region.
@@ -40,6 +65,7 @@ type Region struct {
 	Leader *metapb.Peer
 	Size   int64
 	Keys   int64
+	Loads  []float64
 }
 
 // CheckerFunc checks if the scheduler is finished.
@@ -91,6 +117,7 @@ var CaseMap = map[string]func() *Case{
 	"region-split":             newRegionSplit,
 	"region-merge":             newRegionMerge,
 	"hot-read":                 newHotRead,
+	"hot-read-from-file":       newHotReadFromFile,
 	"hot-write":                newHotWrite,
 	"makeup-down-replicas":     newMakeupDownReplicas,
 	"import-data":              newImportData,

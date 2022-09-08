@@ -68,3 +68,13 @@ type DeleteNodesDescriptor struct {
 func (w *DeleteNodesDescriptor) Type() string {
 	return "delete-nodes"
 }
+
+// CheckSchedulerDescriptor ...
+type CheckSchedulerDescriptor struct {
+	Step func(tick int64) uint64
+}
+
+// Type implements the EventDescriptor interface.
+func (w *CheckSchedulerDescriptor) Type() string {
+	return "check-scheduler-until-hot-region"
+}

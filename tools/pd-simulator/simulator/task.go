@@ -148,6 +148,11 @@ func (m *mergeRegion) Step(r *RaftEngine) {
 		core.SetRegionVersion(epoch.Version),
 		core.SetApproximateSize(targetRegion.GetApproximateSize()+region.GetApproximateSize()),
 		core.SetApproximateKeys(targetRegion.GetApproximateKeys()+region.GetApproximateKeys()),
+		core.SetReadBytes(targetRegion.GetBytesRead()+region.GetBytesRead()),
+		core.SetReadKeys(targetRegion.GetKeysRead()+region.GetKeysRead()),
+		core.SetWrittenBytes(targetRegion.GetBytesWritten()+region.GetBytesWritten()),
+		core.SetWrittenKeys(targetRegion.GetKeysWritten()+region.GetKeysWritten()),
+		core.SetQueryNum(targetRegion.GetReadQueryNum()+region.GetReadQueryNum(), targetRegion.GetWriteQueryNum()+region.GetWriteQueryNum()),
 	)
 	r.SetRegion(mergeRegion)
 	r.recordRegionChange(mergeRegion)

@@ -202,3 +202,27 @@ func RandomKindWriteQuery(queryWrite uint64) *pdpb.QueryStats {
 		return &pdpb.QueryStats{}
 	}
 }
+
+func MergeQueryStat(q1, q2 *pdpb.QueryStats) *pdpb.QueryStats {
+	if q1 == nil && q2 == nil {
+		return &pdpb.QueryStats{}
+	}
+	if q1 == nil {
+		return q2
+	}
+	if q2 == nil {
+		return q1
+	}
+	q2.GC += q1.GC
+	q2.Get += q1.Get
+	q2.Scan += q1.Scan
+	q2.Coprocessor += q1.Coprocessor
+	q2.Delete += q1.Delete
+	q2.DeleteRange += q1.DeleteRange
+	q2.Put += q1.Put
+	q2.Prewrite += q1.Prewrite
+	q2.AcquirePessimisticLock += q1.AcquirePessimisticLock
+	q2.Commit += q1.Commit
+	q2.Rollback += q1.Rollback
+	return q2
+}

@@ -545,7 +545,6 @@ func hotItem(newItem, oldItem *HotPeerStat) {
 		newItem.AntiCount = oldItem.AntiCount
 	}
 	newItem.allowInherited = true
-
 }
 
 func initItem(item *HotPeerStat) {
