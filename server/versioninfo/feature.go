@@ -55,7 +55,7 @@ var featuresDict = map[Feature]string{
 	Version3_0:           "3.0.0",
 	Version4_0:           "4.0.0",
 	Version5_0:           "5.0.0",
-	ConfChangeV2:         "5.0.0",
+	ConfChangeV2:         "7.0.0", // skip joint consensus
 	HotScheduleWithQuery: "5.2.0",
 }
 

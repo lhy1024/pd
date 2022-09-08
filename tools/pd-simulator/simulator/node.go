@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-	"github.com/tikv/pd/pkg/ratelimit"
 	"github.com/tikv/pd/server/core"
 	"github.com/tikv/pd/server/statistics"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/cases"
