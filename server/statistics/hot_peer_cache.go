@@ -43,7 +43,8 @@ const (
 	hotRegionAntiCount = 2
 )
 
-var minHotThresholds = [RegionStatCount]float64{
+// MinHotThresholds are min threshold of hot peers
+var MinHotThresholds = [RegionStatCount]float64{
 	RegionWriteBytes: 1 * units.KiB,
 	RegionWriteKeys:  32,
 	RegionWriteQuery: 32,
@@ -277,7 +278,7 @@ func (f *hotPeerCache) calcHotThresholds(storeID uint64) []float64 {
 	statKinds := f.kind.RegionStats()
 	mins := make([]float64, len(statKinds))
 	for i, k := range statKinds {
-		mins[i] = minHotThresholds[k]
+		mins[i] = MinHotThresholds[k]
 	}
 	tn, ok := f.peersOfStore[storeID]
 	if !ok || tn.Len() < TopNN {

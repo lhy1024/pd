@@ -362,7 +362,7 @@ func TestUpdateHotPeerStat(t *testing.T) {
 
 func TestThresholdWithUpdateHotPeerStat(t *testing.T) {
 	re := require.New(t)
-	byteRate := minHotThresholds[RegionReadBytes] * 2
+	byteRate := MinHotThresholds[RegionReadBytes] * 2
 	expectThreshold := byteRate * HotThresholdRatio
 	testMetrics(re, 120., byteRate, expectThreshold)
 	testMetrics(re, 60., byteRate, expectThreshold)
@@ -374,7 +374,7 @@ func TestThresholdWithUpdateHotPeerStat(t *testing.T) {
 func testMetrics(re *require.Assertions, interval, byteRate, expectThreshold float64) {
 	cache := NewHotPeerCache(Read)
 	storeID := uint64(1)
-	re.GreaterOrEqual(byteRate, minHotThresholds[RegionReadBytes])
+	re.GreaterOrEqual(byteRate, MinHotThresholds[RegionReadBytes])
 	for i := uint64(1); i < TopNN+10; i++ {
 		var oldItem *HotPeerStat
 		for {
@@ -398,7 +398,7 @@ func testMetrics(re *require.Assertions, interval, byteRate, expectThreshold flo
 		}
 		thresholds := cache.calcHotThresholds(storeID)
 		if i < TopNN {
-			re.Equal(minHotThresholds[RegionReadBytes], thresholds[RegionReadBytes])
+			re.Equal(MinHotThresholds[RegionReadBytes], thresholds[RegionReadBytes])
 		} else {
 			re.Equal(expectThreshold, thresholds[RegionReadBytes])
 		}
