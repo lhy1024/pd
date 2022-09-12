@@ -903,6 +903,9 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*statistics.StoreLoadDetai
 			filter.NewSpecialUseFilter(bs.sche.GetName(), filter.SpecialUseHotRegion),
 			filter.NewPlacementSafeguard(bs.sche.GetName(), bs.GetOpts(), bs.GetBasicCluster(), bs.GetRuleManager(), bs.cur.region, srcStore),
 		}
+		if bs.cur.region.GetLeader().GetStoreId() == bs.cur.srcStore.GetID() { // move leader
+			filters = append(filters, &filter.StoreStateFilter{ActionScope: bs.sche.GetName(), TransferLeader: true})
+		}
 
 		for _, detail := range bs.stLoadDetail {
 			candidates = append(candidates, detail)
@@ -1404,6 +1407,7 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator) {
 	if err != nil {
 		hotLogger.Warn("fail to create operator", zap.Stringer("rw-type", bs.rwTy), zap.Stringer("op-type", bs.opTy), errs.ZapError(err))
 		schedulerCounter.WithLabelValues(bs.sche.GetName(), "create-operator-fail").Inc()
+		bs.best = nil
 		return nil
 	}
 
