@@ -17,14 +17,21 @@ package simulator
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 	"github.com/tikv/pd/server/core"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/cases"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/info"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/simutil"
 	"go.uber.org/zap"
+)
+
+const (
+	balanceRegionScheduler = "balance-region-scheduler"
+	balanceLeaderScheduler = "balance-leader-scheduler"
 )
 
 // Driver promotes the cluster status change.
@@ -75,6 +82,7 @@ func (d *Driver) Prepare() error {
 		return err
 	}
 	d.client = d.conn.Nodes[store.GetId()].client
+	d.raftEngine.client = d.client
 
 	ctx, cancel := context.WithTimeout(context.Background(), pdTimeout)
 	err = d.client.Bootstrap(ctx, store, region)
@@ -86,6 +94,7 @@ func (d *Driver) Prepare() error {
 	}
 
 	// Setup alloc id.
+	start := time.Now()
 	maxID := cases.IDAllocator.GetID()
 	for {
 		var id uint64
@@ -95,7 +104,11 @@ func (d *Driver) Prepare() error {
 		}
 		if id > maxID {
 			cases.IDAllocator.ResetID()
+			log.Info("finish to alloc id", zap.Uint64("max id", maxID))
 			break
+		}
+		if cost := time.Since(start); cost > 10*time.Second {
+			log.Fatal("alloc id too slow", zap.Duration("duration", cost))
 		}
 	}
 
@@ -103,7 +116,7 @@ func (d *Driver) Prepare() error {
 	if err != nil {
 		return err
 	}
-
+	d.raftEngine.startTime = time.Now()
 	return nil
 }
 
@@ -111,6 +124,12 @@ func (d *Driver) Prepare() error {
 func (d *Driver) Tick() {
 	d.tickCount++
 	d.raftEngine.stepRegions()
+	// simulator don't need any schedulers util all stores send their heartbeat.
+	if d.tickCount <= 1 {
+		d.client.RemoveScheduler(balanceRegionScheduler)
+	} else if d.tickCount == storeHeartBeatPeriod {
+		d.client.AddScheduler(balanceRegionScheduler, nil)
+	}
 	d.eventRunner.Tick(d.tickCount)
 	for _, n := range d.conn.Nodes {
 		n.reportRegionChange()

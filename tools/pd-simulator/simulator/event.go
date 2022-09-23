@@ -15,6 +15,8 @@
 package simulator
 
 import (
+	"log"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/tikv/pd/server/core"
@@ -41,6 +43,8 @@ func NewEventRunner(events []cases.EventDescriptor, raftEngine *RaftEngine) *Eve
 		event := parserEvent(e)
 		if event != nil {
 			er.events = append(er.events, event)
+		} else {
+			log.Fatal("error event type")
 		}
 	}
 	return er
@@ -58,6 +62,8 @@ func parserEvent(e cases.EventDescriptor) Event {
 		return &AddNodes{descriptor: t}
 	case *cases.DeleteNodesDescriptor:
 		return &DeleteNodes{descriptor: t}
+	case *cases.CheckSchedulerDescriptor:
+		return &CheckScheduler{descriptor: t}
 	}
 	return nil
 }
@@ -197,5 +203,22 @@ func (e *DeleteNodes) Run(raft *RaftEngine, tickCount int64) bool {
 			raft.SetRegion(region)
 		}
 	}
+	return false
+}
+
+// CheckScheduler check scheduler until hot peers is identified
+type CheckScheduler struct {
+	descriptor *cases.CheckSchedulerDescriptor
+}
+
+// Run implements the event interface.
+func (e *CheckScheduler) Run(raft *RaftEngine, tickCount int64) bool {
+	// if time.Since(raft.startTime) > 3*time.Minute { // identify hot region
+	// 	raft.client.AddScheduler(balanceLeaderScheduler, nil)
+	// 	raft.client.AddScheduler(balanceRegionScheduler, nil)
+	// } else {
+	// 	raft.client.RemoveScheduler(balanceLeaderScheduler)
+	// 	raft.client.RemoveScheduler(balanceRegionScheduler)
+	// }
 	return false
 }

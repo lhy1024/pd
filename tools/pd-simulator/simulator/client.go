@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"strings"
 	"sync"
@@ -44,8 +45,9 @@ type Client interface {
 	PutStore(ctx context.Context, store *metapb.Store) error
 	StoreHeartbeat(ctx context.Context, stats *pdpb.StoreStats) error
 	RegionHeartbeat(ctx context.Context, region *core.RegionInfo) error
+	RemoveScheduler(name string) error
+	AddScheduler(name string, body map[string]interface{}) error
 	PutPDConfig(*PDConfig) error
-
 	Close()
 }
 
@@ -114,6 +116,7 @@ func (c *client) initClusterID() error {
 		members, err := c.getMembers(ctx)
 		if err != nil || members.GetHeader() == nil {
 			simutil.Logger.Error("failed to get cluster id", zap.String("tag", c.tag), zap.Error(err))
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		c.clusterID = members.GetHeader().GetClusterId()
@@ -311,6 +314,56 @@ func (c *client) PutStore(ctx context.Context, store *metapb.Store) error {
 		simutil.Logger.Error("put store error", zap.Reflect("error", resp.Header.GetError()))
 		return nil
 	}
+	return nil
+}
+
+func (c *client) RemoveScheduler(name string) error {
+	path := fmt.Sprintf("%s/%s/schedulers/%s", c.url, httpPrefix, name)
+	req, err := http.NewRequest(http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		reason, _ := ioutil.ReadAll(res.Body)
+		simutil.Logger.Error("remove scheduler failed",
+			zap.String("scheduler-name", name),
+			zap.ByteString("reason", reason))
+	}
+	simutil.Logger.Info("remove scheduler success", zap.String("scheduler-name", name))
+	return nil
+}
+
+func (c *client) AddScheduler(name string, body map[string]interface{}) error {
+	path := fmt.Sprintf("%s/%s/schedulers", c.url, httpPrefix)
+	if body == nil {
+		body = make(map[string]interface{})
+	}
+	body["name"] = name
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, path, bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		reason, _ := ioutil.ReadAll(res.Body)
+		simutil.Logger.Error("add scheduler failed",
+			zap.String("scheduler-name", name),
+			zap.ByteString("reason", reason))
+	}
+	simutil.Logger.Info("add scheduler success", zap.String("scheduler-name", name))
 	return nil
 }
 
