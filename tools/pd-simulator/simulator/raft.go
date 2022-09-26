@@ -84,7 +84,7 @@ func NewRaftEngine(conf *cases.Case, conn *Connection, storeConfig *SimConfig) *
 			// core.SetReadKeys(uint64(region.Loads[statistics.RegionReadKeys])),
 			// core.SetWrittenBytes(uint64(region.Loads[statistics.RegionWriteBytes])),
 			// core.SetWrittenKeys(uint64(region.Loads[statistics.RegionWriteKeys])),
-			// core.SetQueryNum(uint64(region.Loads[statistics.RegionReadQuery]), uint64(region.Loads[statistics.RegionWriteQuery])),
+			// core.SetQueryNum(uint64(region.Loads[statistics.RegionReadQueryNum]), uint64(region.Loads[statistics.RegionWriteQuery])),
 		)
 		r.SetRegion(regionInfo)
 		peers := region.Peers

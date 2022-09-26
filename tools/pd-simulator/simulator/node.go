@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-	"github.com/tikv/pd/pkg/ratelimit"
 	"github.com/tikv/pd/server/core"
 	"github.com/tikv/pd/server/statistics"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/cases"
@@ -222,7 +221,7 @@ func (n *Node) collectLoad() {
 			storeWriteQueryNum += region.GetWriteQueryNum()
 			if region.GetBytesRead()/storeHeartBeatPeriod >= uint64(statistics.MinHotThresholds[statistics.RegionReadBytes]) ||
 				region.GetKeysRead()/storeHeartBeatPeriod >= uint64(statistics.MinHotThresholds[statistics.RegionReadKeys]) ||
-				region.GetReadQueryNum()/storeHeartBeatPeriod >= uint64(statistics.MinHotThresholds[statistics.RegionReadQuery]) {
+				region.GetReadQueryNum()/storeHeartBeatPeriod >= uint64(statistics.MinHotThresholds[statistics.RegionReadQueryNum]) {
 				hotPeers = append(hotPeers, &pdpb.PeerStat{
 					RegionId:   region.GetID(),
 					ReadBytes:  region.GetBytesRead(),

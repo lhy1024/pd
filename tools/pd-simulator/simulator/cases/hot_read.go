@@ -66,7 +66,7 @@ func newHotRead() *Case {
 	factor := 0.3
 	minHotReadByte := statistics.MinHotThresholds[statistics.RegionReadBytes] * float64(storeHeartBeatPeriod) * factor
 	minHotReadKey := statistics.MinHotThresholds[statistics.RegionReadKeys] * float64(storeHeartBeatPeriod) * factor
-	minHotReadQuery := statistics.MinHotThresholds[statistics.RegionReadQuery] * float64(storeHeartBeatPeriod) * factor
+	minHotReadQuery := statistics.MinHotThresholds[statistics.RegionReadQueryNum] * float64(storeHeartBeatPeriod) * factor
 	for storeID, store := range hotReadInfos.AsLeader {
 		simulateID := storeMap[storeID].simulateID
 		loads := make([]float64, statistics.StoreStatCount)
@@ -105,7 +105,7 @@ func newHotRead() *Case {
 			loads := make([]float64, statistics.RegionStatCount)
 			loads[statistics.RegionReadBytes] = region.ByteRate * float64(storeHeartBeatPeriod)
 			loads[statistics.RegionReadKeys] = region.KeyRate * float64(storeHeartBeatPeriod)
-			loads[statistics.RegionReadQuery] = region.QueryRate * float64(storeHeartBeatPeriod)
+			loads[statistics.RegionReadQueryNum] = region.QueryRate * float64(storeHeartBeatPeriod)
 			simCase.Regions = append(simCase.Regions, Region{
 				ID:     regionID,
 				Peers:  peers,
@@ -116,12 +116,12 @@ func newHotRead() *Case {
 			})
 			hotPeerSum[statistics.RegionReadBytes] += loads[statistics.RegionReadBytes]
 			hotPeerSum[statistics.RegionReadKeys] += loads[statistics.RegionReadKeys]
-			hotPeerSum[statistics.RegionReadQuery] += loads[statistics.RegionReadQuery]
+			hotPeerSum[statistics.RegionReadQueryNum] += loads[statistics.RegionReadQueryNum]
 		}
 		// generate cold peer
 		storeByte := loads[statistics.StoreReadBytes] - hotPeerSum[statistics.RegionReadBytes]
 		storeKey := loads[statistics.StoreReadKeys] - hotPeerSum[statistics.RegionReadKeys]
-		storeQueryNum := loads[statistics.StoreReadQuery] - hotPeerSum[statistics.RegionReadQuery]
+		storeQueryNum := loads[statistics.StoreReadQuery] - hotPeerSum[statistics.RegionReadQueryNum]
 		for {
 			loads := make([]float64, statistics.RegionStatCount)
 			if storeByte > 0 {
@@ -133,7 +133,7 @@ func newHotRead() *Case {
 				storeKey -= minHotReadKey
 			}
 			if storeQueryNum > 0 {
-				loads[statistics.RegionReadQuery] = minHotReadQuery
+				loads[statistics.RegionReadQueryNum] = minHotReadQuery
 				storeQueryNum -= minHotReadQuery
 			}
 			if !slice.AnyOf(loads, func(i int) bool {
