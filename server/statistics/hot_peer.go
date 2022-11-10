@@ -182,13 +182,20 @@ func (stat *HotPeerStat) GetThresholds() []float64 {
 
 // Clone clones the HotPeerStat.
 func (stat *HotPeerStat) Clone() *HotPeerStat {
-	ret := *stat
+	ret := &HotPeerStat{
+		StoreID:        stat.StoreID,
+		RegionID:       stat.RegionID,
+		HotDegree:      stat.HotDegree,
+		AntiCount:      stat.AntiCount,
+		Kind:           stat.Kind,
+		LastUpdateTime: stat.LastUpdateTime,
+	}
 	ret.Loads = make([]float64, DimLen)
 	for i := 0; i < DimLen; i++ {
 		ret.Loads[i] = stat.GetLoad(i) // replace with denoising loads
 	}
 	ret.rollingLoads = nil
-	return &ret
+	return ret
 }
 
 func (stat *HotPeerStat) isHot() bool {

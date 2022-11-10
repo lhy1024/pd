@@ -393,7 +393,7 @@ func (f *hotPeerCache) updateHotPeerStat(region *core.RegionInfo, newItem, oldIt
 		return f.updateNewHotPeerStat(regionStats, newItem, deltaLoads, interval)
 	}
 
-	if newItem.source == inherit {
+	if newItem.source == inherit && oldItem.isHot() {
 		for _, dim := range oldItem.rollingLoads {
 			newItem.rollingLoads = append(newItem.rollingLoads, dim.Clone())
 		}

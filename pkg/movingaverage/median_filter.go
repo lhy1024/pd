@@ -24,13 +24,17 @@ type MedianFilter struct {
 	size          uint64
 	count         uint64
 	instantaneous float64
+	isUpdated     bool
+	result        float64
 }
 
 // NewMedianFilter returns a MedianFilter.
 func NewMedianFilter(size int) *MedianFilter {
 	return &MedianFilter{
-		records: make([]float64, size),
-		size:    uint64(size),
+		records:   make([]float64, size),
+		size:      uint64(size),
+		isUpdated: false,
+		result:    0,
 	}
 }
 
@@ -39,10 +43,14 @@ func (r *MedianFilter) Add(n float64) {
 	r.instantaneous = n
 	r.records[r.count%r.size] = n
 	r.count++
+	r.isUpdated = true
 }
 
 // Get returns the median of the data set.
 func (r *MedianFilter) Get() float64 {
+	if !r.isUpdated {
+		return r.result
+	}
 	if r.count == 0 {
 		return 0
 	}
@@ -50,14 +58,16 @@ func (r *MedianFilter) Get() float64 {
 	if r.count < r.size {
 		records = r.records[:r.count]
 	}
-	median, _ := stats.Median(records)
-	return median
+	r.result, _ = stats.Median(records)
+	r.isUpdated = false
+	return r.result
 }
 
 // Reset cleans the data set.
 func (r *MedianFilter) Reset() {
 	r.instantaneous = 0
 	r.count = 0
+	r.isUpdated = true
 }
 
 // Set = Reset + Add.
@@ -65,6 +75,7 @@ func (r *MedianFilter) Set(n float64) {
 	r.instantaneous = n
 	r.records[0] = n
 	r.count = 1
+	r.isUpdated = true
 }
 
 // GetInstantaneous returns the value just added.
@@ -81,5 +92,7 @@ func (r *MedianFilter) Clone() *MedianFilter {
 		size:          r.size,
 		count:         r.count,
 		instantaneous: r.instantaneous,
+		isUpdated:     r.isUpdated,
+		result:        r.result,
 	}
 }
