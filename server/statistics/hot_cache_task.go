@@ -102,7 +102,7 @@ func (t *collectRegionStatsTask) runTask(cache *hotPeerCache) {
 }
 
 // TODO: do we need a wait-return timeout?
-func (t *collectRegionStatsTask) waitRet(ctx context.Context) map[uint64][]*HotPeerStat {
+func (t *collectRegionStatsTask) waitRet(ctx context.Context) (map[uint64][]*HotPeerStat, bool) {
 	select {
 	case <-ctx.Done():
 		return nil

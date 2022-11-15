@@ -2054,7 +2054,7 @@ func (c *RaftCluster) GetHotPeerStat(rw statistics.RWType, regionID, storeID uin
 // RegionReadStats returns hot region's read stats.
 // The result only includes peers that are hot enough.
 // RegionStats is a thread-safe method
-func (c *RaftCluster) RegionReadStats() map[uint64][]*statistics.HotPeerStat {
+func (c *RaftCluster) RegionReadStats() (map[uint64][]*statistics.HotPeerStat,bool) {
 	// As read stats are reported by store heartbeat, the threshold needs to be adjusted.
 	threshold := c.GetOpts().GetHotRegionCacheHitsThreshold() *
 		(statistics.RegionHeartBeatReportInterval / statistics.StoreHeartBeatReportInterval)

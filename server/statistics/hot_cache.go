@@ -62,7 +62,7 @@ func (w *HotCache) CheckReadAsync(task FlowItemTask) bool {
 }
 
 // RegionStats returns hot items according to kind
-func (w *HotCache) RegionStats(kind RWType, minHotDegree int) map[uint64][]*HotPeerStat {
+func (w *HotCache) RegionStats(kind RWType, minHotDegree int) (map[uint64][]*HotPeerStat, bool) {
 	task := newCollectRegionStatsTask(minHotDegree)
 	var succ bool
 	switch kind {
@@ -72,7 +72,7 @@ func (w *HotCache) RegionStats(kind RWType, minHotDegree int) map[uint64][]*HotP
 		succ = w.CheckReadAsync(task)
 	}
 	if !succ {
-		return nil
+		return nil, false
 	}
 	return task.waitRet(w.ctx)
 }

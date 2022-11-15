@@ -138,7 +138,11 @@ func (s *shuffleHotRegionScheduler) dispatch(typ statistics.RWType, cluster sche
 	storeInfos := statistics.SummaryStoreInfos(cluster.GetStores())
 	storesLoads := cluster.GetStoresLoads()
 	isTraceRegionFlow := cluster.GetOpts().IsTraceRegionFlow()
-
+	defer func() {
+		// for _, stLoadInfo := range s.stLoadInfos {
+		// 	statistics.HotPeerStatGC(stLoadInfo)
+		// }
+	}()
 	switch typ {
 	case statistics.Read:
 		s.stLoadInfos[readLeader] = statistics.SummaryStoresLoad(
@@ -146,7 +150,7 @@ func (s *shuffleHotRegionScheduler) dispatch(typ statistics.RWType, cluster sche
 			storesLoads,
 			cluster.RegionReadStats(),
 			isTraceRegionFlow,
-			statistics.Read, core.LeaderKind)
+			statistics.Read, core.LeaderKind,  "shuffle")
 		return s.randomSchedule(cluster, s.stLoadInfos[readLeader])
 	case statistics.Write:
 		s.stLoadInfos[writeLeader] = statistics.SummaryStoresLoad(
@@ -154,7 +158,7 @@ func (s *shuffleHotRegionScheduler) dispatch(typ statistics.RWType, cluster sche
 			storesLoads,
 			cluster.RegionWriteStats(),
 			isTraceRegionFlow,
-			statistics.Write, core.LeaderKind)
+			statistics.Write, core.LeaderKind,"shuffle")
 		return s.randomSchedule(cluster, s.stLoadInfos[writeLeader])
 	}
 	return nil

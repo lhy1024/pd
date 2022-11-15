@@ -16,6 +16,7 @@ package statistics
 
 import (
 	"math"
+	"time"
 
 	"github.com/tikv/pd/server/core"
 )
@@ -23,8 +24,9 @@ import (
 // StoreLoadDetail records store load information.
 type StoreLoadDetail struct {
 	*StoreSummaryInfo
-	LoadPred *StoreLoadPred
-	HotPeers []*HotPeerStat
+	LoadPred    *StoreLoadPred
+	HotPeers    []*HotPeerStat
+	UpdatedTime time.Time
 }
 
 // ToHotPeersStat abstracts load information to HotPeersStat.

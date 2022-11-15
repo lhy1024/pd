@@ -38,7 +38,7 @@ type TopN struct {
 	ttlLst *ttlList
 }
 
-// NewTopN returns a k-dimensional TopN with given TTL.
+// NewTopN returns a k-dimensional TopN with given TTL. Their length must be the same.
 // NOTE: panic if k <= 0 or n <= 0.
 func NewTopN(k, n int, ttl time.Duration) *TopN {
 	if k <= 0 || n <= 0 {
@@ -90,22 +90,15 @@ func (tn *TopN) Get(id uint64) TopNItem {
 }
 
 // Put inserts item or updates the old item if it exists.
-func (tn *TopN) Put(item TopNItem) (isUpdate bool) {
+func (tn *TopN) Put(item TopNItem) (oldItem TopNItem) {
 	tn.rw.Lock()
 	defer tn.rw.Unlock()
 	for _, stn := range tn.topns {
-		isUpdate = stn.Put(item)
+		oldItem = stn.Put(item)
 	}
 	tn.ttlLst.Put(item.ID())
 	tn.maintain()
 	return
-}
-
-// RemoveExpired deletes all expired items.
-func (tn *TopN) RemoveExpired() {
-	tn.rw.Lock()
-	defer tn.rw.Unlock()
-	tn.maintain()
 }
 
 // Remove deletes the item by given ID and returns it.
@@ -122,9 +115,12 @@ func (tn *TopN) Remove(id uint64) (item TopNItem) {
 
 func (tn *TopN) maintain() {
 	for _, id := range tn.ttlLst.TakeExpired() {
+		item := tn.topns[0].Get(id)
 		for _, stn := range tn.topns {
 			stn.Remove(id)
 		}
+		hotPeerStatPool.Put(item)
+		hotPool.WithLabelValues("peer_statistic", "put", "topn_maintain").Inc()
 	}
 }
 
@@ -168,15 +164,15 @@ func (stn *singleTopN) Get(id uint64) TopNItem {
 	return stn.rest.Get(id)
 }
 
-func (stn *singleTopN) Put(item TopNItem) (isUpdate bool) {
+func (stn *singleTopN) Put(item TopNItem) TopNItem {
 	if stn.topn.Get(item.ID()) != nil {
-		isUpdate = true
-		stn.topn.Put(item)
-	} else {
-		isUpdate = stn.rest.Put(item)
+		oldItem := stn.topn.Put(item)
+		stn.maintain()
+		return oldItem
 	}
+	oldItem := stn.rest.Put(item)
 	stn.maintain()
-	return
+	return oldItem
 }
 
 func (stn *singleTopN) Remove(id uint64) TopNItem {
@@ -302,14 +298,15 @@ func (hp *indexedHeap) GetAll() []TopNItem {
 }
 
 // Put inserts item or updates the old item if it exists.
-func (hp *indexedHeap) Put(item TopNItem) (isUpdate bool) {
+func (hp *indexedHeap) Put(item TopNItem) TopNItem {
 	if idx, ok := hp.index[item.ID()]; ok {
+		oldItem := hp.items[idx]
 		hp.items[idx] = item
 		heap.Fix(hp, idx)
-		return true
+		return oldItem
 	}
 	heap.Push(hp, item)
-	return false
+	return nil
 }
 
 // Remove deletes item by ID and returns it.

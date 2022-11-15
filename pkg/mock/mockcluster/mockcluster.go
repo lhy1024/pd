@@ -135,7 +135,7 @@ func (mc *Cluster) GetHotPeerStat(rw statistics.RWType, regionID, storeID uint64
 
 // RegionReadStats returns hot region's read stats.
 // The result only includes peers that are hot enough.
-func (mc *Cluster) RegionReadStats() map[uint64][]*statistics.HotPeerStat {
+func (mc *Cluster) RegionReadStats() (map[uint64][]*statistics.HotPeerStat,bool) {
 	// We directly use threshold for read stats for mockCluster
 	return mc.HotCache.RegionStats(statistics.Read, mc.GetHotRegionCacheHitsThreshold())
 }

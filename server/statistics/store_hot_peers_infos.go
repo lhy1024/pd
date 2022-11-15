@@ -17,9 +17,31 @@ package statistics
 import (
 	"fmt"
 	"math"
+	"sync"
+	"time"
 
 	"github.com/tikv/pd/server/core"
 )
+
+var hotPeerStatPool *sync.Pool = &sync.Pool{
+	New: func() interface{} {
+		return new(HotPeerStat)
+	},
+}
+
+// HotPeerStatGC collects the hot peer stat from schedulers.
+func HotPeerStatGC(stLoadInfos map[uint64]*StoreLoadDetail, source string) int {
+	count := 0
+	for _, load := range stLoadInfos {
+		for _, hotPeer := range load.HotPeers {
+			hotPeer.fromPool = true
+			hotPeerStatPool.Put(hotPeer)
+			count += 1
+			hotPool.WithLabelValues("peer_scheduler", "put", source+"-gc").Inc()
+		}
+	}
+	return count
+}
 
 // StoreHotPeersInfos is used to get human-readable description for hot regions.
 // NOTE: This type is exported by HTTP API. Please pay more attention when modifying it.
@@ -40,13 +62,13 @@ func GetHotStatus(stores []*core.StoreInfo, storesLoads map[uint64][]float64, re
 		storesLoads,
 		regionStats,
 		isTraceRegionFlow,
-		typ, core.LeaderKind)
+		typ, core.LeaderKind, "get-hot-status")
 	stLoadInfosAsPeer := SummaryStoresLoad(
 		stInfos,
 		storesLoads,
 		regionStats,
 		isTraceRegionFlow,
-		typ, core.RegionKind)
+		typ, core.RegionKind, "get-hot-status")
 
 	asLeader := make(StoreHotPeersStat, len(stLoadInfosAsLeader))
 	asPeer := make(StoreHotPeersStat, len(stLoadInfosAsPeer))
@@ -72,6 +94,7 @@ func SummaryStoresLoad(
 	isTraceRegionFlow bool,
 	rwTy RWType,
 	kind core.ResourceKind,
+	ty string,
 ) map[uint64]*StoreLoadDetail {
 	// loadDetail stores the storeID -> hotPeers stat and its current and future stat(rate,count)
 	loadDetail := make(map[uint64]*StoreLoadDetail, len(storesLoads))
@@ -82,6 +105,7 @@ func SummaryStoresLoad(
 		storeHotPeers,
 		rwTy, kind,
 		newTikvCollector(),
+		ty,
 	)
 	tiflashLoadDetail := summaryStoresLoadByEngine(
 		storeInfos,
@@ -89,6 +113,7 @@ func SummaryStoresLoad(
 		storeHotPeers,
 		rwTy, kind,
 		newTiFlashCollector(isTraceRegionFlow),
+		ty,
 	)
 
 	for _, detail := range append(tikvLoadDetail, tiflashLoadDetail...) {
@@ -104,6 +129,7 @@ func summaryStoresLoadByEngine(
 	rwTy RWType,
 	kind core.ResourceKind,
 	collector storeCollector,
+	ty string,
 ) []*StoreLoadDetail {
 	loadDetail := make([]*StoreLoadDetail, 0, len(storeInfos))
 	allStoreLoadSum := make([]float64, DimLen)
@@ -119,15 +145,16 @@ func summaryStoresLoadByEngine(
 		}
 
 		// Find all hot peers first
-		var hotPeers []*HotPeerStat
-		peerLoadSum := make([]float64, DimLen)
 		// TODO: To remove `filterHotPeers`, we need to:
 		// HotLeaders consider `Write{Bytes,Keys}`, so when we schedule `writeLeader`, all peers are leader.
-		for _, peer := range filterHotPeers(kind, storeHotPeers[id]) {
-			for i := range peerLoadSum {
-				peerLoadSum[i] += peer.Loads[i]
+		peerLoadSum := make([]float64, DimLen)
+		peers := filterHotPeers(kind, storeHotPeers[id])
+		hotPeers := make([]*HotPeerStat, len(peers))
+		for i, peer := range peers {
+			for j := range peerLoadSum {
+				peerLoadSum[j] += peer.Loads[j]
 			}
-			hotPeers = append(hotPeers, peer.Clone())
+			hotPeers[i] = peer.Clone(ty)
 		}
 		{
 			// Metric for debug.
@@ -157,6 +184,7 @@ func summaryStoresLoadByEngine(
 			StoreSummaryInfo: info,
 			LoadPred:         stLoadPred,
 			HotPeers:         hotPeers,
+			UpdatedTime:      time.Now(),
 		})
 	}
 

@@ -73,6 +73,7 @@ func (d *dimStat) Clone() *dimStat {
 
 // HotPeerStat records each hot peer's statistics
 type HotPeerStat struct {
+	MID      uint64
 	StoreID  uint64 `json:"store_id"`
 	RegionID uint64 `json:"region_id"`
 
@@ -106,6 +107,7 @@ type HotPeerStat struct {
 	// If the item in storeA is just inherited from storeB,
 	// then other store, such as storeC, will be forbidden to inherit from storeA until the item in storeA is hot.
 	allowInherited bool
+	fromPool       bool
 }
 
 // ID returns region ID. Implementing TopNItem.
@@ -180,22 +182,24 @@ func (stat *HotPeerStat) GetThresholds() []float64 {
 	return stat.thresholds
 }
 
-// Clone clones the HotPeerStat.
-func (stat *HotPeerStat) Clone() *HotPeerStat {
-	ret := &HotPeerStat{
-		StoreID:        stat.StoreID,
-		RegionID:       stat.RegionID,
-		HotDegree:      stat.HotDegree,
-		AntiCount:      stat.AntiCount,
-		Kind:           stat.Kind,
-		LastUpdateTime: stat.LastUpdateTime,
+// Clone clones the HotPeerStat. And the result is from pool.
+func (stat *HotPeerStat) Clone(ty string) *HotPeerStat {
+	newItem := hotPeerStatPool.Get().(*HotPeerStat)
+	hotPool.WithLabelValues("peer_scheduler", "get", ty+"-clone").Inc()
+	newItem.StoreID = stat.StoreID
+	newItem.RegionID = stat.RegionID
+	newItem.HotDegree = stat.HotDegree
+	newItem.AntiCount = stat.AntiCount
+	newItem.Kind = stat.Kind
+	newItem.LastUpdateTime = stat.LastUpdateTime
+	if len(newItem.Loads) != DimLen {
+		newItem.Loads = make([]float64, DimLen)
 	}
-	ret.Loads = make([]float64, DimLen)
 	for i := 0; i < DimLen; i++ {
-		ret.Loads[i] = stat.GetLoad(i) // replace with denoising loads
+		newItem.Loads[i] = stat.GetLoad(i) // replace with denoising loads
 	}
-	ret.rollingLoads = nil
-	return ret
+	newItem.rollingLoads = nil
+	return newItem
 }
 
 func (stat *HotPeerStat) isHot() bool {
@@ -243,4 +247,32 @@ func (stat *HotPeerStat) defaultAntiCount() int {
 		return hotRegionAntiCount * (RegionHeartBeatReportInterval / StoreHeartBeatReportInterval)
 	}
 	return hotRegionAntiCount
+}
+
+func (stat *HotPeerStat) updateLoads(kind RWType, loads []float64) {
+	if len(stat.Loads) != DimLen {
+		stat.Loads = make([]float64, DimLen)
+	}
+	for dim, k := range kind.RegionStats() {
+		if loads == nil {
+			stat.Loads[dim] = 0
+			continue
+		}
+		stat.Loads[dim] = loads[k] / float64(stat.interval)
+	}
+}
+
+func (stat *HotPeerStat) alloc() {
+	//stat.MID = uint64(time.Now().UnixNano())*10000 + uint64(rand.Intn(10000))
+}
+
+func (stat *HotPeerStat) LogDebug(s string) {
+	// log.Debug(s,
+	// 	zap.String("address", fmt.Sprintf("%p", stat)),
+	// 	zap.Uint64("MID", stat.MID),
+	// 	zap.Uint64("store id", stat.StoreID),
+	// 	zap.Int("len", len(stat.rollingLoads)),
+	// 	zap.Bool("from pool", stat.fromPool),
+	// 	zap.Uint64("region id", stat.RegionID),
+	// )
 }

@@ -22,8 +22,8 @@ type RegionStatInformer interface {
 	IsRegionHot(region *core.RegionInfo) bool
 	// RegionWriteStats return the storeID -> write stat of peers on this store.
 	// The result only includes peers that are hot enough.
-	RegionWriteStats() map[uint64][]*HotPeerStat
+	RegionWriteStats() (map[uint64][]*HotPeerStat,bool)
 	// RegionReadStats return the storeID -> read stat of peers on this store.
 	// The result only includes peers that are hot enough.
-	RegionReadStats() map[uint64][]*HotPeerStat
+	RegionReadStats() (map[uint64][]*HotPeerStat,bool)
 }

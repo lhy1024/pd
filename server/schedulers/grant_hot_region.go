@@ -282,6 +282,9 @@ func (s *grantHotRegionScheduler) dispatch(typ statistics.RWType, cluster schedu
 	isTraceRegionFlow := cluster.GetOpts().IsTraceRegionFlow()
 
 	var stLoadInfos map[uint64]*statistics.StoreLoadDetail
+	defer func() {
+		//statistics.HotPeerStatGC(stLoadInfos)
+	}()
 	switch typ {
 	case statistics.Read:
 		stLoadInfos = statistics.SummaryStoresLoad(
@@ -289,14 +292,14 @@ func (s *grantHotRegionScheduler) dispatch(typ statistics.RWType, cluster schedu
 			storesLoads,
 			cluster.RegionReadStats(),
 			isTraceRegionFlow,
-			statistics.Read, core.RegionKind)
+			statistics.Read, core.RegionKind, "grant")
 	case statistics.Write:
 		stLoadInfos = statistics.SummaryStoresLoad(
 			storeInfos,
 			storesLoads,
 			cluster.RegionWriteStats(),
 			isTraceRegionFlow,
-			statistics.Write, core.RegionKind)
+			statistics.Write, core.RegionKind,"grant")
 	}
 	infos := make([]*statistics.StoreLoadDetail, len(stLoadInfos))
 	index := 0

@@ -14,9 +14,7 @@
 
 package statistics
 
-import (
-	"github.com/tikv/pd/server/core"
-)
+import "log"
 
 const (
 	// BytePriority indicates hot-region-scheduler prefer byte dim
@@ -195,6 +193,7 @@ func (rw RWType) RegionStats() []RegionStatKind {
 	case Read:
 		return readRegionStats
 	}
+	log.Fatal("unknown rw type")
 	return nil
 }
 
@@ -215,17 +214,6 @@ func ForeachRegionStats(f func(RWType, int, RegionStatKind)) {
 			f(rwTy, dim, kind)
 		}
 	}
-}
-
-// GetLoadRatesFromPeer gets the load rates of the read or write type from PeerInfo.
-func (rw RWType) GetLoadRatesFromPeer(peer *core.PeerInfo) []float64 {
-	deltaLoads := peer.GetLoads()
-	interval := peer.GetInterval()
-	loads := make([]float64, DimLen)
-	for dim, k := range rw.RegionStats() {
-		loads[dim] = deltaLoads[k] / float64(interval)
-	}
-	return loads
 }
 
 // SetFullLoadRates set load rates to full as read or write type.

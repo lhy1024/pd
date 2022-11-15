@@ -381,7 +381,8 @@ func testMetrics(re *require.Assertions, interval, byteRate, expectThreshold flo
 	for i := uint64(1); i < TopNN+10; i++ {
 		var oldItem *HotPeerStat
 		for {
-			thresholds := cache.calcHotThresholds(storeID)
+			thresholds := make([]float64, DimLen)
+			cache.calcHotThresholds(storeID, thresholds)
 			newItem := &HotPeerStat{
 				Kind:       cache.kind,
 				StoreID:    storeID,
@@ -399,7 +400,8 @@ func testMetrics(re *require.Assertions, interval, byteRate, expectThreshold flo
 			item := cache.updateHotPeerStat(nil, newItem, oldItem, []float64{byteRate * interval, 0.0, 0.0}, time.Duration(interval)*time.Second)
 			cache.updateStat(item)
 		}
-		thresholds := cache.calcHotThresholds(storeID)
+		thresholds := make([]float64, DimLen)
+		cache.calcHotThresholds(storeID, thresholds)
 		if i < TopNN {
 			re.Equal(MinHotThresholds[RegionReadBytes], thresholds[ByteDim])
 		} else {
