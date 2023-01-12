@@ -34,11 +34,13 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/diagnosticspb"
-	"github.com/pingcap/kvproto/pkg/keyspacepb"
+
+	//"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/sysutil"
+
+	//"github.com/pingcap/sysutil"
 	"github.com/tikv/pd/pkg/audit"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/errs"
@@ -47,7 +49,8 @@ import (
 	"github.com/tikv/pd/pkg/ratelimit"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
-	"github.com/tikv/pd/pkg/systimemon"
+
+	//"github.com/tikv/pd/pkg/systimemon"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/grpcutil"
@@ -69,9 +72,9 @@ import (
 	"github.com/tikv/pd/server/tso"
 	"go.etcd.io/etcd/clientv3"
 	"go.etcd.io/etcd/embed"
-	"go.etcd.io/etcd/pkg/types"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
+
+	rm_server "github.com/tikv/pd/pkg/mcs/resource_manager/server"
 )
 
 const (
@@ -199,50 +202,51 @@ func CreateServer(ctx context.Context, cfg *config.Config, legacyServiceBuilders
 		persistOptions:                  config.NewPersistOptions(cfg),
 		serviceMiddlewareCfg:            serviceMiddlewareCfg,
 		serviceMiddlewarePersistOptions: config.NewServiceMiddlewarePersistOptions(serviceMiddlewareCfg),
-		member:                          &member.Member{},
-		ctx:                             ctx,
-		startTimestamp:                  time.Now().Unix(),
-		DiagnosticsServer:               sysutil.NewDiagnosticsServer(cfg.Log.File.Filename),
+		//member:                          &member.Member{},
+		ctx:            ctx,
+		startTimestamp: time.Now().Unix(),
+		//DiagnosticsServer:               sysutil.NewDiagnosticsServer(cfg.Log.File.Filename),
 	}
-	s.handler = newHandler(s)
+	// s.handler = newHandler(s)
 
-	// create audit backend
-	s.auditBackends = []audit.Backend{
-		audit.NewLocalLogBackend(true),
-		audit.NewPrometheusHistogramBackend(serviceAuditHistogram, false),
-	}
-	s.serviceRateLimiter = ratelimit.NewLimiter()
-	s.serviceAuditBackendLabels = make(map[string]*audit.BackendLabels)
-	s.serviceRateLimiter = ratelimit.NewLimiter()
-	s.serviceLabels = make(map[string][]apiutil.AccessPath)
-	s.apiServiceLabelMap = make(map[apiutil.AccessPath]string)
+	// // create audit backend
+	// s.auditBackends = []audit.Backend{
+	// 	audit.NewLocalLogBackend(true),
+	// 	audit.NewPrometheusHistogramBackend(serviceAuditHistogram, false),
+	// }
+	// s.serviceRateLimiter = ratelimit.NewLimiter()
+	// s.serviceAuditBackendLabels = make(map[string]*audit.BackendLabels)
+	// s.serviceRateLimiter = ratelimit.NewLimiter()
+	// s.serviceLabels = make(map[string][]apiutil.AccessPath)
+	// s.apiServiceLabelMap = make(map[apiutil.AccessPath]string)
 
 	// Adjust etcd config.
 	etcdCfg, err := s.cfg.GenEmbedEtcdConfig()
 	if err != nil {
 		return nil, err
 	}
-	if len(legacyServiceBuilders) != 0 {
-		userHandlers, err := combineBuilderServerHTTPService(ctx, s, legacyServiceBuilders...)
-		if err != nil {
-			return nil, err
-		}
-		etcdCfg.UserHandlers = userHandlers
-	}
-	// New way to register services.
-	registry := NewServiceRegistry()
+	// if len(legacyServiceBuilders) != 0 {
+	// 	userHandlers, err := combineBuilderServerHTTPService(ctx, s, legacyServiceBuilders...)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	etcdCfg.UserHandlers = userHandlers
+	// }
+	// // New way to register services.
+	// r := rm_server.NewService(s)
+	// grpcServer := &GrpcServer{Server: s}
+	// r.RegisterGRPCService(grpcServer)
+	// // Register the micro services REST path.
+	// registry.InstallAllRESTHandler(s, etcdCfg.UserHandlers)
 
-	// Register the micro services REST path.
-	registry.InstallAllRESTHandler(s, etcdCfg.UserHandlers)
+	// etcdCfg.ServiceRegister = func(gs *grpc.Server) {
 
-	etcdCfg.ServiceRegister = func(gs *grpc.Server) {
-		grpcServer := &GrpcServer{Server: s}
-		pdpb.RegisterPDServer(gs, grpcServer)
-		keyspacepb.RegisterKeyspaceServer(gs, &KeyspaceServer{GrpcServer: grpcServer})
-		diagnosticspb.RegisterDiagnosticsServer(gs, s)
-		// Register the micro services GRPC service.
-		registry.InstallAllGRPCServices(s, gs)
-	}
+	// 	pdpb.RegisterPDServer(gs, grpcServer)
+	// 	keyspacepb.RegisterKeyspaceServer(gs, &KeyspaceServer{GrpcServer: grpcServer})
+	// 	diagnosticspb.RegisterDiagnosticsServer(gs, s)
+	// 	// Register the micro services GRPC service.
+	// 	registry.InstallAllGRPCServices(s, gs)
+	// }
 
 	s.etcdCfg = etcdCfg
 	s.lg = cfg.GetZapLogger()
@@ -251,37 +255,36 @@ func CreateServer(ctx context.Context, cfg *config.Config, legacyServiceBuilders
 }
 
 func (s *Server) startEtcd(ctx context.Context) error {
-	newCtx, cancel := context.WithTimeout(ctx, EtcdStartTimeout)
-	defer cancel()
+	// newCtx, cancel := context.WithTimeout(ctx, EtcdStartTimeout)
+	// defer cancel()
 
-	etcd, err := embed.StartEtcd(s.etcdCfg)
-	if err != nil {
-		return errs.ErrStartEtcd.Wrap(err).GenWithStackByCause()
-	}
+	// etcd, err := embed.StartEtcd(s.etcdCfg)
+	// if err != nil {
+	// 	return errs.ErrStartEtcd.Wrap(err).GenWithStackByCause()
+	// }
 
-	// Check cluster ID
-	urlMap, err := types.NewURLsMap(s.cfg.InitialCluster)
-	if err != nil {
-		return errs.ErrEtcdURLMap.Wrap(err).GenWithStackByCause()
-	}
+	// // Check cluster ID
+	// urlMap, err := types.NewURLsMap(s.cfg.InitialCluster)//
+	// if err != nil {
+	// 	return errs.ErrEtcdURLMap.Wrap(err).GenWithStackByCause()
+	// }
 	tlsConfig, err := s.cfg.Security.ToTLSConfig()
 	if err != nil {
 		return err
 	}
 
-	if err = etcdutil.CheckClusterID(etcd.Server.Cluster().ID(), urlMap, tlsConfig); err != nil {
-		return err
-	}
+	// if err = etcdutil.CheckClusterID(etcd.Server.Cluster().ID(), urlMap, tlsConfig); err != nil {
+	// 	return err
+	// }
 
-	select {
-	// Wait etcd until it is ready to use
-	case <-etcd.Server.ReadyNotify():
-	case <-newCtx.Done():
-		return errs.ErrCancelStartEtcd.FastGenByArgs()
-	}
+	// select {
+	// // Wait etcd until it is ready to use
+	// case <-etcd.Server.ReadyNotify():
+	// case <-newCtx.Done():
+	// 	return errs.ErrCancelStartEtcd.FastGenByArgs()
+	// }
 
-	endpoints := []string{s.etcdCfg.ACUrls[0].String()}
-	log.Info("create etcd v3 client", zap.Strings("endpoints", endpoints), zap.Reflect("cert", s.cfg.Security))
+	endpoints := []string{s.etcdCfg.ACUrls[0].String()} //
 
 	lgc := zap.NewProductionConfig()
 	lgc.Encoding = log.ZapEncodingName
@@ -291,27 +294,29 @@ func (s *Server) startEtcd(ctx context.Context) error {
 		TLS:         tlsConfig,
 		LogConfig:   &lgc,
 	})
+	v, _ := client.Get(ctx, "/test")
+	log.Info("create etcd v3 client", zap.Strings("endpoints", endpoints), zap.Reflect("cert", s.cfg.Security), zap.String("test", v.OpResponse().Get().Header.String())) //
 	if err != nil {
 		return errs.ErrNewEtcdClient.Wrap(err).GenWithStackByCause()
 	}
 
-	etcdServerID := uint64(etcd.Server.ID())
+	// etcdServerID := uint64(etcd.Server.ID())
 
 	// update advertise peer urls.
-	etcdMembers, err := etcdutil.ListEtcdMembers(client)
-	if err != nil {
-		return err
-	}
-	for _, m := range etcdMembers.Members {
-		if etcdServerID == m.ID {
-			etcdPeerURLs := strings.Join(m.PeerURLs, ",")
-			if s.cfg.AdvertisePeerUrls != etcdPeerURLs {
-				log.Info("update advertise peer urls", zap.String("from", s.cfg.AdvertisePeerUrls), zap.String("to", etcdPeerURLs))
-				s.cfg.AdvertisePeerUrls = etcdPeerURLs
-			}
-		}
-	}
-	s.client = client
+	// etcdMembers, err := etcdutil.ListEtcdMembers(client)
+	// if err != nil {
+	// 	return err
+	// }
+	// for _, m := range etcdMembers.Members {
+	// 	if etcdServerID == m.ID {
+	// 		etcdPeerURLs := strings.Join(m.PeerURLs, ",")
+	// 		if s.cfg.AdvertisePeerUrls != etcdPeerURLs { //
+	// 			log.Info("update advertise peer urls", zap.String("from", s.cfg.AdvertisePeerUrls), zap.String("to", etcdPeerURLs)) //
+	// 			s.cfg.AdvertisePeerUrls = etcdPeerURLs                                                                              //
+	// 		}
+	// 	}
+	// }
+	s.client = client //
 	s.httpClient = &http.Client{
 		Transport: &http.Transport{
 			DisableKeepAlives: true,
@@ -322,7 +327,7 @@ func (s *Server) startEtcd(ctx context.Context) error {
 	failpoint.Inject("memberNil", func() {
 		time.Sleep(1500 * time.Millisecond)
 	})
-	s.member = member.NewMember(etcd, client, etcdServerID)
+	// s.member = member.NewMember(etcd, client, etcdServerID)
 	return nil
 }
 
@@ -484,18 +489,18 @@ func (s *Server) IsClosed() bool {
 
 // Run runs the pd server.
 func (s *Server) Run() error {
-	go systimemon.StartMonitor(s.ctx, time.Now, func() {
-		log.Error("system time jumps backward", errs.ZapError(errs.ErrIncorrectSystemTime))
-		timeJumpBackCounter.Inc()
-	})
+	// go systimemon.StartMonitor(s.ctx, time.Now, func() {
+	// 	log.Error("system time jumps backward", errs.ZapError(errs.ErrIncorrectSystemTime))
+	// 	timeJumpBackCounter.Inc()
+	// })
 	if err := s.startEtcd(s.ctx); err != nil {
 		return err
 	}
-	if err := s.startServer(s.ctx); err != nil {
-		return err
-	}
+	// if err := s.startServer(s.ctx); err != nil {
+	// 	return err
+	// }
 
-	s.startServerLoop(s.ctx)
+	// s.startServerLoop(s.ctx)
 
 	return nil
 }
@@ -522,12 +527,12 @@ func (s *Server) LoopContext() context.Context {
 
 func (s *Server) startServerLoop(ctx context.Context) {
 	s.serverLoopCtx, s.serverLoopCancel = context.WithCancel(ctx)
-	s.serverLoopWg.Add(5)
-	go s.leaderLoop()
-	go s.etcdLeaderLoop()
+	s.serverLoopWg.Add(1)
+	// go s.leaderLoop()
+	//go s.etcdLeaderLoop()
 	go s.serverMetricsLoop()
-	go s.tsoAllocatorLoop()
-	go s.encryptionKeyManagerLoop()
+	// go s.tsoAllocatorLoop()
+	// go s.encryptionKeyManagerLoop()
 }
 
 func (s *Server) stopServerLoop() {
