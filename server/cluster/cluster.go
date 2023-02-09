@@ -37,6 +37,7 @@ import (
 	"github.com/tikv/pd/pkg/id"
 	"github.com/tikv/pd/pkg/progress"
 	"github.com/tikv/pd/pkg/slice"
+	"github.com/tikv/pd/pkg/storage"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/logutil"
@@ -55,7 +56,6 @@ import (
 	"github.com/tikv/pd/server/schedulers"
 	"github.com/tikv/pd/server/statistics"
 	"github.com/tikv/pd/server/statistics/buckets"
-	"github.com/tikv/pd/server/storage"
 	"go.etcd.io/etcd/clientv3"
 	"go.uber.org/zap"
 )
@@ -1397,6 +1397,17 @@ func (c *RaftCluster) ResumeLeaderTransfer(storeID uint64) {
 // leader to the store
 func (c *RaftCluster) SlowStoreEvicted(storeID uint64) error {
 	return c.core.SlowStoreEvicted(storeID)
+}
+
+// SlowTrendEvicted marks a store as a slow store by trend and prevents transferring
+// leader to the store
+func (c *RaftCluster) SlowTrendEvicted(storeID uint64) error {
+	return c.core.SlowTrendEvicted(storeID)
+}
+
+// SlowTrendRecovered cleans the evicted by slow trend state of a store.
+func (c *RaftCluster) SlowTrendRecovered(storeID uint64) {
+	c.core.SlowTrendRecovered(storeID)
 }
 
 // SlowStoreRecovered cleans the evicted state of a store.
