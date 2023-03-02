@@ -166,6 +166,25 @@ func (s *GrpcServer) Tso(stream pdpb.PD_TsoServer) error {
 		}
 
 		streamCtx := stream.Context()
+		if s.IsAPIServiceMode() { // TODO: add proxy switch
+			addrs := s.GetTSOServiceAddr()
+			client := s.GetOrCreateTSOClient(addrs)
+			physical, logical, err := client.GetTSWithinKeyspace(s.ctx, 0)
+			if err != nil {
+				log.Error("faild to get tso")
+			}
+			response := &pdpb.TsoResponse{
+				Header: s.header(),
+				Timestamp: &pdpb.Timestamp{
+					Physical: physical,
+					Logical:  logical,
+				},
+				Count: 1,
+			}
+			if err := stream.Send(response); err != nil {
+				return errors.WithStack(err)
+			}
+		}
 		forwardedHost := grpcutil.GetForwardedHost(streamCtx)
 		if !s.isLocalRequest(forwardedHost) {
 			if errCh == nil {

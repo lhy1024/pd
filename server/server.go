@@ -40,12 +40,14 @@ import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/sysutil"
+	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/pkg/audit"
 	bs "github.com/tikv/pd/pkg/basicserver"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/id"
+	"github.com/tikv/pd/pkg/mcs/discovery"
 	ms_server "github.com/tikv/pd/pkg/mcs/meta_storage/server"
 	"github.com/tikv/pd/pkg/mcs/registry"
 	rm_server "github.com/tikv/pd/pkg/mcs/resource_manager/server"
@@ -139,8 +141,11 @@ type Server struct {
 	client *clientv3.Client
 	// http client
 	httpClient *http.Client
-	clusterID  uint64 // pd cluster id.
-	rootPath   string
+	// tso client
+	tsoClient pd.Client
+
+	clusterID uint64 // pd cluster id.
+	rootPath  string
 
 	// Server services.
 	// for id allocator, we can use one allocator for
@@ -684,6 +689,51 @@ func (s *Server) stopRaftCluster() {
 // IsAPIServiceMode return whether the server is in API service mode.
 func (s *Server) IsAPIServiceMode() bool {
 	return s.mode == APIServiceMode
+}
+
+func (s *Server) GetTSOServiceAddr() []string {
+	// TODO use watch
+	addrs, err := discovery.Discover(s.client, "tso")
+	if err != nil {
+		log.Error("meet error")
+		return nil
+	}
+	return addrs
+}
+
+func (s *Server) GetOrCreateTSOClient(addrs []string) pd.Client {
+	if len(addrs) == 0 {
+		return nil
+	}
+	inSlice := func(c string, ss []string) bool {
+		for _, s := range ss {
+			if c == s {
+				return true
+			}
+		}
+		return false
+	}
+	if s.tsoClient != nil {
+		if inSlice(s.tsoClient.GetLeaderAddr(), addrs) {
+			return s.tsoClient
+		}
+	}
+	if len(addrs) == 0 {
+		return nil
+	}
+	tlsConfig := s.GetTLSConfig()
+	opt := pd.SecurityOption{
+		CAPath:   tlsConfig.CAPath,
+		CertPath: tlsConfig.CertPath,
+		KeyPath:  tlsConfig.KeyPath,
+	}
+	client, err := pd.NewTSOClientWithContext(s.ctx, addrs, opt)
+	if err != nil {
+		log.Error("failed to get tso client")
+		return nil
+	}
+	s.tsoClient = client
+	return client
 }
 
 // GetAddr returns the server urls for clients.
