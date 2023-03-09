@@ -20,6 +20,7 @@ import (
 	"io"
 	"path"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/kvproto/pkg/tsopb"
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
@@ -75,7 +77,7 @@ func (s *GrpcServer) unaryMiddleware(ctx context.Context, header *pdpb.RequestHe
 	})
 	forwardedHost := grpcutil.GetForwardedHost(ctx)
 	if !s.isLocalRequest(forwardedHost) {
-		client, err := s.getDelegateClient(ctx, forwardedHost)
+		client, err := s.getDelegateClient(ctx, forwardedHost, &s.clientConns)
 		if err != nil {
 			return nil, err
 		}
@@ -153,8 +155,11 @@ func (s *GrpcServer) GetMembers(context.Context, *pdpb.GetMembersRequest) (*pdpb
 // Tso implements gRPC PDServer.
 func (s *GrpcServer) Tso(stream pdpb.PD_TsoServer) error {
 	var (
-		doneCh chan struct{}
-		errCh  chan error
+		doneCh            chan struct{}
+		errCh             chan error
+		forwardStream     tsopb.TSO_TsoClient
+		lastForwardedHost string
+		//server            = &mcsTSOServer{stream: stream}
 	)
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
@@ -177,23 +182,34 @@ func (s *GrpcServer) Tso(stream pdpb.PD_TsoServer) error {
 
 		streamCtx := stream.Context()
 		if s.IsAPIServiceMode() { // TODO: add proxy switch
-			addrs := s.GetTSOServiceAddr()
-			client := s.GetOrCreateTSOClient(addrs)
-			physical, logical, err := client.GetTSWithinKeyspace(s.ctx, 0)
-			if err != nil {
-				log.Error("faild to get tso")
+			//forwardedHost:=descovery.GetForwardedHost(streamCtx)
+			if forwardStream == nil || lastForwardedHost != forwardedHost {
+				if cancel != nil {
+					cancel()
+				}
+				client, err := s.getDelegateClient(s.ctx, forwardedHost, &s.tsoMcsClientConns)
+				if err != nil {
+					return err
+				}
+				log.Info("create tso mcs client forward stream", zap.String("forwarded-host", forwardedHost))
+				forwardStream, cancel, err = s.createMCSTSOForwardStream(client)
+				if err != nil {
+					return err
+				}
+				lastForwardedHost = forwardedHost
+				errCh = make(chan error, 1)
+				go forwardTSOMCSClientToServer(forwardStream, server, errCh)
 			}
-			response := &pdpb.TsoResponse{
-				Header: s.header(),
-				Timestamp: &pdpb.Timestamp{
-					Physical: physical,
-					Logical:  logical,
-				},
-				Count: 1,
-			}
-			if err := stream.Send(response); err != nil {
+			if err := forwardStream.Send(request); err != nil {
 				return errors.WithStack(err)
 			}
+
+			select {
+			case err := <-errCh:
+				return err
+			default:
+			}
+			continue
 		}
 		forwardedHost := grpcutil.GetForwardedHost(streamCtx)
 		if !s.isLocalRequest(forwardedHost) {
@@ -260,7 +276,7 @@ func (s *GrpcServer) handleDispatcher(ctx context.Context, forwardedHost string,
 		forwardStream pdpb.PD_TsoClient
 		cancel        context.CancelFunc
 	)
-	client, err := s.getDelegateClient(ctx, forwardedHost)
+	client, err := s.getDelegateClient(ctx, forwardedHost, &s.clientConns)
 	if err != nil {
 		goto errHandling
 	}
@@ -731,6 +747,45 @@ func (b *bucketHeartbeatServer) Recv() (*pdpb.ReportBucketsRequest, error) {
 	return req, nil
 }
 
+// mcsTSOServer wraps PD_TsoServer to ensure when any error
+// occurs on SendAndClose() or Recv(), both endpoints will be closed.
+type mcsTSOServer struct {
+	stream tsopb.TSO_TsoServer
+	closed int32
+}
+
+func (b *mcsTSOServer) Send(resp *tsopb.TsoResponse) error {
+	if atomic.LoadInt32(&b.closed) == 1 {
+		return status.Errorf(codes.Canceled, "stream is closed")
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- b.stream.Send(resp)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			atomic.StoreInt32(&b.closed, 1)
+		}
+		return err
+	case <-time.After(heartbeatSendTimeout):
+		atomic.StoreInt32(&b.closed, 1)
+		return ErrSendHeartbeatTimeout
+	}
+}
+
+func (b *mcsTSOServer) Recv() (*tsopb.TsoRequest, error) {
+	if atomic.LoadInt32(&b.closed) == 1 {
+		return nil, io.EOF
+	}
+	req, err := b.stream.Recv()
+	if err != nil {
+		atomic.StoreInt32(&b.closed, 1)
+		return nil, errors.WithStack(err)
+	}
+	return req, nil
+}
+
 // heartbeatServer wraps PD_RegionHeartbeatServer to ensure when any error
 // occurs on Send() or Recv(), both endpoints will be closed.
 type heartbeatServer struct {
@@ -803,7 +858,7 @@ func (s *GrpcServer) ReportBuckets(stream pdpb.PD_ReportBucketsServer) error {
 				if cancel != nil {
 					cancel()
 				}
-				client, err := s.getDelegateClient(s.ctx, forwardedHost)
+				client, err := s.getDelegateClient(s.ctx, forwardedHost, &s.clientConns)
 				if err != nil {
 					return err
 				}
@@ -895,7 +950,7 @@ func (s *GrpcServer) RegionHeartbeat(stream pdpb.PD_RegionHeartbeatServer) error
 				if cancel != nil {
 					cancel()
 				}
-				client, err := s.getDelegateClient(s.ctx, forwardedHost)
+				client, err := s.getDelegateClient(s.ctx, forwardedHost, &s.clientConns)
 				if err != nil {
 					return err
 				}
@@ -1797,8 +1852,8 @@ func (s *GrpcServer) validateInternalRequest(header *pdpb.RequestHeader, onlyAll
 	return nil
 }
 
-func (s *GrpcServer) getDelegateClient(ctx context.Context, forwardedHost string) (*grpc.ClientConn, error) {
-	client, ok := s.clientConns.Load(forwardedHost)
+func (s *GrpcServer) getDelegateClient(ctx context.Context, forwardedHost string, conns *sync.Map) (*grpc.ClientConn, error) {
+	client, ok := conns.Load(forwardedHost)
 	if !ok {
 		tlsConfig, err := s.GetTLSConfig().ToTLSConfig()
 		if err != nil {
@@ -1809,7 +1864,7 @@ func (s *GrpcServer) getDelegateClient(ctx context.Context, forwardedHost string
 			return nil, err
 		}
 		client = cc
-		s.clientConns.Store(forwardedHost, cc)
+		conns.Store(forwardedHost, cc)
 	}
 	return client.(*grpc.ClientConn), nil
 }
@@ -1849,6 +1904,30 @@ func (s *GrpcServer) createHeartbeatForwardStream(client *grpc.ClientConn) (pdpb
 }
 
 func forwardRegionHeartbeatClientToServer(forwardStream pdpb.PD_RegionHeartbeatClient, server *heartbeatServer, errCh chan error) {
+	defer close(errCh)
+	for {
+		resp, err := forwardStream.Recv()
+		if err != nil {
+			errCh <- errors.WithStack(err)
+			return
+		}
+		if err := server.Send(resp); err != nil {
+			errCh <- errors.WithStack(err)
+			return
+		}
+	}
+}
+
+func (s *GrpcServer) createMCSTSOForwardStream(client *grpc.ClientConn) (tsopb.TSO_TsoClient, context.CancelFunc, error) {
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(s.ctx)
+	go checkStream(ctx, cancel, done)
+	forwardStream, err := tsopb.NewTSOClient(client).Tso(ctx)
+	done <- struct{}{}
+	return forwardStream, cancel, err
+}
+
+func forwardTSOMCSClientToServer(forwardStream tsopb.TSO_TsoClient, server *mcsTSOServer, errCh chan error) {
 	defer close(errCh)
 	for {
 		resp, err := forwardStream.Recv()
@@ -2063,7 +2142,7 @@ func (s *GrpcServer) handleDamagedStore(stats *pdpb.StoreStats) {
 func (s *GrpcServer) ReportMinResolvedTS(ctx context.Context, request *pdpb.ReportMinResolvedTsRequest) (*pdpb.ReportMinResolvedTsResponse, error) {
 	forwardedHost := grpcutil.GetForwardedHost(ctx)
 	if !s.isLocalRequest(forwardedHost) {
-		client, err := s.getDelegateClient(ctx, forwardedHost)
+		client, err := s.getDelegateClient(ctx, forwardedHost, &s.clientConns)
 		if err != nil {
 			return nil, err
 		}
@@ -2097,7 +2176,7 @@ func (s *GrpcServer) ReportMinResolvedTS(ctx context.Context, request *pdpb.Repo
 func (s *GrpcServer) SetExternalTimestamp(ctx context.Context, request *pdpb.SetExternalTimestampRequest) (*pdpb.SetExternalTimestampResponse, error) {
 	forwardedHost := grpcutil.GetForwardedHost(ctx)
 	if !s.isLocalRequest(forwardedHost) {
-		client, err := s.getDelegateClient(ctx, forwardedHost)
+		client, err := s.getDelegateClient(ctx, forwardedHost, &s.clientConns)
 		if err != nil {
 			return nil, err
 		}
@@ -2124,7 +2203,7 @@ func (s *GrpcServer) SetExternalTimestamp(ctx context.Context, request *pdpb.Set
 func (s *GrpcServer) GetExternalTimestamp(ctx context.Context, request *pdpb.GetExternalTimestampRequest) (*pdpb.GetExternalTimestampResponse, error) {
 	forwardedHost := grpcutil.GetForwardedHost(ctx)
 	if !s.isLocalRequest(forwardedHost) {
-		client, err := s.getDelegateClient(ctx, forwardedHost)
+		client, err := s.getDelegateClient(ctx, forwardedHost, &s.clientConns)
 		if err != nil {
 			return nil, err
 		}
