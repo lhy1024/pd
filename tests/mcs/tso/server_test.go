@@ -22,8 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/pkg/core"
+	"github.com/tikv/pd/pkg/mcs/discovery"
 	tsosvr "github.com/tikv/pd/pkg/mcs/tso/server"
 	tsoapi "github.com/tikv/pd/pkg/mcs/tso/server/apis/v1"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
@@ -47,7 +51,6 @@ type tsoServerTestSuite struct {
 	cluster          *tests.TestCluster
 	pdLeader         *tests.TestServer
 	backendEndpoints string
-	tsosvrs          map[string]*tsosvr.Server
 }
 
 func TestTSOServerTestSuite(t *testing.T) {
@@ -71,10 +74,6 @@ func (suite *tsoServerTestSuite) SetupSuite() {
 }
 
 func (suite *tsoServerTestSuite) TearDownSuite() {
-	for _, s := range suite.tsosvrs {
-		s.Close()
-		testutil.CleanServer(s.GetConfig().DataDir)
-	}
 	suite.cluster.Destroy()
 	suite.cancel()
 }
@@ -148,4 +147,112 @@ func getEtcdTimestampKeyNum(re *require.Assertions, client *clientv3.Client) int
 		count++
 	}
 	return count
+}
+
+type APIServerForwardTestSuite struct {
+	suite.Suite
+	ctx              context.Context
+	cancel           context.CancelFunc
+	cluster          *tests.TestCluster
+	pdLeader         *tests.TestServer
+	backendEndpoints string
+	pdClient         pd.Client
+	cleanup          func()
+}
+
+func TestAPIServerForwardTestSuite(t *testing.T) {
+	suite.Run(t, new(APIServerForwardTestSuite))
+}
+
+func (suite *APIServerForwardTestSuite) SetupTest() {
+	var err error
+	re := suite.Require()
+	suite.ctx, suite.cancel = context.WithCancel(context.Background())
+	suite.cluster, err = tests.NewTestAPICluster(suite.ctx, 1)
+	re.NoError(err)
+
+	err = suite.cluster.RunInitialServers()
+	re.NoError(err)
+
+	leaderName := suite.cluster.WaitLeader()
+	suite.pdLeader = suite.cluster.GetServer(leaderName)
+	suite.backendEndpoints = suite.pdLeader.GetAddr()
+
+	suite.pdClient, err = pd.NewClientWithContext(suite.ctx, []string{suite.backendEndpoints}, pd.SecurityOption{})
+	re.NoError(err)
+}
+
+func (suite *APIServerForwardTestSuite) TearDownTest() {
+	etcdClient := suite.pdLeader.GetEtcdClient()
+	endpoints, err := discovery.Discover(etcdClient, "tso")
+	suite.NoError(err)
+	if len(endpoints) != 0 {
+		suite.cleanup()
+		endpoints, err = discovery.Discover(etcdClient, "tso")
+		suite.NoError(err)
+		suite.Empty(endpoints)
+	}
+	suite.cluster.Destroy()
+	suite.cancel()
+}
+
+func (suite *APIServerForwardTestSuite) TestForwardTSORelated() {
+	var err error
+	leader := suite.cluster.GetServer(suite.cluster.WaitLeader())
+	suite.NoError(leader.BootstrapCluster())
+	suite.addRegions()
+	// Unable to use the tso-related interface without tso server
+	{
+		// try to get ts
+		_, _, err = suite.pdClient.GetTS(suite.ctx)
+		suite.Error(err)
+		suite.Contains(err.Error(), "not found tso address")
+		// try to update gc safe point
+		_, err = suite.pdClient.UpdateServiceGCSafePoint(suite.ctx, "a", 1000, 1)
+		suite.Contains(err.Error(), "not found tso address")
+		// try to set external ts
+		err = suite.pdClient.SetExternalTimestamp(suite.ctx, 1000)
+		suite.Contains(err.Error(), "not found tso address")
+	}
+	// can use the tso-related interface with tso server
+	{
+		suite.addTSOService()
+		// try to get ts
+		_, _, err = suite.pdClient.GetTS(suite.ctx)
+		suite.NoError(err)
+		// try to update gc safe point
+		min, err := suite.pdClient.UpdateServiceGCSafePoint(context.Background(),
+			"a", 1000, 1)
+		suite.NoError(err)
+		suite.Equal(uint64(0), min)
+		// try to set external ts
+		err = suite.pdClient.SetExternalTimestamp(suite.ctx, 1000)
+		suite.NoError(err)
+	}
+}
+
+func (suite *APIServerForwardTestSuite) addTSOService() {
+	var s *tsosvr.Server
+	var err error
+	re := suite.Require()
+	s, suite.cleanup = mcs.StartSingleTSOTestServer(suite.ctx, re, suite.backendEndpoints)
+	suite.NoError(err)
+	etcdClient := suite.pdLeader.GetEtcdClient()
+	endpoints, err := discovery.Discover(etcdClient, "tso")
+	suite.NoError(err)
+	suite.Equal(s.GetConfig().ListenAddr, endpoints[0])
+}
+
+func (suite *APIServerForwardTestSuite) addRegions() {
+	leader := suite.cluster.GetServer(suite.cluster.WaitLeader())
+	rc := leader.GetServer().GetRaftCluster()
+	for i := 0; i < 3; i++ {
+		region := &metapb.Region{
+			Id:       uint64(i*4 + 1),
+			Peers:    []*metapb.Peer{{Id: uint64(i*4 + 2), StoreId: uint64(i*4 + 3)}},
+			StartKey: []byte{byte(i)},
+			EndKey:   []byte{byte(i + 1)},
+		}
+		rc.HandleRegionHeartbeat(core.NewRegionInfo(region, region.Peers[0]))
+	}
 }
