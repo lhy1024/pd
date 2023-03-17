@@ -53,6 +53,7 @@ func StartSingleResourceManagerTestServer(ctx context.Context, re *require.Asser
 
 // StartSingleTSOTestServer creates and starts a tso server with default config for testing.
 func StartSingleTSOTestServer(ctx context.Context, re *require.Assertions, backendEndpoints string, listenAddrs ...string) (*tso.Server, func()) {
+
 	cfg, err := tso.NewTSOTestDefaultConfig()
 	re.NoError(err)
 	cfg.BackendEndpoints = backendEndpoints

@@ -287,28 +287,34 @@ func (s *Server) campaignLeader() {
 
 // Close closes the server.
 func (s *Server) Close() {
+	fmt.Println("close addr", s.GetAddr())
+	fmt.Println("close tso server1")
 	if !atomic.CompareAndSwapInt64(&s.isServing, 1, 0) {
 		// server is already closed
 		return
 	}
-
+	fmt.Println("close tso server2")
 	log.Info("closing tso server ...")
 	s.serviceRegister.Deregister()
+	fmt.Println("close tso server3")
 	// TODO: double check when muxListener is closed, grpc.Server.serve() and http.Server.serve()
 	// will also close with error cmux.ErrListenerClosed.
 	s.muxListener.Close()
+	fmt.Println("close tso server4")
 	s.serverLoopCancel()
+	fmt.Println("close tso server5")
 	s.serverLoopWg.Wait()
-
+	fmt.Println("close tso server6")
 	if s.etcdClient != nil {
 		if err := s.etcdClient.Close(); err != nil {
 			log.Error("close etcd client meet error", errs.ZapError(errs.ErrCloseEtcdClient, err))
 		}
 	}
-
+	fmt.Println("close tso server7")
 	if s.httpClient != nil {
 		s.httpClient.CloseIdleConnections()
 	}
+	fmt.Println("close tso server8")
 	log.Info("tso server is closed")
 }
 
@@ -480,23 +486,26 @@ func (s *Server) startGRPCServer(l net.Listener) {
 	diagnosticspb.RegisterDiagnosticsServer(gs, s)
 	serverr := gs.Serve(l)
 	log.Info("grpc server stopped serving")
-
+	fmt.Println("grpc server stopped serving00000000")
 	// Attempt graceful stop (waits for pending RPCs), but force a stop if
 	// it doesn't happen in a reasonable amount of time.
 	done := make(chan struct{})
 	go func() {
 		defer logutil.LogPanic()
 		log.Info("try to gracefully stop the server now")
+		fmt.Print("grpc server stopped serving2")
 		gs.GracefulStop()
 		close(done)
 	}()
 	select {
 	case <-done:
+		fmt.Println("grpc server stopped serving4")
 	case <-time.After(mcsutils.DefaultGRPCGracefulStopTimeout):
+		fmt.Println("grpc server stopped serving3")
 		log.Info("stopping grpc gracefully is taking longer than expected and force stopping now")
 		gs.Stop()
 	}
-
+	fmt.Println("grpc server stopped serving5")
 	if s.IsClosed() {
 		log.Info("grpc server stopped")
 	} else {
@@ -550,6 +559,7 @@ func (s *Server) startGRPCAndHTTPServers(l net.Listener) {
 			log.Panic("mux stop serving unexpectedly", errs.ZapError(err))
 		}
 	}
+	log.Info("mux stopped serving")
 }
 
 func (s *Server) startServer() (err error) {

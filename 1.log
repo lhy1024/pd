@@ -1,0 +1,2105 @@
+nohup: 忽略输入
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.862s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.094s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.419s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.323s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.316s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.284s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.848s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.591s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.400s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.322s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.273s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.795s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.336s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.610s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.393s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.285s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.789s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.811s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.345s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.071s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.891s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.291s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.757s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.280s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.821s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.581s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.419s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.808s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.298s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.315s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.859s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.578s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.907s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.302s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.287s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.287s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.834s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.612s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.918s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.832s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.799s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.785s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.320s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.577s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.414s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.304s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.806s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.297s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.831s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.588s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.387s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.811s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.314s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.277s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.831s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.601s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.893s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.789s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.319s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.294s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.349s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.076s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.885s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.290s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.780s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.291s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.833s
+ok  	github.com/tikv/pd/tests/mcs/tso	12.577s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.385s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.318s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.309s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.789s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.357s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.085s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.899s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.342s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.807s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.805s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.836s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.591s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.914s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.299s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.752s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.798s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.826s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.622s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.384s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.802s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.289s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.290s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.846s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.093s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.369s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.827s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.323s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.795s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.822s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.632s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.380s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.784s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.796s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.775s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.833s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.611s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.884s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.296s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.792s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.269s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.331s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.613s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.862s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.798s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.783s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.288s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.860s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.091s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.373s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.795s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.296s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.791s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.833s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.590s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.381s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.781s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.805s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.281s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.830s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.625s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.376s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.285s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.805s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.282s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.845s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.116s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.381s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.308s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.784s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.773s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.326s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.603s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.902s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.791s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.277s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.787s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.329s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.596s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.878s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.311s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.303s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.809s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.839s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.116s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.399s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.304s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.786s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.293s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.355s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.098s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.408s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.800s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.306s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.289s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.339s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.074s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.366s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.336s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.275s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.288s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.837s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.093s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.883s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.814s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.263s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.294s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.850s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.595s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.376s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.805s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.809s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.274s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.823s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.082s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.885s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.307s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.280s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.791s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.322s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.599s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.382s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.822s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.342s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.276s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.832s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.072s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.391s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.804s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.796s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.269s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.312s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.587s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.886s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.292s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.290s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.809s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.833s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.598s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.401s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.814s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.767s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.782s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.838s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.109s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.879s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.317s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.794s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.283s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.341s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.589s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.896s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.814s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.755s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.797s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.324s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.089s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.878s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.806s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.805s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.300s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.839s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.102s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.890s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.798s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.789s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.794s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.360s
+ok  	github.com/tikv/pd/tests/mcs/tso	12.611s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.387s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.791s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.299s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.797s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.829s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.107s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.902s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.789s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.304s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.783s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.330s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.129s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.903s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.798s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.299s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.299s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.319s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.116s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.382s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.305s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.280s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.295s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.344s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.093s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.896s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.800s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.292s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.792s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.343s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.609s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.375s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.810s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.305s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.284s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.837s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.092s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.399s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.294s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.852s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.304s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.841s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.600s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.892s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.781s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.292s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.305s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.831s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.610s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.411s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.812s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.269s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.790s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.340s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.597s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.902s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.805s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.270s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.784s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.322s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.102s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.396s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.786s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.761s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.777s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.841s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.104s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.899s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.303s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.340s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.296s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.328s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.100s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.910s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.310s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.803s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.282s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.343s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.602s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.896s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.316s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.793s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.291s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.851s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.585s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.383s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.297s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.748s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.277s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.320s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.628s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.914s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.812s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.792s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.276s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.832s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.591s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.884s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.808s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.238s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.775s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.337s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.590s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.399s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.287s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.791s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.770s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.329s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.082s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.930s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.800s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.275s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.782s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.347s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.623s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.391s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.787s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.781s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.783s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.851s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.100s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.865s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.284s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.827s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.284s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.855s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.094s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.372s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.302s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.744s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.783s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.364s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.095s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.410s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.288s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.744s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.792s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.315s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.113s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.384s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.850s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.776s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.785s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.332s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.121s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.881s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.808s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.747s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.269s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.325s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.100s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.423s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.799s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.239s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.305s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.824s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.605s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.387s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.799s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.288s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.763s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.827s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.575s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.883s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.790s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.787s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.274s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.864s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.578s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.875s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.294s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.774s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.295s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.323s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.110s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.384s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.789s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.291s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.280s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.316s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.600s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.405s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.803s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.761s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.790s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.826s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.071s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.885s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.300s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.234s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.290s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.328s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.618s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.877s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.796s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.794s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.797s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.836s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.089s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.377s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.779s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.288s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.784s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.825s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.090s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.387s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.811s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.281s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.279s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.326s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.061s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.883s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.295s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.736s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.274s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.373s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.048s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.361s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.297s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.770s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.784s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.331s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.587s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.881s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.289s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.264s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.266s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.819s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.587s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.893s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.832s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.758s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.281s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.834s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.130s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.382s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.808s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.271s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.284s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.852s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.112s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.387s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.807s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.319s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.287s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.330s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.609s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.872s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.852s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.287s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.767s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.837s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.129s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.381s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.281s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.788s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.775s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.333s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.071s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.882s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.297s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.261s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.782s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.831s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.112s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.388s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.798s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.280s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.265s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.839s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.099s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.379s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.781s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.349s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.295s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.350s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.096s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.418s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.295s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.791s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.798s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.831s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.106s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.907s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.789s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.759s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.296s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.336s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.098s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.896s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.793s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.287s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.799s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.857s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.617s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.378s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.806s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.288s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.797s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.853s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.572s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.864s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.305s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.779s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.802s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.320s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.117s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.896s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.275s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.273s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.289s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.846s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.640s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.890s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.299s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.818s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.781s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.353s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.118s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.387s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.290s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.300s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.267s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.821s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.584s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.911s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.793s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.282s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.799s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.322s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.584s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.862s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.329s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.267s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.291s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.826s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.562s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.378s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.284s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.265s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.283s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.836s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.069s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.383s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.794s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.262s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.282s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.327s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.078s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.864s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.799s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.778s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.792s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.828s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.577s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.358s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.794s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.249s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.275s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.820s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.076s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.865s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.327s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.762s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.271s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.343s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.076s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.855s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.282s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.249s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.282s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.808s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.092s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.838s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.804s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.767s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.784s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.317s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.081s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.874s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.786s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.247s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.781s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.833s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.581s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.357s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.299s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.290s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.780s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.819s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.095s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.850s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.785s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.239s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.777s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.828s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.546s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.388s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.300s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.241s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.271s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.332s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.090s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.874s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.283s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.259s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.782s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.312s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.585s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.361s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.797s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.254s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.785s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.825s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.052s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.362s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.307s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.747s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.276s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.336s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.581s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.389s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.795s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.253s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.259s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.845s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.568s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.389s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.774s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.259s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.768s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.836s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.574s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.368s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.275s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.734s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.286s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.852s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.094s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.876s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.277s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.755s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.289s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.322s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.573s
+ok  	github.com/tikv/pd/tests/mcs/tso	31.883s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.319s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.256s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.770s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.315s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.080s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.376s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.796s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.274s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.268s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.832s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.604s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.354s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.298s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.798s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.793s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.329s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.595s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.859s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.290s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.699s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.277s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.831s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.581s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.369s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.295s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.754s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.753s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.318s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.564s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.350s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.292s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.783s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.775s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.331s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.104s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.854s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.295s
+ok  	github.com/tikv/pd/tests/mcs/discovery	13.752s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.297s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.770s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.256s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.735s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.245s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.946s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.169s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.217s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.194s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.305s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.778s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.404s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.217s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.257s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.190s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.779s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.756s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.362s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.712s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.259s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.696s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.261s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.260s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.951s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.234s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.731s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.245s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.259s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.228s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.957s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.672s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.263s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.728s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.731s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.796s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.894s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.201s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.741s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.661s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.289s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.769s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.885s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.699s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.749s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.730s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.338s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.290s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.864s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.706s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.808s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.217s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.743s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.778s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.953s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.674s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.718s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.195s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.769s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.267s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.398s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.176s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.751s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.247s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.757s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.751s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.914s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.716s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.262s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.690s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.782s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.281s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.397s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.212s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.775s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.706s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.735s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.213s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.372s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.201s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.243s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.198s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.824s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.753s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.877s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.206s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.760s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.240s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.831s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.246s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.947s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.710s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.249s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.754s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.781s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.221s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.875s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.199s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.247s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.216s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.286s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.748s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.904s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.220s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.254s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.230s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.777s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.785s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.389s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.734s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.260s
+ok  	github.com/tikv/pd/tests/mcs/tso	18.212s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.305s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.297s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.349s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.654s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.227s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.734s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.744s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.777s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.381s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.674s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.251s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.752s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.256s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.252s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.934s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.720s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.757s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.211s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.211s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.740s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.863s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.224s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.734s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.216s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.744s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.239s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.920s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.686s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.269s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.710s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.278s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.306s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.428s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.669s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.253s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.271s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.293s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.757s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.463s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.690s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.742s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.726s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.322s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.693s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.436s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.166s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.227s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.264s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.782s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.773s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.401s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.706s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.732s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.739s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.800s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.747s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.975s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.677s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.218s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.248s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.781s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.270s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.940s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.206s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.252s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.228s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.797s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.745s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.390s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.720s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.753s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.218s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.261s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.273s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.916s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.194s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.225s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.703s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.851s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.757s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.360s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.198s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.770s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.708s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.769s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.734s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.953s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.176s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.251s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.198s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.261s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.293s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.441s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.189s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.780s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.182s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.787s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.793s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.816s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.677s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.250s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.724s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.309s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.748s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.367s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.692s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.274s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.235s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.765s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.267s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.506s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.708s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.189s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.730s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.253s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.733s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.914s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.712s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.719s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.709s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.754s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.755s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.371s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.692s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.764s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.733s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.324s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.800s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.901s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.653s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.771s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.738s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.242s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.235s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.357s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.237s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.268s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.711s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.247s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.238s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.489s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.702s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.260s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.706s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.787s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.771s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.492s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.245s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.250s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.196s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.295s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.753s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.942s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.716s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.250s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.710s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.258s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.274s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.902s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.184s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.773s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.238s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.843s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.785s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.903s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.689s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.259s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.718s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.774s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.732s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.856s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.714s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.731s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.258s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.785s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.241s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.932s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.739s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.747s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.170s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.236s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.793s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.385s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.694s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.247s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.217s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.810s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.780s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.859s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.239s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.277s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.708s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.226s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.245s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.905s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.717s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.740s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.722s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.758s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.255s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.452s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.709s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.720s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.233s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.287s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.264s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.410s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.737s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.778s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.226s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.273s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.722s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.397s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.205s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.230s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.213s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.285s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.735s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.977s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.257s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.726s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.681s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.784s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.757s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.958s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.168s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.765s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.740s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.743s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.250s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.881s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.732s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.751s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.693s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.724s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.768s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.439s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.204s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.229s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.268s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.844s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.242s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.951s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.702s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.221s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.720s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.238s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.263s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.057s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.142s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	5.013s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.685s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.444s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.261s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.663s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.740s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.224s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.731s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.792s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.234s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.228s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.472s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.676s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.357s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.175s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.305s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.896s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.733s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.342s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.666s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.036s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.267s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.931s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.696s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.763s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.260s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.787s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.272s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.853s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.671s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.265s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.723s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.803s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.760s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.466s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.171s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.723s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.215s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.245s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.768s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.814s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.709s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.215s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.780s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.052s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.438s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.665s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.802s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.841s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.629s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.172s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.849s
+ok  	github.com/tikv/pd/tests/mcs/discovery	19.373s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	5.287s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	5.040s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.740s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.164s
+ok  	github.com/tikv/pd/tests/mcs/tso	10.193s
+ok  	github.com/tikv/pd/tests/mcs/discovery	18.215s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.982s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.024s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.841s
+ok  	github.com/tikv/pd/tests/mcs/tso	40.286s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.072s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.665s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.390s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.952s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.509s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.102s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.692s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.755s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.584s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.785s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.768s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.507s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.770s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.071s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.460s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.155s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.265s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.310s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.743s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.925s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.205s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.752s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.187s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.790s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.276s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.505s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.218s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.758s
+ok  	github.com/tikv/pd/tests/mcs/tso	13.220s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.855s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.759s
+ok  	github.com/tikv/pd/tests/mcs/discovery	20.817s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.986s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.045s
+ok  	github.com/tikv/pd/tests/mcs/tso	18.153s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.512s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.644s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.294s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.290s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.996s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.894s
+ok  	github.com/tikv/pd/tests/mcs/tso	38.607s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.742s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.977s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.699s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.310s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.752s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.739s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.805s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.971s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.607s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.957s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.290s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.054s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.546s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.382s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.497s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.025s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.716s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.595s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.017s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.361s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.549s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.635s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.706s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.076s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.068s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.962s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.906s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.132s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.851s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.401s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.201s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.957s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.493s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.005s
+ok  	github.com/tikv/pd/tests/mcs/tso	18.756s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.249s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.638s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.897s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.566s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.486s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.304s
+ok  	github.com/tikv/pd/tests/mcs/tso	32.958s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.595s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.927s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.601s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.596s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.727s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.007s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.146s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.433s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.481s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.492s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.748s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.135s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.110s
+ok  	github.com/tikv/pd/tests/mcs/discovery	18.699s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.882s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.326s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.202s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.099s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.020s
+ok  	github.com/tikv/pd/tests/mcs/discovery	18.514s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.281s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.353s
+ok  	github.com/tikv/pd/tests/mcs/tso	18.281s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.071s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.915s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.882s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	5.035s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.427s
+ok  	github.com/tikv/pd/tests/mcs/tso	18.380s
+ok  	github.com/tikv/pd/tests/mcs/tso	38.107s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.669s
+[2023/03/17 10:06:44.985 +08:00] [INFO] [server.go:221] ["API service config"] [config="{\"client-urls\":\"http://127.0.0.1:46067\",\"peer-urls\":\"http://127.0.0.1:33255\",\"advertise-client-urls\":\"http://127.0.0.1:46067\",\"advertise-peer-urls\":\"http://127.0.0.1:33255\",\"name\":\"pd1\",\"data-dir\":\"/tmp/pd-tests3274760818\",\"force-new-cluster\":false,\"enable-grpc-gateway\":true,\"initial-cluster\":\"pd1=http://127.0.0.1:33255\",\"initial-cluster-state\":\"new\",\"initial-cluster-token\":\"pd-cluster\",\"join\":\"\",\"lease\":3,\"log\":{\"level\":\"info\",\"format\":\"text\",\"disable-timestamp\":false,\"file\":{\"filename\":\"\",\"max-size\":0,\"max-days\":0,\"max-backups\":0},\"development\":false,\"disable-caller\":false,\"disable-stacktrace\":false,\"disable-error-verbose\":true,\"sampling\":null,\"error-output-path\":\"\"},\"tso-save-interval\":\"3s\",\"tso-update-physical-interval\":\"50ms\",\"enable-local-tso\":false,\"metric\":{\"job\":\"pd1\",\"address\":\"\",\"interval\":\"15s\"},\"schedule\":{\"max-snapshot-count\":64,\"max-pending-peer-count\":64,\"max-merge-region-size\":20,\"max-merge-region-keys\":0,\"split-merge-interval\":\"1h0m0s\",\"swtich-witness-interval\":\"1h0m0s\",\"enable-one-way-merge\":\"false\",\"enable-cross-table-merge\":\"true\",\"patrol-region-interval\":\"10ms\",\"max-store-down-time\":\"30m0s\",\"max-store-preparing-time\":\"48h0m0s\",\"leader-schedule-limit\":4,\"leader-schedule-policy\":\"count\",\"region-schedule-limit\":2048,\"witness-schedule-limit\":4,\"replica-schedule-limit\":64,\"merge-schedule-limit\":8,\"hot-region-schedule-limit\":4,\"hot-region-cache-hits-threshold\":3,\"store-limit\":{},\"tolerant-size-ratio\":0,\"low-space-ratio\":0.8,\"high-space-ratio\":0.7,\"region-score-formula-version\":\"v2\",\"scheduler-max-waiting-operator\":5,\"enable-remove-down-replica\":\"true\",\"enable-replace-offline-replica\":\"true\",\"enable-make-up-replica\":\"true\",\"enable-remove-extra-replica\":\"true\",\"enable-location-replacement\":\"true\",\"enable-debug-metrics\":\"false\",\"enable-joint-consensus\":\"true\",\"enable-tikv-split-region\":\"true\",\"schedulers-v2\":[{\"type\":\"balance-region\",\"args\":null,\"disable\":false,\"args-payload\":\"\"},{\"type\":\"balance-leader\",\"args\":null,\"disable\":false,\"args-payload\":\"\"},{\"type\":\"balance-witness\",\"args\":null,\"disable\":false,\"args-payload\":\"\"},{\"type\":\"hot-region\",\"args\":null,\"disable\":false,\"args-payload\":\"\"},{\"type\":\"split-bucket\",\"args\":null,\"disable\":false,\"args-payload\":\"\"},{\"type\":\"transfer-witness-leader\",\"args\":null,\"disable\":false,\"args-payload\":\"\"}],\"schedulers-payload\":null,\"store-limit-mode\":\"manual\",\"hot-regions-write-interval\":\"10m0s\",\"hot-regions-reserved-days\":7,\"enable-diagnostic\":\"false\",\"enable-witness\":\"false\",\"slow-store-evicting-affected-store-ratio-threshold\":0.3},\"replication\":{\"max-replicas\":3,\"location-labels\":\"\",\"strictly-match-label\":\"false\",\"enable-placement-rules\":\"true\",\"enable-placement-rules-cache\":\"false\",\"isolation-level\":\"\"},\"pd-server\":{\"use-region-storage\":\"true\",\"max-gap-reset-ts\":\"24h0m0s\",\"key-type\":\"table\",\"runtime-services\":\"\",\"metric-storage\":\"\",\"dashboard-address\":\"auto\",\"trace-region-flow\":\"true\",\"flow-round-by-digit\":3,\"min-resolved-ts-persistence-interval\":\"1s\",\"server-memory-limit\":0,\"server-memory-limit-gc-trigger\":0.7,\"enable-gogc-tuner\":\"false\",\"gc-tuner-threshold\":0.6},\"cluster-version\":\"0.0.0\",\"labels\":{},\"quota-backend-bytes\":\"8GiB\",\"auto-compaction-mode\":\"periodic\",\"auto-compaction-retention-v2\":\"1h\",\"TickInterval\":\"500ms\",\"ElectionInterval\":\"3s\",\"PreVote\":true,\"max-request-bytes\":157286400,\"security\":{\"cacert-path\":\"\",\"cert-path\":\"\",\"key-path\":\"\",\"cert-allowed-cn\":null,\"SSLCABytes\":null,\"SSLCertBytes\":null,\"SSLKEYBytes\":null,\"redact-info-log\":false,\"encryption\":{\"data-encryption-method\":\"plaintext\",\"data-key-rotation-period\":\"168h0m0s\",\"master-key\":{\"type\":\"plaintext\",\"key-id\":\"\",\"region\":\"\",\"endpoint\":\"\",\"path\":\"\"}}},\"label-property\":null,\"WarningMsgs\":null,\"DisableStrictReconfigCheck\":false,\"HeartbeatStreamBindInterval\":\"1m0s\",\"LeaderPriorityCheckInterval\":\"1m0s\",\"dashboard\":{\"tidb-cacert-path\":\"\",\"tidb-cert-path\":\"\",\"tidb-key-path\":\"\",\"public-path-prefix\":\"\",\"internal-proxy\":false,\"enable-telemetry\":false,\"enable-experimental\":false},\"replication-mode\":{\"replication-mode\":\"majority\",\"dr-auto-sync\":{\"label-key\":\"\",\"primary\":\"\",\"dr\":\"\",\"primary-replicas\":0,\"dr-replicas\":0,\"wait-store-timeout\":\"1m0s\",\"pause-region-split\":\"false\"}},\"keyspace\":{\"pre-alloc\":null},\"controller\":{\"degraded-mode-wait-duration\":\"0s\",\"request-unit\":{\"read-base-cost\":0.25,\"read-cost-per-byte\":0.0000152587890625,\"write-base-cost\":1,\"write-cost-per-byte\":0.0009765625,\"read-cpu-ms-cost\":0.3333333333333333}}}"]
+[2023/03/17 10:06:45.047 +08:00] [INFO] [apiutil.go:378] ["register REST path"] [path=/pd/api/v1]
+[2023/03/17 10:06:45.048 +08:00] [INFO] [apiutil.go:378] ["register REST path"] [path=/pd/api/v2/]
+[2023/03/17 10:06:45.048 +08:00] [INFO] [apiutil.go:378] ["register REST path"] [path=/swagger/]
+[2023/03/17 10:06:45.048 +08:00] [INFO] [apiutil.go:378] ["register REST path"] [path=/autoscaling]
+[2023/03/17 10:06:45.048 +08:00] [INFO] [distro.go:51] ["using distribution strings"] [strings={}]
+[2023/03/17 10:06:45.061 +08:00] [INFO] [apiutil.go:378] ["register REST path"] [path=/dashboard/api/]
+[2023/03/17 10:06:45.061 +08:00] [INFO] [apiutil.go:378] ["register REST path"] [path=/dashboard/]
+[2023/03/17 10:06:45.061 +08:00] [INFO] [registry.go:92] ["restful API service registered successfully"] [prefix=pd1] [service-name=MetaStorage]
+[2023/03/17 10:06:45.062 +08:00] [INFO] [apiutil.go:378] ["register REST path"] [path=/resource-manager/api/v1/]
+[2023/03/17 10:06:45.062 +08:00] [INFO] [registry.go:92] ["restful API service registered successfully"] [prefix=pd1] [service-name=ResourceManager]
+[2023/03/17 10:06:45.062 +08:00] [INFO] [etcd.go:117] ["configuring peer listeners"] [listen-peer-urls="[http://127.0.0.1:33255]"]
+[2023/03/17 10:06:45.063 +08:00] [INFO] [etcd.go:127] ["configuring client listeners"] [listen-client-urls="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:45.063 +08:00] [INFO] [etcd.go:611] ["pprof is enabled"] [path=/debug/pprof]
+[2023/03/17 10:06:45.063 +08:00] [INFO] [systimemon.go:30] ["start system time monitor"]
+[2023/03/17 10:06:45.063 +08:00] [INFO] [etcd.go:305] ["starting an etcd server"] [etcd-version=3.4.21] [git-sha="Not provided (use ./build instead of go build)"] [go-version=go1.20.1] [go-os=linux] [go-arch=amd64] [max-cpu-set=40] [max-cpu-available=40] [member-initialized=false] [name=pd1] [data-dir=/tmp/pd-tests3274760818] [wal-dir=] [wal-dir-dedicated=] [member-dir=/tmp/pd-tests3274760818/member] [force-new-cluster=false] [heartbeat-interval=500ms] [election-timeout=3s] [initial-election-tick-advance=true] [snapshot-count=100000] [snapshot-catchup-entries=5000] [initial-advertise-peer-urls="[http://127.0.0.1:33255]"] [listen-peer-urls="[http://127.0.0.1:33255]"] [advertise-client-urls="[http://127.0.0.1:46067]"] [listen-client-urls="[http://127.0.0.1:46067]"] [listen-metrics-urls="[]"] [cors="[*]"] [host-whitelist="[*]"] [initial-cluster="pd1=http://127.0.0.1:33255"] [initial-cluster-state=new] [initial-cluster-token=pd-cluster] [quota-backend-bytes=8589934592] [max-request-bytes=157286400] [max-concurrent-streams=4294967295] [pre-vote=true] [initial-corrupt-check=false] [corrupt-check-time-interval=0s] [auto-compaction-mode=periodic] [auto-compaction-retention=1h0m0s] [auto-compaction-interval=1h0m0s] [discovery-url=] [discovery-proxy=]
+[2023/03/17 10:06:45.064 +08:00] [WARN] [server.go:297] ["exceeded recommended request limit"] [max-request-bytes=157286400] [max-request-size="157 MB"] [recommended-request-bytes=10485760] [recommended-request-size="10 MB"]
+[2023/03/17 10:06:45.067 +08:00] [INFO] [backend.go:80] ["opened backend db"] [path=/tmp/pd-tests3274760818/member/snap/db] [took=2.463925ms]
+[2023/03/17 10:06:45.070 +08:00] [INFO] [raft.go:536] ["starting local member"] [local-member-id=1ab50a5acb65ba77] [cluster-id=6b1b598413674f43]
+[2023/03/17 10:06:45.070 +08:00] [INFO] [raft.go:1523] ["1ab50a5acb65ba77 switched to configuration voters=()"]
+[2023/03/17 10:06:45.070 +08:00] [INFO] [raft.go:706] ["1ab50a5acb65ba77 became follower at term 0"]
+[2023/03/17 10:06:45.071 +08:00] [INFO] [raft.go:389] ["newRaft 1ab50a5acb65ba77 [peers: [], term: 0, commit: 0, applied: 0, lastindex: 0, lastterm: 0]"]
+[2023/03/17 10:06:45.071 +08:00] [INFO] [raft.go:706] ["1ab50a5acb65ba77 became follower at term 1"]
+[2023/03/17 10:06:45.071 +08:00] [INFO] [raft.go:1523] ["1ab50a5acb65ba77 switched to configuration voters=(1924455800846531191)"]
+[2023/03/17 10:06:45.075 +08:00] [WARN] [store.go:1379] ["simple token is not cryptographically signed"]
+[2023/03/17 10:06:45.079 +08:00] [INFO] [quota.go:126] ["enabled backend quota"] [quota-name=v3-applier] [quota-size-bytes=8589934592] [quota-size="8.6 GB"]
+[2023/03/17 10:06:45.080 +08:00] [INFO] [server.go:816] ["starting etcd server"] [local-member-id=1ab50a5acb65ba77] [local-server-version=3.4.21] [cluster-version=to_be_decided]
+[2023/03/17 10:06:45.086 +08:00] [INFO] [server.go:682] ["started as single-node; fast-forwarding election ticks"] [local-member-id=1ab50a5acb65ba77] [forward-ticks=5] [forward-duration=2.5s] [election-ticks=6] [election-timeout=3s]
+[2023/03/17 10:06:45.087 +08:00] [INFO] [raft.go:1523] ["1ab50a5acb65ba77 switched to configuration voters=(1924455800846531191)"]
+[2023/03/17 10:06:45.087 +08:00] [INFO] [cluster.go:392] ["added member"] [cluster-id=6b1b598413674f43] [local-member-id=1ab50a5acb65ba77] [added-peer-id=1ab50a5acb65ba77] [added-peer-peer-urls="[http://127.0.0.1:33255]"]
+[2023/03/17 10:06:45.099 +08:00] [INFO] [etcd.go:585] ["serving peer traffic"] [address=127.0.0.1:33255]
+[2023/03/17 10:06:45.099 +08:00] [INFO] [etcd.go:247] ["now serving peer/client/metrics"] [local-member-id=1ab50a5acb65ba77] [initial-advertise-peer-urls="[http://127.0.0.1:33255]"] [listen-peer-urls="[http://127.0.0.1:33255]"] [advertise-client-urls="[http://127.0.0.1:46067]"] [listen-client-urls="[http://127.0.0.1:46067]"] [listen-metrics-urls="[]"]
+[2023/03/17 10:06:45.572 +08:00] [INFO] [raft.go:929] ["1ab50a5acb65ba77 is starting a new election at term 1"]
+[2023/03/17 10:06:45.572 +08:00] [INFO] [raft.go:735] ["1ab50a5acb65ba77 became pre-candidate at term 1"]
+[2023/03/17 10:06:45.572 +08:00] [INFO] [raft.go:830] ["1ab50a5acb65ba77 received MsgPreVoteResp from 1ab50a5acb65ba77 at term 1"]
+[2023/03/17 10:06:45.572 +08:00] [INFO] [raft.go:719] ["1ab50a5acb65ba77 became candidate at term 2"]
+[2023/03/17 10:06:45.572 +08:00] [INFO] [raft.go:830] ["1ab50a5acb65ba77 received MsgVoteResp from 1ab50a5acb65ba77 at term 2"]
+[2023/03/17 10:06:45.573 +08:00] [INFO] [raft.go:771] ["1ab50a5acb65ba77 became leader at term 2"]
+[2023/03/17 10:06:45.573 +08:00] [INFO] [node.go:327] ["raft.node: 1ab50a5acb65ba77 elected leader 1ab50a5acb65ba77 at term 2"]
+[2023/03/17 10:06:45.574 +08:00] [INFO] [server.go:2567] ["setting up initial cluster version"] [cluster-version=3.4]
+[2023/03/17 10:06:45.574 +08:00] [INFO] [server.go:2069] ["published local member to cluster through raft"] [local-member-id=1ab50a5acb65ba77] [local-member-attributes="{Name:pd1 ClientURLs:[http://127.0.0.1:46067]}"] [request-path=/0/members/1ab50a5acb65ba77/attributes] [cluster-id=6b1b598413674f43] [publish-timeout=11s]
+[2023/03/17 10:06:45.574 +08:00] [INFO] [cluster.go:558] ["set initial cluster version"] [cluster-id=6b1b598413674f43] [local-member-id=1ab50a5acb65ba77] [cluster-version=3.4]
+[2023/03/17 10:06:45.575 +08:00] [INFO] [capability.go:76] ["enabled capabilities for version"] [cluster-version=3.4]
+[2023/03/17 10:06:45.575 +08:00] [INFO] [server.go:2599] ["cluster version is updated"] [cluster-version=3.4]
+[2023/03/17 10:06:45.577 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:45.579 +08:00] [INFO] [registry.go:69] ["gRPC service already registered"] [prefix=pd1] [service-name=MetaStorage]
+[2023/03/17 10:06:45.579 +08:00] [INFO] [registry.go:69] ["gRPC service already registered"] [prefix=pd1] [service-name=ResourceManager]
+[2023/03/17 10:06:45.583 +08:00] [INFO] [serve.go:145] ["serving client traffic insecurely; this is strongly discouraged!"] [address=127.0.0.1:46067]
+[2023/03/17 10:06:45.597 +08:00] [INFO] [server.go:366] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:45.616 +08:00] [INFO] [history_buffer.go:154] ["start from history index"] [start-index=0]
+[2023/03/17 10:06:45.623 +08:00] [INFO] [server.go:432] ["triggering the start callback functions"]
+[2023/03/17 10:06:45.623 +08:00] [INFO] [manager.go:44] ["meta storage starts to initialize"] [name=pd1]
+[2023/03/17 10:06:45.623 +08:00] [INFO] [manager.go:79] ["resource group manager starts to initialize"] [name=pd1]
+[2023/03/17 10:06:45.638 +08:00] [INFO] [server.go:1435] ["start to campaign API service leader"] [campaign-leader-name=pd1]
+[2023/03/17 10:06:45.642 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265775886] [lease-timeout=3] [purpose="leader election"]
+[2023/03/17 10:06:45.644 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":6,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":6}}}}]}"]
+[2023/03/17 10:06:45.646 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/pd/7211330858244398513/leader] [purpose="leader election"]
+[2023/03/17 10:06:45.646 +08:00] [INFO] [server.go:1461] ["campaign API service leader ok"] [campaign-leader-name=pd1]
+[2023/03/17 10:06:45.646 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="leader election"]
+[2023/03/17 10:06:45.653 +08:00] [INFO] [server.go:1582] ["server enable region storage"]
+[2023/03/17 10:06:45.657 +08:00] [INFO] [server.go:1497] ["triggering the leader callback functions"]
+[2023/03/17 10:06:45.664 +08:00] [INFO] [manager.go:130] ["resource group manager finishes initialization"]
+[2023/03/17 10:06:45.669 +08:00] [INFO] [id.go:174] ["idAllocator allocates a new id"] [new-end=1000] [new-base=0] [label=idalloc] [check-curr-end=true]
+[2023/03/17 10:06:45.669 +08:00] [INFO] [util.go:41] ["load cluster version"] [cluster-version=0.0.0]
+[2023/03/17 10:06:45.669 +08:00] [INFO] [server.go:1526] ["API service leader is ready to serve"] [leader-name=pd1]
+[2023/03/17 10:06:46.632 +08:00] [INFO] [server.go:1098] ["PD server config is updated"] [new="{\"use-region-storage\":\"true\",\"max-gap-reset-ts\":\"24h0m0s\",\"key-type\":\"table\",\"runtime-services\":\"\",\"metric-storage\":\"\",\"dashboard-address\":\"http://127.0.0.1:46067\",\"trace-region-flow\":\"true\",\"flow-round-by-digit\":3,\"min-resolved-ts-persistence-interval\":\"1s\",\"server-memory-limit\":0,\"server-memory-limit-gc-trigger\":0.7,\"enable-gogc-tuner\":\"false\",\"gc-tuner-threshold\":0.6}"] [old="{\"use-region-storage\":\"true\",\"max-gap-reset-ts\":\"24h0m0s\",\"key-type\":\"table\",\"runtime-services\":\"\",\"metric-storage\":\"\",\"dashboard-address\":\"auto\",\"trace-region-flow\":\"true\",\"flow-round-by-digit\":3,\"min-resolved-ts-persistence-interval\":\"1s\",\"server-memory-limit\":0,\"server-memory-limit-gc-trigger\":0.7,\"enable-gogc-tuner\":\"false\",\"gc-tuner-threshold\":0.6}"]
+[2023/03/17 10:06:47.664 +08:00] [INFO] [dbstore.go:33] ["Dashboard initializing local storage file"] [path=/tmp/pd-tests3274760818/dashboard.sqlite.db]
+[2023/03/17 10:06:47.868 +08:00] [INFO] [version.go:33] ["TiDB Dashboard started"] [internal-version=0.0.0] [standalone=Yes] [pd-version=0.0.0] [build-time="1970-01-01 00:00:00"] [build-git-hash=Unknown]
+[2023/03/17 10:06:47.877 +08:00] [INFO] [manager.go:196] ["dashboard server is started"]
+[2023/03/17 10:06:47.869 +08:00] [INFO] [proxy.go:211] ["start serve requests to remotes"] [endpoint=127.0.0.1:38818] [remotes="[]"]
+[2023/03/17 10:06:47.869 +08:00] [INFO] [proxy.go:211] ["start serve requests to remotes"] [endpoint=127.0.0.1:38277] [remotes="[]"]
+[2023/03/17 10:06:47.872 +08:00] [WARN] [dynamic_config_manager.go:164] ["Dynamic config does not exist in etcd"]
+[2023/03/17 10:06:47.879 +08:00] [INFO] [dynamic_config_manager.go:188] ["Save dynamic config to etcd"] [json="{\"keyvisual\":{\"auto_collection_disabled\":false,\"policy\":\"db\",\"policy_kv_separator\":\"\"},\"profiling\":{\"auto_collection_targets\":null,\"auto_collection_duration_secs\":0,\"auto_collection_interval_secs\":0},\"sso\":{\"core_config\":{\"enabled\":false,\"client_id\":\"\",\"discovery_url\":\"\",\"is_read_only\":false},\"auth_url\":\"\",\"token_url\":\"\",\"user_info_url\":\"\",\"sign_out_url\":\"\"}}"]
+[2023/03/17 10:06:47.902 +08:00] [INFO] [manager.go:74] ["Key visual service is started"]
+[2023/03/17 10:06:48.845 +08:00] [INFO] [systimemon.go:30] ["start system time monitor"]
+[2023/03/17 10:06:48.847 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:48.851 +08:00] [INFO] [server.go:553] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:48.852 +08:00] [INFO] [server.go:566] ["joining primary election"] [participant-name=http://127.0.0.1:44650] [participant-id=3805916501648655061]
+[2023/03/17 10:06:48.859 +08:00] [INFO] [server.go:605] ["triggering the start callback functions"]
+[2023/03/17 10:06:48.869 +08:00] [INFO] [server.go:212] ["start to campaign the primary/leader"] [campaign-tso-primary-name=http://127.0.0.1:44650]
+[2023/03/17 10:06:48.871 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265775911] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:48.873 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":15,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":15}}}}]}"]
+[2023/03/17 10:06:48.873 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/tso/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:48.873 +08:00] [INFO] [server.go:238] ["campaign tso primary ok"] [campaign-tso-primary-name=http://127.0.0.1:44650]
+[2023/03/17 10:06:48.874 +08:00] [INFO] [server.go:245] ["initializing the global tso allocator"]
+[2023/03/17 10:06:48.874 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:48.894 +08:00] [INFO] [tso.go:183] ["sync and save timestamp"] [last=0001/01/01 00:00:00.000 +00:00] [save=2023/03/17 10:06:51.876 +08:00] [next=2023/03/17 10:06:48.876 +08:00]
+[2023/03/17 10:06:48.897 +08:00] [INFO] [server.go:254] ["triggering the primary callback functions"]
+[2023/03/17 10:06:48.898 +08:00] [INFO] [server.go:262] ["tso primary is ready to serve"] [tso-primary-name=http://127.0.0.1:44650]
+[2023/03/17 10:06:49.189 +08:00] [INFO] [systimemon.go:30] ["start system time monitor"]
+[2023/03/17 10:06:49.191 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:49.202 +08:00] [INFO] [server.go:553] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:49.202 +08:00] [INFO] [server.go:566] ["joining primary election"] [participant-name=http://127.0.0.1:35513] [participant-id=10154218267561940083]
+[2023/03/17 10:06:49.221 +08:00] [INFO] [server.go:605] ["triggering the start callback functions"]
+[2023/03/17 10:06:49.230 +08:00] [INFO] [server.go:201] ["start to watch the primary/leader"] [tso-primary="name:\"http://127.0.0.1:44650\" member_id:3805916501648655061 client_urls:\"http://127.0.0.1:44650\" "]
+[2023/03/17 10:06:49.458 +08:00] [INFO] [systimemon.go:30] ["start system time monitor"]
+[2023/03/17 10:06:49.460 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:49.463 +08:00] [INFO] [server.go:553] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:49.463 +08:00] [INFO] [server.go:566] ["joining primary election"] [participant-name=http://127.0.0.1:42465] [participant-id=11690769940291420667]
+[2023/03/17 10:06:49.470 +08:00] [INFO] [server.go:605] ["triggering the start callback functions"]
+[2023/03/17 10:06:49.489 +08:00] [INFO] [server.go:201] ["start to watch the primary/leader"] [tso-primary="name:\"http://127.0.0.1:44650\" member_id:3805916501648655061 client_urls:\"http://127.0.0.1:44650\" "]
+[2023/03/17 10:06:49.537 +08:00] [INFO] [server.go:289] ["closing tso server ..."]
+[2023/03/17 10:06:49.538 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/tso/registry/http:/127.0.0.1:44650]
+[2023/03/17 10:06:49.541 +08:00] [INFO] [server.go:542] ["mux stop serving"] [error="accept tcp 127.0.0.1:44650: use of closed network connection"]
+[2023/03/17 10:06:49.542 +08:00] [INFO] [server.go:476] ["grpc server stopped serving"]
+[2023/03/17 10:06:49.542 +08:00] [INFO] [server.go:483] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:49.542 +08:00] [INFO] [server.go:495] ["grpc server stopped"]
+[2023/03/17 10:06:49.542 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:49.542 +08:00] [INFO] [server.go:180] ["tso server is closed, exit allocator loop"]
+[2023/03/17 10:06:49.542 +08:00] [INFO] [server.go:276] ["server is closed"]
+[2023/03/17 10:06:49.543 +08:00] [INFO] [tso.go:374] ["reset the timestamp in memory"]
+[2023/03/17 10:06:49.543 +08:00] [INFO] [server.go:512] ["http server stopped serving"]
+[2023/03/17 10:06:49.544 +08:00] [INFO] [server.go:519] ["all http(s) requests finished"]
+[2023/03/17 10:06:49.544 +08:00] [INFO] [server.go:522] ["http server stopped"]
+[2023/03/17 10:06:49.547 +08:00] [INFO] [leadership.go:211] ["current leadership is deleted"] [leader-key=/ms/7211330858244398513/tso/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:49.547 +08:00] [INFO] [leadership.go:211] ["current leadership is deleted"] [leader-key=/ms/7211330858244398513/tso/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:49.547 +08:00] [INFO] [server.go:204] ["the tso primary/leader has changed, try to re-campaign a primary/leader"]
+[2023/03/17 10:06:49.547 +08:00] [INFO] [server.go:204] ["the tso primary/leader has changed, try to re-campaign a primary/leader"]
+[2023/03/17 10:06:49.548 +08:00] [INFO] [server.go:212] ["start to campaign the primary/leader"] [campaign-tso-primary-name=http://127.0.0.1:42465]
+[2023/03/17 10:06:49.548 +08:00] [INFO] [server.go:212] ["start to campaign the primary/leader"] [campaign-tso-primary-name=http://127.0.0.1:35513]
+[2023/03/17 10:06:49.549 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265775934] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:49.550 +08:00] [WARN] [util.go:121] ["failed to apply request"] [took=425.643µs] [request="header:<ID:13436356367120551746 > lease_revoke:<id:3a7786ed51c74f27>"] [response=size:26] [error="lease not found"]
+[2023/03/17 10:06:49.550 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265775936] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:49.551 +08:00] [WARN] [retry_interceptor.go:62] ["retrying of unary invoker failed"] [target=endpoint://client-0cd20df8-7aba-4f16-83e1-3e8d51845f5a/127.0.0.1:46067] [attempt=0] [error="rpc error: code = NotFound desc = etcdserver: requested lease not found"]
+[2023/03/17 10:06:49.551 +08:00] [INFO] [server.go:189] ["server is closed, exit tso primary election loop"]
+[2023/03/17 10:06:49.551 +08:00] [INFO] [server.go:306] ["tso server is closed"]
+[2023/03/17 10:06:49.554 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":27,\"raft_term\":2}}"]
+[2023/03/17 10:06:49.554 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":27,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":27}}}}]}"]
+[2023/03/17 10:06:49.554 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/tso/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:49.554 +08:00] [INFO] [server.go:238] ["campaign tso primary ok"] [campaign-tso-primary-name=http://127.0.0.1:35513]
+[2023/03/17 10:06:49.554 +08:00] [INFO] [server.go:245] ["initializing the global tso allocator"]
+[2023/03/17 10:06:49.554 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:49.557 +08:00] [ERROR] [tso.go:171] ["system time may be incorrect"] [last=2023/03/17 10:06:51.876 +08:00] [next=2023/03/17 10:06:49.557 +08:00] [error="[PD:common:ErrIncorrectSystemTime]incorrect system time"]
+[2023/03/17 10:06:49.566 +08:00] [INFO] [tso.go:183] ["sync and save timestamp"] [last=2023/03/17 10:06:51.876 +08:00] [save=2023/03/17 10:06:54.877 +08:00] [next=2023/03/17 10:06:51.877 +08:00]
+[2023/03/17 10:06:49.566 +08:00] [INFO] [server.go:254] ["triggering the primary callback functions"]
+[2023/03/17 10:06:49.566 +08:00] [INFO] [server.go:262] ["tso primary is ready to serve"] [tso-primary-name=http://127.0.0.1:35513]
+[2023/03/17 10:06:49.566 +08:00] [INFO] [server.go:215] ["campaign tso primary/leader meets error due to txn conflict, another tso server may campaign successfully"] [campaign-tso-primary-name=http://127.0.0.1:42465]
+[2023/03/17 10:06:49.568 +08:00] [INFO] [server.go:201] ["start to watch the primary/leader"] [tso-primary="name:\"http://127.0.0.1:35513\" member_id:10154218267561940083 client_urls:\"http://127.0.0.1:35513\" "]
+[2023/03/17 10:06:52.554 +08:00] [INFO] [server.go:289] ["closing tso server ..."]
+[2023/03/17 10:06:52.554 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/tso/registry/http:/127.0.0.1:42465]
+[2023/03/17 10:06:52.557 +08:00] [INFO] [server.go:542] ["mux stop serving"] [error="accept tcp 127.0.0.1:42465: use of closed network connection"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:512] ["http server stopped serving"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:519] ["all http(s) requests finished"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:522] ["http server stopped"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:476] ["grpc server stopped serving"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:483] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:495] ["grpc server stopped"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:180] ["tso server is closed, exit allocator loop"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:204] ["the tso primary/leader has changed, try to re-campaign a primary/leader"]
+[2023/03/17 10:06:52.558 +08:00] [INFO] [server.go:212] ["start to campaign the primary/leader"] [campaign-tso-primary-name=http://127.0.0.1:42465]
+[2023/03/17 10:06:52.565 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265775947] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:52.568 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":29,\"raft_term\":2}}"]
+[2023/03/17 10:06:52.571 +08:00] [INFO] [server.go:215] ["campaign tso primary/leader meets error due to txn conflict, another tso server may campaign successfully"] [campaign-tso-primary-name=http://127.0.0.1:42465]
+[2023/03/17 10:06:52.571 +08:00] [INFO] [server.go:189] ["server is closed, exit tso primary election loop"]
+[2023/03/17 10:06:52.571 +08:00] [INFO] [server.go:306] ["tso server is closed"]
+[2023/03/17 10:06:52.571 +08:00] [INFO] [server.go:289] ["closing tso server ..."]
+[2023/03/17 10:06:52.572 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/tso/registry/http:/127.0.0.1:35513]
+[2023/03/17 10:06:52.583 +08:00] [INFO] [server.go:542] ["mux stop serving"] [error="accept tcp 127.0.0.1:35513: use of closed network connection"]
+[2023/03/17 10:06:52.583 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:52.584 +08:00] [INFO] [server.go:476] ["grpc server stopped serving"]
+[2023/03/17 10:06:52.586 +08:00] [INFO] [server.go:483] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:52.584 +08:00] [INFO] [server.go:276] ["server is closed"]
+[2023/03/17 10:06:52.584 +08:00] [INFO] [server.go:512] ["http server stopped serving"]
+[2023/03/17 10:06:52.589 +08:00] [INFO] [server.go:519] ["all http(s) requests finished"]
+[2023/03/17 10:06:52.589 +08:00] [INFO] [server.go:522] ["http server stopped"]
+[2023/03/17 10:06:52.583 +08:00] [INFO] [server.go:180] ["tso server is closed, exit allocator loop"]
+[2023/03/17 10:06:52.590 +08:00] [INFO] [tso.go:374] ["reset the timestamp in memory"]
+[2023/03/17 10:06:52.593 +08:00] [INFO] [server.go:495] ["grpc server stopped"]
+[2023/03/17 10:06:52.594 +08:00] [WARN] [util.go:121] ["failed to apply request"] [took=290.997µs] [request="header:<ID:13436356367120551761 > lease_revoke:<id:3a7786ed51c74f3e>"] [response=size:26] [error="lease not found"]
+[2023/03/17 10:06:52.594 +08:00] [WARN] [retry_interceptor.go:62] ["retrying of unary invoker failed"] [target=endpoint://client-4dd6a316-161f-4852-85e9-c9ee9c38eeac/127.0.0.1:46067] [attempt=0] [error="rpc error: code = NotFound desc = etcdserver: requested lease not found"]
+[2023/03/17 10:06:52.594 +08:00] [INFO] [server.go:189] ["server is closed, exit tso primary election loop"]
+[2023/03/17 10:06:52.595 +08:00] [INFO] [server.go:306] ["tso server is closed"]
+config check successful
+[2023/03/17 10:06:55.392 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:55.394 +08:00] [INFO] [server.go:359] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:55.395 +08:00] [INFO] [server.go:366] ["joining primary election"] [participant-name=http://127.0.0.1:41173] [participant-id=12340992680326833799]
+[2023/03/17 10:06:55.399 +08:00] [INFO] [server.go:400] ["triggering the start callback functions"]
+[2023/03/17 10:06:55.399 +08:00] [INFO] [manager.go:79] ["resource group manager starts to initialize"] [name="Resource Manager-localhost.localdomain"]
+[2023/03/17 10:06:55.404 +08:00] [INFO] [server.go:146] ["start to campaign the primary/leader"] [campaign-resource-manager-primary-name=http://127.0.0.1:41173]
+[2023/03/17 10:06:55.411 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265775964] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:55.432 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":36,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":36}}}}]}"]
+[2023/03/17 10:06:55.452 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/resource_manager/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:55.452 +08:00] [INFO] [server.go:169] ["campaign resource manager primary ok"] [campaign-resource-manager-primary-name=http://127.0.0.1:41173]
+[2023/03/17 10:06:55.452 +08:00] [INFO] [server.go:171] ["triggering the primary callback functions"]
+[2023/03/17 10:06:55.453 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:55.455 +08:00] [INFO] [server.go:204] ["closing resource manager server ..."]
+[2023/03/17 10:06:55.455 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/resource_manager/registry/http:/127.0.0.1:41173]
+[2023/03/17 10:06:55.466 +08:00] [INFO] [server.go:343] ["mux stop serving"] [error="accept tcp 127.0.0.1:41173: use of closed network connection"]
+[2023/03/17 10:06:55.466 +08:00] [INFO] [server.go:278] ["gRPC server stop serving"]
+[2023/03/17 10:06:55.466 +08:00] [INFO] [server.go:285] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:55.466 +08:00] [INFO] [server.go:296] ["grpc server stopped"]
+[2023/03/17 10:06:55.466 +08:00] [INFO] [server.go:313] ["http server stop serving"]
+[2023/03/17 10:06:55.467 +08:00] [INFO] [server.go:320] ["all http(s) requests finished"]
+[2023/03/17 10:06:55.467 +08:00] [INFO] [server.go:323] ["http server stopped"]
+[2023/03/17 10:06:55.467 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:55.469 +08:00] [INFO] [manager.go:130] ["resource group manager finishes initialization"]
+[2023/03/17 10:06:55.469 +08:00] [INFO] [server.go:177] ["resource manager primary is ready to serve"] [resource-manager-primary-name=http://127.0.0.1:41173]
+[2023/03/17 10:06:55.469 +08:00] [INFO] [server.go:191] ["server is closed"]
+[2023/03/17 10:06:55.472 +08:00] [INFO] [server.go:126] ["server is closed, exit resource manager primary election loop"]
+[2023/03/17 10:06:55.472 +08:00] [INFO] [server.go:220] ["resource manager server is closed"]
+[2023/03/17 10:06:55.758 +08:00] [INFO] [systimemon.go:30] ["start system time monitor"]
+[2023/03/17 10:06:55.760 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:55.767 +08:00] [INFO] [server.go:553] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:55.767 +08:00] [INFO] [server.go:566] ["joining primary election"] [participant-name=http://127.0.0.1:33925] [participant-id=12925766580271286702]
+[2023/03/17 10:06:55.773 +08:00] [INFO] [server.go:605] ["triggering the start callback functions"]
+[2023/03/17 10:06:55.778 +08:00] [INFO] [server.go:212] ["start to campaign the primary/leader"] [campaign-tso-primary-name=http://127.0.0.1:33925]
+[2023/03/17 10:06:55.793 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265775980] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:55.798 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":44,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":44}}}}]}"]
+[2023/03/17 10:06:55.798 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/tso/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:55.798 +08:00] [INFO] [server.go:238] ["campaign tso primary ok"] [campaign-tso-primary-name=http://127.0.0.1:33925]
+[2023/03/17 10:06:55.799 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:55.799 +08:00] [INFO] [server.go:245] ["initializing the global tso allocator"]
+[2023/03/17 10:06:55.806 +08:00] [INFO] [tso.go:183] ["sync and save timestamp"] [last=2023/03/17 10:06:54.877 +08:00] [save=2023/03/17 10:06:58.803 +08:00] [next=2023/03/17 10:06:55.803 +08:00]
+[2023/03/17 10:06:55.806 +08:00] [INFO] [server.go:254] ["triggering the primary callback functions"]
+[2023/03/17 10:06:55.806 +08:00] [INFO] [server.go:262] ["tso primary is ready to serve"] [tso-primary-name=http://127.0.0.1:33925]
+[2023/03/17 10:06:55.831 +08:00] [INFO] [server.go:289] ["closing tso server ..."]
+[2023/03/17 10:06:55.831 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/tso/registry/http:/127.0.0.1:33925]
+[2023/03/17 10:06:55.834 +08:00] [INFO] [server.go:542] ["mux stop serving"] [error="accept tcp 127.0.0.1:33925: use of closed network connection"]
+[2023/03/17 10:06:55.835 +08:00] [INFO] [server.go:512] ["http server stopped serving"]
+[2023/03/17 10:06:55.835 +08:00] [INFO] [server.go:519] ["all http(s) requests finished"]
+[2023/03/17 10:06:55.835 +08:00] [INFO] [server.go:522] ["http server stopped"]
+[2023/03/17 10:06:55.835 +08:00] [INFO] [server.go:476] ["grpc server stopped serving"]
+[2023/03/17 10:06:55.835 +08:00] [INFO] [server.go:483] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:55.836 +08:00] [INFO] [server.go:180] ["tso server is closed, exit allocator loop"]
+[2023/03/17 10:06:55.836 +08:00] [INFO] [server.go:276] ["server is closed"]
+[2023/03/17 10:06:55.836 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:55.836 +08:00] [INFO] [tso.go:374] ["reset the timestamp in memory"]
+[2023/03/17 10:06:55.836 +08:00] [INFO] [server.go:495] ["grpc server stopped"]
+[2023/03/17 10:06:55.843 +08:00] [WARN] [util.go:121] ["failed to apply request"] [took=529.265µs] [request="header:<ID:13436356367120551796 > lease_revoke:<id:3a7786ed51c74f6c>"] [response=size:26] [error="lease not found"]
+[2023/03/17 10:06:55.843 +08:00] [WARN] [retry_interceptor.go:62] ["retrying of unary invoker failed"] [target=endpoint://client-49964dbf-cbbd-48b6-bff4-e254924e2c46/127.0.0.1:46067] [attempt=0] [error="rpc error: code = NotFound desc = etcdserver: requested lease not found"]
+[2023/03/17 10:06:55.844 +08:00] [INFO] [server.go:189] ["server is closed, exit tso primary election loop"]
+[2023/03/17 10:06:55.845 +08:00] [INFO] [server.go:306] ["tso server is closed"]
+[2023/03/17 10:06:56.006 +08:00] [INFO] [systimemon.go:30] ["start system time monitor"]
+[2023/03/17 10:06:56.008 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:56.013 +08:00] [INFO] [server.go:553] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:56.013 +08:00] [INFO] [server.go:566] ["joining primary election"] [participant-name=http://127.0.0.1:41618] [participant-id=8224445143748589353]
+[2023/03/17 10:06:56.018 +08:00] [INFO] [server.go:605] ["triggering the start callback functions"]
+[2023/03/17 10:06:56.050 +08:00] [INFO] [server.go:212] ["start to campaign the primary/leader"] [campaign-tso-primary-name=http://127.0.0.1:41618]
+[2023/03/17 10:06:56.059 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265775998] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.067 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":52,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":52}}}}]}"]
+[2023/03/17 10:06:56.067 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/tso/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.068 +08:00] [INFO] [server.go:238] ["campaign tso primary ok"] [campaign-tso-primary-name=http://127.0.0.1:41618]
+[2023/03/17 10:06:56.068 +08:00] [INFO] [server.go:245] ["initializing the global tso allocator"]
+[2023/03/17 10:06:56.068 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.070 +08:00] [ERROR] [tso.go:171] ["system time may be incorrect"] [last=2023/03/17 10:06:58.803 +08:00] [next=2023/03/17 10:06:56.070 +08:00] [error="[PD:common:ErrIncorrectSystemTime]incorrect system time"]
+[2023/03/17 10:06:56.073 +08:00] [INFO] [tso.go:183] ["sync and save timestamp"] [last=2023/03/17 10:06:58.803 +08:00] [save=2023/03/17 10:07:01.804 +08:00] [next=2023/03/17 10:06:58.804 +08:00]
+[2023/03/17 10:06:56.073 +08:00] [INFO] [server.go:254] ["triggering the primary callback functions"]
+[2023/03/17 10:06:56.073 +08:00] [INFO] [server.go:262] ["tso primary is ready to serve"] [tso-primary-name=http://127.0.0.1:41618]
+[2023/03/17 10:06:56.119 +08:00] [INFO] [server.go:289] ["closing tso server ..."]
+[2023/03/17 10:06:56.119 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/tso/registry/http:/127.0.0.1:41618]
+[2023/03/17 10:06:56.124 +08:00] [INFO] [server.go:542] ["mux stop serving"] [error="accept tcp 127.0.0.1:41618: use of closed network connection"]
+[2023/03/17 10:06:56.124 +08:00] [INFO] [server.go:512] ["http server stopped serving"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [server.go:519] ["all http(s) requests finished"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [server.go:522] ["http server stopped"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [server.go:476] ["grpc server stopped serving"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [server.go:483] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [server.go:495] ["grpc server stopped"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [server.go:180] ["tso server is closed, exit allocator loop"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [server.go:276] ["server is closed"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.125 +08:00] [INFO] [tso.go:374] ["reset the timestamp in memory"]
+[2023/03/17 10:06:56.142 +08:00] [WARN] [util.go:121] ["failed to apply request"] [took=1.248666ms] [request="header:<ID:13436356367120551814 > lease_revoke:<id:3a7786ed51c74f7e>"] [response=size:26] [error="lease not found"]
+[2023/03/17 10:06:56.142 +08:00] [WARN] [retry_interceptor.go:62] ["retrying of unary invoker failed"] [target=endpoint://client-c212b5ba-90fc-451e-958f-b449cf2c7bef/127.0.0.1:46067] [attempt=0] [error="rpc error: code = NotFound desc = etcdserver: requested lease not found"]
+[2023/03/17 10:06:56.143 +08:00] [INFO] [server.go:189] ["server is closed, exit tso primary election loop"]
+[2023/03/17 10:06:56.143 +08:00] [INFO] [server.go:306] ["tso server is closed"]
+[2023/03/17 10:06:56.349 +08:00] [INFO] [systimemon.go:30] ["start system time monitor"]
+[2023/03/17 10:06:56.349 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:56.352 +08:00] [INFO] [server.go:553] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:56.352 +08:00] [INFO] [server.go:566] ["joining primary election"] [participant-name=http://127.0.0.1:37173] [participant-id=18117619540551508991]
+[2023/03/17 10:06:56.360 +08:00] [INFO] [server.go:605] ["triggering the start callback functions"]
+[2023/03/17 10:06:56.368 +08:00] [INFO] [server.go:212] ["start to campaign the primary/leader"] [campaign-tso-primary-name=http://127.0.0.1:37173]
+[2023/03/17 10:06:56.370 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265776016] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.371 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":60,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":60}}}}]}"]
+[2023/03/17 10:06:56.372 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/tso/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.372 +08:00] [INFO] [server.go:238] ["campaign tso primary ok"] [campaign-tso-primary-name=http://127.0.0.1:37173]
+[2023/03/17 10:06:56.372 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.372 +08:00] [INFO] [server.go:245] ["initializing the global tso allocator"]
+[2023/03/17 10:06:56.373 +08:00] [ERROR] [tso.go:171] ["system time may be incorrect"] [last=2023/03/17 10:07:01.804 +08:00] [next=2023/03/17 10:06:56.373 +08:00] [error="[PD:common:ErrIncorrectSystemTime]incorrect system time"]
+[2023/03/17 10:06:56.395 +08:00] [INFO] [tso.go:183] ["sync and save timestamp"] [last=2023/03/17 10:07:01.804 +08:00] [save=2023/03/17 10:07:04.805 +08:00] [next=2023/03/17 10:07:01.805 +08:00]
+[2023/03/17 10:06:56.396 +08:00] [INFO] [server.go:254] ["triggering the primary callback functions"]
+[2023/03/17 10:06:56.396 +08:00] [INFO] [server.go:262] ["tso primary is ready to serve"] [tso-primary-name=http://127.0.0.1:37173]
+[2023/03/17 10:06:56.420 +08:00] [INFO] [server.go:289] ["closing tso server ..."]
+[2023/03/17 10:06:56.422 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/tso/registry/http:/127.0.0.1:37173]
+[2023/03/17 10:06:56.424 +08:00] [INFO] [server.go:542] ["mux stop serving"] [error="accept tcp 127.0.0.1:37173: use of closed network connection"]
+[2023/03/17 10:06:56.424 +08:00] [INFO] [server.go:180] ["tso server is closed, exit allocator loop"]
+[2023/03/17 10:06:56.424 +08:00] [INFO] [server.go:476] ["grpc server stopped serving"]
+[2023/03/17 10:06:56.424 +08:00] [INFO] [server.go:276] ["server is closed"]
+[2023/03/17 10:06:56.424 +08:00] [INFO] [tso.go:374] ["reset the timestamp in memory"]
+[2023/03/17 10:06:56.424 +08:00] [INFO] [server.go:483] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:56.425 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.425 +08:00] [INFO] [server.go:495] ["grpc server stopped"]
+[2023/03/17 10:06:56.425 +08:00] [INFO] [server.go:512] ["http server stopped serving"]
+[2023/03/17 10:06:56.425 +08:00] [INFO] [server.go:519] ["all http(s) requests finished"]
+[2023/03/17 10:06:56.425 +08:00] [INFO] [server.go:522] ["http server stopped"]
+[2023/03/17 10:06:56.429 +08:00] [WARN] [util.go:121] ["failed to apply request"] [took=341.168µs] [request="header:<ID:13436356367120551832 > lease_revoke:<id:3a7786ed51c74f90>"] [response=size:26] [error="lease not found"]
+[2023/03/17 10:06:56.429 +08:00] [WARN] [retry_interceptor.go:62] ["retrying of unary invoker failed"] [target=endpoint://client-d1afdf93-2832-4e5c-9ce5-3cf8bb4e16a9/127.0.0.1:46067] [attempt=0] [error="rpc error: code = NotFound desc = etcdserver: requested lease not found"]
+[2023/03/17 10:06:56.431 +08:00] [INFO] [server.go:189] ["server is closed, exit tso primary election loop"]
+[2023/03/17 10:06:56.432 +08:00] [INFO] [server.go:306] ["tso server is closed"]
+config check successful
+[2023/03/17 10:06:56.599 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:56.602 +08:00] [INFO] [server.go:359] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:56.602 +08:00] [INFO] [server.go:366] ["joining primary election"] [participant-name=http://127.0.0.1:43241] [participant-id=10920437481722569171]
+[2023/03/17 10:06:56.627 +08:00] [INFO] [server.go:400] ["triggering the start callback functions"]
+[2023/03/17 10:06:56.627 +08:00] [INFO] [manager.go:79] ["resource group manager starts to initialize"] [name="Resource Manager-localhost.localdomain"]
+[2023/03/17 10:06:56.668 +08:00] [INFO] [server.go:146] ["start to campaign the primary/leader"] [campaign-resource-manager-primary-name=http://127.0.0.1:43241]
+[2023/03/17 10:06:56.670 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265776036] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.674 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":68,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":68}}}}]}"]
+[2023/03/17 10:06:56.674 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/resource_manager/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.674 +08:00] [INFO] [server.go:169] ["campaign resource manager primary ok"] [campaign-resource-manager-primary-name=http://127.0.0.1:43241]
+[2023/03/17 10:06:56.674 +08:00] [INFO] [server.go:171] ["triggering the primary callback functions"]
+[2023/03/17 10:06:56.675 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.702 +08:00] [INFO] [manager.go:130] ["resource group manager finishes initialization"]
+[2023/03/17 10:06:56.703 +08:00] [INFO] [server.go:177] ["resource manager primary is ready to serve"] [resource-manager-primary-name=http://127.0.0.1:43241]
+[2023/03/17 10:06:56.717 +08:00] [INFO] [server.go:204] ["closing resource manager server ..."]
+[2023/03/17 10:06:56.717 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/resource_manager/registry/http:/127.0.0.1:43241]
+[2023/03/17 10:06:56.719 +08:00] [INFO] [server.go:343] ["mux stop serving"] [error="accept tcp 127.0.0.1:43241: use of closed network connection"]
+[2023/03/17 10:06:56.719 +08:00] [INFO] [server.go:191] ["server is closed"]
+[2023/03/17 10:06:56.719 +08:00] [INFO] [server.go:313] ["http server stop serving"]
+[2023/03/17 10:06:56.719 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:56.719 +08:00] [INFO] [server.go:278] ["gRPC server stop serving"]
+[2023/03/17 10:06:56.719 +08:00] [INFO] [server.go:320] ["all http(s) requests finished"]
+[2023/03/17 10:06:56.719 +08:00] [INFO] [server.go:323] ["http server stopped"]
+[2023/03/17 10:06:56.719 +08:00] [INFO] [server.go:285] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:56.720 +08:00] [INFO] [server.go:296] ["grpc server stopped"]
+[2023/03/17 10:06:56.721 +08:00] [INFO] [server.go:126] ["server is closed, exit resource manager primary election loop"]
+[2023/03/17 10:06:56.721 +08:00] [INFO] [server.go:220] ["resource manager server is closed"]
+config check successful
+[2023/03/17 10:06:57.046 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:57.049 +08:00] [INFO] [server.go:359] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:57.050 +08:00] [INFO] [server.go:366] ["joining primary election"] [participant-name=http://127.0.0.1:42148] [participant-id=8997408068645767346]
+[2023/03/17 10:06:57.060 +08:00] [INFO] [server.go:400] ["triggering the start callback functions"]
+[2023/03/17 10:06:57.060 +08:00] [INFO] [manager.go:79] ["resource group manager starts to initialize"] [name="Resource Manager-localhost.localdomain"]
+[2023/03/17 10:06:57.066 +08:00] [INFO] [server.go:146] ["start to campaign the primary/leader"] [campaign-resource-manager-primary-name=http://127.0.0.1:42148]
+[2023/03/17 10:06:57.068 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265776054] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:57.070 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":76,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":76}}}}]}"]
+[2023/03/17 10:06:57.070 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/resource_manager/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:57.070 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:57.070 +08:00] [INFO] [server.go:169] ["campaign resource manager primary ok"] [campaign-resource-manager-primary-name=http://127.0.0.1:42148]
+[2023/03/17 10:06:57.071 +08:00] [INFO] [server.go:171] ["triggering the primary callback functions"]
+[2023/03/17 10:06:57.076 +08:00] [INFO] [manager.go:130] ["resource group manager finishes initialization"]
+[2023/03/17 10:06:57.076 +08:00] [INFO] [server.go:177] ["resource manager primary is ready to serve"] [resource-manager-primary-name=http://127.0.0.1:42148]
+[2023/03/17 10:06:57.117 +08:00] [INFO] [server.go:204] ["closing resource manager server ..."]
+[2023/03/17 10:06:57.117 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/resource_manager/registry/http:/127.0.0.1:42148]
+[2023/03/17 10:06:57.119 +08:00] [INFO] [server.go:343] ["mux stop serving"] [error="accept tcp 127.0.0.1:42148: use of closed network connection"]
+[2023/03/17 10:06:57.119 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:57.119 +08:00] [INFO] [server.go:278] ["gRPC server stop serving"]
+[2023/03/17 10:06:57.119 +08:00] [INFO] [server.go:191] ["server is closed"]
+[2023/03/17 10:06:57.119 +08:00] [INFO] [server.go:285] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:57.119 +08:00] [INFO] [server.go:296] ["grpc server stopped"]
+[2023/03/17 10:06:57.119 +08:00] [INFO] [server.go:313] ["http server stop serving"]
+[2023/03/17 10:06:57.119 +08:00] [INFO] [server.go:320] ["all http(s) requests finished"]
+[2023/03/17 10:06:57.120 +08:00] [INFO] [server.go:323] ["http server stopped"]
+[2023/03/17 10:06:57.122 +08:00] [INFO] [server.go:126] ["server is closed, exit resource manager primary election loop"]
+[2023/03/17 10:06:57.123 +08:00] [INFO] [server.go:220] ["resource manager server is closed"]
+config check successful
+[2023/03/17 10:06:57.343 +08:00] [INFO] [etcdutil.go:242] ["create etcd v3 client"] [endpoints="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:57.347 +08:00] [INFO] [server.go:359] ["init cluster id"] [cluster-id=7211330858244398513]
+[2023/03/17 10:06:57.347 +08:00] [INFO] [server.go:366] ["joining primary election"] [participant-name=http://127.0.0.1:35020] [participant-id=14546529782951594055]
+[2023/03/17 10:06:57.354 +08:00] [INFO] [server.go:400] ["triggering the start callback functions"]
+[2023/03/17 10:06:57.354 +08:00] [INFO] [manager.go:79] ["resource group manager starts to initialize"] [name="Resource Manager-localhost.localdomain"]
+[2023/03/17 10:06:57.373 +08:00] [INFO] [server.go:146] ["start to campaign the primary/leader"] [campaign-resource-manager-primary-name=http://127.0.0.1:35020]
+[2023/03/17 10:06:57.376 +08:00] [INFO] [lease.go:66] ["lease granted"] [lease-id=4212984330265776072] [lease-timeout=3] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:57.379 +08:00] [INFO] [leadership.go:122] ["check campaign resp"] [resp="{\"header\":{\"cluster_id\":7717860810225569603,\"member_id\":1924455800846531191,\"revision\":84,\"raft_term\":2},\"succeeded\":true,\"responses\":[{\"Response\":{\"ResponsePut\":{\"header\":{\"revision\":84}}}}]}"]
+[2023/03/17 10:06:57.379 +08:00] [INFO] [leadership.go:131] ["write leaderData to leaderPath ok"] [leaderPath=/ms/7211330858244398513/resource_manager/00000/primary] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:57.379 +08:00] [INFO] [server.go:169] ["campaign resource manager primary ok"] [campaign-resource-manager-primary-name=http://127.0.0.1:35020]
+[2023/03/17 10:06:57.379 +08:00] [INFO] [server.go:171] ["triggering the primary callback functions"]
+[2023/03/17 10:06:57.380 +08:00] [INFO] [lease.go:137] ["start lease keep alive worker"] [interval=1s] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:57.387 +08:00] [INFO] [manager.go:130] ["resource group manager finishes initialization"]
+[2023/03/17 10:06:57.387 +08:00] [INFO] [server.go:177] ["resource manager primary is ready to serve"] [resource-manager-primary-name=http://127.0.0.1:35020]
+[2023/03/17 10:06:57.419 +08:00] [INFO] [server.go:204] ["closing resource manager server ..."]
+[2023/03/17 10:06:57.420 +08:00] [INFO] [register.go:78] ["exit register process"] [key=/pd/microservice/resource_manager/registry/http:/127.0.0.1:35020]
+[2023/03/17 10:06:57.421 +08:00] [INFO] [server.go:343] ["mux stop serving"] [error="accept tcp 127.0.0.1:35020: use of closed network connection"]
+[2023/03/17 10:06:57.422 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="keyspace group primary election"]
+[2023/03/17 10:06:57.422 +08:00] [INFO] [server.go:278] ["gRPC server stop serving"]
+[2023/03/17 10:06:57.422 +08:00] [INFO] [server.go:285] ["try to gracefully stop the server now"]
+[2023/03/17 10:06:57.422 +08:00] [INFO] [server.go:296] ["grpc server stopped"]
+[2023/03/17 10:06:57.422 +08:00] [INFO] [server.go:313] ["http server stop serving"]
+[2023/03/17 10:06:57.422 +08:00] [INFO] [server.go:320] ["all http(s) requests finished"]
+[2023/03/17 10:06:57.422 +08:00] [INFO] [server.go:191] ["server is closed"]
+[2023/03/17 10:06:57.422 +08:00] [INFO] [server.go:323] ["http server stopped"]
+[2023/03/17 10:06:57.425 +08:00] [INFO] [server.go:126] ["server is closed, exit resource manager primary election loop"]
+[2023/03/17 10:06:57.426 +08:00] [INFO] [server.go:220] ["resource manager server is closed"]
+[2023/03/17 10:06:57.428 +08:00] [INFO] [server.go:455] ["closing server"]
+[2023/03/17 10:06:57.429 +08:00] [INFO] [lease.go:162] ["stop lease keep alive worker"] [purpose="leader election"]
+[2023/03/17 10:06:57.429 +08:00] [INFO] [server.go:1562] ["server is closed, exit etcd leader loop"]
+[2023/03/17 10:06:57.429 +08:00] [INFO] [server.go:1545] ["server is closed"]
+[2023/03/17 10:06:57.429 +08:00] [INFO] [server.go:569] ["server is closed, exit metrics loop"]
+[2023/03/17 10:06:57.430 +08:00] [INFO] [server.go:1729] ["server is closed, exist watch service primary addr loop"] [service=tso]
+[2023/03/17 10:06:57.430 +08:00] [INFO] [server.go:594] ["server is closed, exist encryption key manager loop"]
+[2023/03/17 10:06:57.430 +08:00] [INFO] [server.go:1729] ["server is closed, exist watch service primary addr loop"] [service=resource_manager]
+[2023/03/17 10:06:57.435 +08:00] [INFO] [server.go:1391] ["server is closed, return API service leader loop"]
+[2023/03/17 10:06:57.436 +08:00] [INFO] [etcd.go:369] ["closing etcd server"] [name=pd1] [data-dir=/tmp/pd-tests3274760818] [advertise-peer-urls="[http://127.0.0.1:33255]"] [advertise-client-urls="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:57.437 +08:00] [WARN] [grpclog.go:60] ["transport: http2Server.HandleStreams failed to read frame: read tcp 127.0.0.1:46067->127.0.0.1:47728: use of closed network connection"]
+[2023/03/17 10:06:57.438 +08:00] [INFO] [server.go:1507] ["skipped leadership transfer for single voting member cluster"] [local-member-id=1ab50a5acb65ba77] [current-leader-member-id=1ab50a5acb65ba77]
+[2023/03/17 10:06:57.438 +08:00] [WARN] [grpclog.go:60] ["transport: http2Server.HandleStreams failed to read frame: read tcp 127.0.0.1:46067->127.0.0.1:47516: use of closed network connection"]
+[2023/03/17 10:06:57.438 +08:00] [WARN] [grpclog.go:60] ["grpc: addrConn.createTransport failed to connect to {http://127.0.0.1:46067  <nil> 0 <nil>}. Err :connection error: desc = \"transport: Error while dialing dial tcp 127.0.0.1:46067: connect: connection refused\". Reconnecting..."]
+[2023/03/17 10:06:57.440 +08:00] [INFO] [etcd.go:564] ["stopping serving peer traffic"] [address=127.0.0.1:33255]
+[2023/03/17 10:06:57.440 +08:00] [INFO] [etcd.go:571] ["stopped serving peer traffic"] [address=127.0.0.1:33255]
+[2023/03/17 10:06:57.441 +08:00] [INFO] [etcd.go:373] ["closed etcd server"] [name=pd1] [data-dir=/tmp/pd-tests3274760818] [advertise-peer-urls="[http://127.0.0.1:33255]"] [advertise-client-urls="[http://127.0.0.1:46067]"]
+[2023/03/17 10:06:57.441 +08:00] [INFO] [server.go:485] ["triggering the close callback functions"]
+[2023/03/17 10:06:57.442 +08:00] [INFO] [manager.go:85] ["Key visual service is stopped"]
+[2023/03/17 10:06:57.442 +08:00] [INFO] [manager.go:207] ["dashboard server is stopped"]
+[2023/03/17 10:06:57.442 +08:00] [INFO] [manager.go:72] ["exit dashboard loop"]
+[2023/03/17 10:06:57.442 +08:00] [INFO] [server.go:490] ["close server"]
+[2023/03/17 10:06:57.443 +08:00] [WARN] [retry_interceptor.go:62] ["retrying of unary invoker failed"] [target=endpoint://client-f9cda327-10bd-49c8-b572-aa243bf4ef24/127.0.0.1:46067] [attempt=0] [error="rpc error: code = Canceled desc = context canceled"]
+[2023/03/17 10:06:57.443 +08:00] [ERROR] [etcdutil.go:138] ["load from etcd meet error"] [key=/pd/7211330858244398513/scheduler_config/] [error="[PD:etcd:ErrEtcdKVGet]context canceled: context canceled"]
+--- FAIL: TestServerRegisterTestSuite (12.90s)
+    --- FAIL: TestServerRegisterTestSuite/TestServerPrimaryChange (9.33s)
+        register_test.go:124: 
+            	Error Trace:	/home/lhy1024/pd/tests/mcs/discovery/register_test.go:124
+            	            				/home/lhy1024/pd/tests/mcs/discovery/register_test.go:109
+            	Error:      	Not equal: 
+            	            	expected: "http://127.0.0.1:41173"
+            	            	actual  : ""
+            	            	
+            	            	Diff:
+            	            	--- Expected
+            	            	+++ Actual
+            	            	@@ -1 +1 @@
+            	            	-http://127.0.0.1:41173
+            	            	+
+            	Test:       	TestServerRegisterTestSuite/TestServerPrimaryChange
+FAIL
+FAIL	github.com/tikv/pd/tests/mcs/discovery	13.383s
+FAIL
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.291s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	5.098s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.397s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.444s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.756s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.679s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.355s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.844s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.320s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.903s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.808s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.242s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.436s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.876s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.876s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.484s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.339s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.253s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.796s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.486s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.863s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.454s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.363s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.721s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.297s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.445s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.917s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.010s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.326s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.248s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.278s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.850s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.003s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.750s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.264s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.895s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.899s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.246s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.289s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.319s
+ok  	github.com/tikv/pd/tests/mcs/tso	6.797s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.618s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.755s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.304s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.843s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.412s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.309s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.149s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.731s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.799s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.299s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.373s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.300s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.096s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.750s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.303s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.317s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.302s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.274s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.437s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.198s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	1.767s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.236s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.772s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.222s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.259s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.853s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.508s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.732s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.507s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.967s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.049s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.221s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.028s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.288s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.287s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.793s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.953s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.718s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.255s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.773s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.201s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.792s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.545s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.732s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.800s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.249s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.285s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.719s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.474s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.626s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.019s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.671s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.561s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.210s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.278s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.023s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.002s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.832s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.383s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.243s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.438s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.528s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.166s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.710s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.666s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.743s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.572s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.534s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.125s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.725s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.654s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.201s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.878s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.165s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.048s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.667s
+ok  	github.com/tikv/pd/tests/mcs/tso	35.098s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.565s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.966s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.050s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.123s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.865s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.214s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.158s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.554s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.022s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.502s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.184s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.697s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.737s
+ok  	github.com/tikv/pd/tests/mcs/discovery	14.958s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	1.720s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.308s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.785s
+ok  	github.com/tikv/pd/tests/mcs/tso	33.319s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.811s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.045s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.630s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.028s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.810s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.930s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.104s
+ok  	github.com/tikv/pd/tests/mcs/discovery	15.348s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.930s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.619s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.252s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.281s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.659s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.794s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.598s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	3.053s
+ok  	github.com/tikv/pd/tests/mcs/tso	15.412s
+ok  	github.com/tikv/pd/tests/mcs/tso	37.317s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.645s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.453s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	3.616s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.586s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.339s
+ok  	github.com/tikv/pd/tests/mcs/tso	34.481s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.653s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.016s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.049s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	4.675s
+ok  	github.com/tikv/pd/tests/mcs/tso	14.915s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.217s
+ok  	github.com/tikv/pd/tests/mcs/tso	7.193s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.863s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	4.012s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.532s
+ok  	github.com/tikv/pd/tests/mcs/tso	17.419s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.881s
+ok  	github.com/tikv/pd/tests/mcs/tso	9.556s
+ok  	github.com/tikv/pd/tests/mcs/discovery	17.781s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.534s
+start test
+ok  	github.com/tikv/pd/tests/mcs/tso	2.604s
+ok  	github.com/tikv/pd/tests/mcs/tso	16.435s
+ok  	github.com/tikv/pd/tests/mcs/tso	36.445s
+ok  	github.com/tikv/pd/tests/mcs/tso	8.206s
+ok  	github.com/tikv/pd/tests/mcs/discovery	16.085s
+ok  	github.com/tikv/pd/tests/mcs/resource_manager	2.208s

@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/pingcap/log"
@@ -40,8 +41,11 @@ func NewTSOTestServer(ctx context.Context, re *require.Assertions, cfg *Config) 
 	}
 
 	cleanup := func() {
+		fmt.Println("cleanup tso server1")
 		s.Close()
+		fmt.Println("cleanup tso server2")
 		os.RemoveAll(cfg.DataDir)
+		fmt.Println("cleanup tso server3")
 	}
 	return s, cleanup, nil
 }
