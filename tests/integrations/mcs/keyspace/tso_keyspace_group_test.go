@@ -41,6 +41,7 @@ type keyspaceGroupTestSuite struct {
 	cluster          *tests.TestCluster
 	server           *tests.TestServer
 	backendEndpoints string
+	dialClient       *http.Client
 }
 
 func TestKeyspaceGroupTestSuite(t *testing.T) {
@@ -58,6 +59,11 @@ func (suite *keyspaceGroupTestSuite) SetupTest() {
 	suite.server = cluster.GetServer(cluster.GetLeader())
 	suite.NoError(suite.server.BootstrapCluster())
 	suite.backendEndpoints = suite.server.GetAddr()
+	suite.dialClient = &http.Client{
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
 	suite.cleanupFunc = func() {
 		cancel()
 	}
@@ -109,22 +115,53 @@ func (suite *keyspaceGroupTestSuite) TestReplicaNum() {
 	// replica is more than the num of nodes.
 	kgs := &handlers.CreateKeyspaceGroupParams{KeyspaceGroups: []*endpoint.KeyspaceGroup{
 		{
-			ID:       uint32(5),
+			ID:       uint32(1),
 			UserKind: endpoint.Standard.String(),
 			Replica:  2,
 		},
 	}}
-	data, err := json.Marshal(kgs)
+	code := suite.tryCreateKeyspaceGroup(kgs)
+	suite.Equal(http.StatusBadRequest, code)
+	// miss replica.
+	kgs = &handlers.CreateKeyspaceGroupParams{KeyspaceGroups: []*endpoint.KeyspaceGroup{
+		{
+			ID:       uint32(2),
+			UserKind: endpoint.Standard.String(),
+		},
+	}}
+	code = suite.tryCreateKeyspaceGroup(kgs)
+	suite.Equal(http.StatusBadRequest, code)
+
+	// replica is negative.
+	kgs = &handlers.CreateKeyspaceGroupParams{KeyspaceGroups: []*endpoint.KeyspaceGroup{
+		{
+			ID:       uint32(3),
+			UserKind: endpoint.Standard.String(),
+			Replica:  -1,
+		},
+	}}
+	code = suite.tryCreateKeyspaceGroup(kgs)
+	suite.Equal(http.StatusBadRequest, code)
+
+	// replica is more than the num of nodes.
+	kgs = &handlers.CreateKeyspaceGroupParams{KeyspaceGroups: []*endpoint.KeyspaceGroup{
+		{
+			ID:       uint32(4),
+			UserKind: endpoint.Standard.String(),
+			Replica:  2,
+		},
+	}}
+	code = suite.tryCreateKeyspaceGroup(kgs)
+	suite.Equal(http.StatusBadRequest, code)
+}
+
+func (suite *keyspaceGroupTestSuite) tryCreateKeyspaceGroup(request *handlers.CreateKeyspaceGroupParams) int {
+	data, err := json.Marshal(request)
 	suite.NoError(err)
 	httpReq, err := http.NewRequest(http.MethodPost, suite.server.GetAddr()+keyspaceGroupsPrefix, bytes.NewBuffer(data))
 	suite.NoError(err)
-	dialClient := &http.Client{
-		Transport: &http.Transport{
-			DisableKeepAlives: true,
-		},
-	}
-	resp, err := dialClient.Do(httpReq)
+	resp, err := suite.dialClient.Do(httpReq)
 	suite.NoError(err)
 	defer resp.Body.Close()
-	suite.Equal(http.StatusBadRequest, resp.StatusCode)
+	return resp.StatusCode
 }
