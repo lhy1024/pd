@@ -46,6 +46,7 @@ func TestKeyspaceGroupTestSuite(t *testing.T) {
 
 func (suite *keyspaceGroupTestSuite) SetupTest() {
 	suite.NoError(failpoint.Enable("github.com/tikv/pd/pkg/keyspace/disableAllocate", "return(true)"))
+	suite.NoError(failpoint.Enable("github.com/tikv/pd/server/apiv2/handlers/disableAllocate", "return(true)"))
 	suite.ctx, suite.cancel = context.WithCancel(context.Background())
 	cluster, err := tests.NewTestCluster(suite.ctx, 1)
 	suite.cluster = cluster
@@ -58,6 +59,7 @@ func (suite *keyspaceGroupTestSuite) SetupTest() {
 
 func (suite *keyspaceGroupTestSuite) TearDownTest() {
 	suite.NoError(failpoint.Disable("github.com/tikv/pd/pkg/keyspace/disableAllocate"))
+	suite.NoError(failpoint.Disable("github.com/tikv/pd/server/apiv2/handlers/disableAllocate"))
 	suite.cancel()
 	suite.cluster.Destroy()
 }
