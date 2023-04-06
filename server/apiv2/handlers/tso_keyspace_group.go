@@ -58,6 +58,14 @@ func CreateKeyspaceGroups(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid keyspace group id")
 			return
 		}
+		if !endpoint.IsUserKindValid(keyspaceGroup.UserKind) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid user kind")
+			return
+		}
+		if manager.GetNodesNum() < keyspaceGroup.Replica || keyspaceGroup.Replica < 1 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid replica")
+			return
+		}
 	}
 
 	err = manager.CreateKeyspaceGroups(createParams.KeyspaceGroups)

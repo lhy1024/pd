@@ -81,8 +81,8 @@ type CreateKeyspaceRequest struct {
 	// Using an existing name will result in error.
 	Name   string
 	Config map[string]string
-	// Now is the timestamp used to record creation time.
-	Now int64
+	// CreateTime is the timestamp used to record creation time.
+	CreateTime int64
 }
 
 // NewKeyspaceManager creates a Manager of keyspace related data.
@@ -140,8 +140,8 @@ func (manager *Manager) Bootstrap() error {
 			return err
 		}
 		_, err = manager.CreateKeyspace(&CreateKeyspaceRequest{
-			Name: keyspaceName,
-			Now:  now,
+			Name:       keyspaceName,
+			CreateTime: now,
 			Config: map[string]string{
 				UserKindKey:           endpoint.Basic.String(),
 				TSOKeyspaceGroupIDKey: id,
@@ -186,8 +186,8 @@ func (manager *Manager) CreateKeyspace(request *CreateKeyspaceRequest) (*keyspac
 		Id:             newID,
 		Name:           request.Name,
 		State:          keyspacepb.KeyspaceState_ENABLED,
-		CreatedAt:      request.Now,
-		StateChangedAt: request.Now,
+		CreatedAt:      request.CreateTime,
+		StateChangedAt: request.CreateTime,
 		Config:         request.Config,
 	}
 	err = manager.saveNewKeyspace(keyspace)
