@@ -19,6 +19,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pingcap/failpoint"
 	"github.com/pkg/errors"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/mcs/utils"
@@ -44,6 +45,10 @@ type CreateKeyspaceGroupParams struct {
 
 // CreateKeyspaceGroups creates keyspace groups.
 func CreateKeyspaceGroups(c *gin.Context) {
+	enableAllocate := true
+	failpoint.Inject("disableAllocate", func() {
+		enableAllocate = false
+	})
 	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
 	manager := svr.GetKeyspaceGroupManager()
 	createParams := &CreateKeyspaceGroupParams{}
@@ -62,7 +67,7 @@ func CreateKeyspaceGroups(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid user kind")
 			return
 		}
-		if manager.GetNodesNum() < keyspaceGroup.Replica || keyspaceGroup.Replica < 1 {
+		if enableAllocate && (manager.GetNodesNum() < keyspaceGroup.Replica || keyspaceGroup.Replica < 1) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid replica")
 			return
 		}
