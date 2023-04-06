@@ -234,13 +234,6 @@ func (m *GroupManager) GetAvailableKeyspaceGroupIDByKind(userKind endpoint.UserK
 
 // GetNodesNum returns the number of nodes.
 func (m *GroupManager) GetNodesNum() int {
-	enableAllocate := true
-	failpoint.Inject("disableAllocate", func() {
-		enableAllocate = false
-	})
-	if !enableAllocate {
-		return 0
-	}
 	return len(m.nodesBalancer.GetAll())
 }
 
