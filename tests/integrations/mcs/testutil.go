@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pkg/errors"
 	rm "github.com/tikv/pd/pkg/mcs/resource_manager/server"
 	tso "github.com/tikv/pd/pkg/mcs/tso/server"
 	"github.com/tikv/pd/pkg/mcs/utils"
@@ -89,22 +88,5 @@ func WaitForPrimaryServing(re *require.Assertions, serverMap map[string]bs.Serve
 		}
 		return false
 	}, testutil.WithWaitFor(5*time.Second), testutil.WithTickInterval(50*time.Millisecond))
-
 	return primary
-}
-
-// WaitForTSOServiceAvailable waits for the pd client being served by the tso server side
-func WaitForTSOServiceAvailable(ctx context.Context, pdClient pd.Client) error {
-	var err error
-	for i := 0; i < 30; i++ {
-		if _, _, err := pdClient.GetTS(ctx); err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return err
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-	return errors.WithStack(err)
 }

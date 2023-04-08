@@ -21,6 +21,10 @@
 			"path": "tests/integrations/tso"
 		},
 		{
+			"name": "tso-tests",
+			"path": "tests/compatibility"
+		},
+		{
 			"name": "pd-tso-bench",
 			"path": "tools/pd-tso-bench"
 		}
