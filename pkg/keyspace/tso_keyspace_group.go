@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/balancer"
 	"github.com/tikv/pd/pkg/mcs/discovery"
@@ -32,10 +31,13 @@ import (
 )
 
 const (
-	defaultBalancerPolicy        = balancer.PolicyRoundRobin
-	allocNodeTimeout             = 1 * time.Second
-	allocNodeInterval            = 10 * time.Millisecond
+	defaultBalancerPolicy = balancer.PolicyRoundRobin
+	allocNodeTimeout      = 1 * time.Second
+	allocNodeInterval     = 10 * time.Millisecond
+	// TODO: move it to etcdutil
 	watchEtcdChangeRetryInterval = 1 * time.Second
+	maxRetryTimes                = 25
+	retryInterval                = 100 * time.Millisecond
 )
 
 // GroupManager is the manager of keyspace group related data.
@@ -89,15 +91,8 @@ func (m *GroupManager) Bootstrap() error {
 	}
 	if m.client != nil {
 		m.nodesBalancer = balancer.GenByPolicy[string](m.policy)
-		resp, err := etcdutil.EtcdKVGet(m.client, m.tsoServiceKey, clientv3.WithRange(m.tsoServiceEndKey))
-		if err != nil {
-			return err
-		}
-		for _, item := range resp.Kvs {
-			m.nodesBalancer.Put(string(item.Value))
-		}
 		m.wg.Add(1)
-		go m.startWatchLoop(resp.Header.GetRevision())
+		go m.startWatchLoop()
 	}
 	return nil
 }
@@ -108,10 +103,32 @@ func (m *GroupManager) Close() {
 	m.wg.Wait()
 }
 
-func (m *GroupManager) startWatchLoop(revision int64) {
+func (m *GroupManager) startWatchLoop() {
 	defer m.wg.Done()
 	ctx, cancel := context.WithCancel(m.ctx)
 	defer cancel()
+	var (
+		revision int64
+		err      error
+	)
+	for i := 0; i < maxRetryTimes; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retryInterval):
+		}
+		resp, err := etcdutil.EtcdKVGet(m.client, m.tsoServiceKey, clientv3.WithRange(m.tsoServiceEndKey))
+		if err == nil { // success
+			break
+		}
+		for _, item := range resp.Kvs {
+			m.nodesBalancer.Put(string(item.Value))
+		}
+		revision = resp.Header.GetRevision()
+	}
+	if err != nil {
+		log.Warn("failed to get tso service addrs from etcd", zap.Error(err))
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -134,6 +151,7 @@ func (m *GroupManager) watchServiceAddrs(ctx context.Context, revision int64) (i
 	watcher := clientv3.NewWatcher(m.client)
 	defer watcher.Close()
 	for {
+	WatchChan:
 		watchChan := watcher.Watch(ctx, m.tsoServiceKey, clientv3.WithRange(m.tsoServiceEndKey), clientv3.WithRev(revision))
 		select {
 		case <-ctx.Done():
@@ -144,7 +162,7 @@ func (m *GroupManager) watchServiceAddrs(ctx context.Context, revision int64) (i
 					zap.Int64("required-revision", revision),
 					zap.Int64("compact-revision", wresp.CompactRevision))
 				revision = wresp.CompactRevision
-				continue
+				goto WatchChan
 			}
 			if wresp.Err() != nil {
 				log.Error("watch is canceled or closed",
