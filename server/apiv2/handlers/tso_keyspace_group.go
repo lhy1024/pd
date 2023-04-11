@@ -43,6 +43,7 @@ type CreateKeyspaceGroupParams struct {
 	KeyspaceGroups []*endpoint.KeyspaceGroup `json:"keyspace-groups"`
 }
 
+// AllocNodeForKeyspaceGroupParams defines the params for allocating nodes for keyspace groups.
 type AllocNodeForKeyspaceGroupParams struct {
 	KeyspaceGroupID uint32 `json:"keyspace-group-id"`
 	Replica         int    `json:"replica"`
@@ -133,6 +134,7 @@ func DeleteKeyspaceGroupByID(c *gin.Context) {
 	c.JSON(http.StatusOK, nil)
 }
 
+// AllocNodeForKeyspaceGroup allocates nodes for keyspace group.
 func AllocNodeForKeyspaceGroup(c *gin.Context) {
 	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
 	manager := svr.GetKeyspaceGroupManager()

@@ -189,7 +189,6 @@ func (m *GroupManager) watchServiceAddrs(ctx context.Context, revision int64) (i
 				}
 			}
 		}
-
 	}
 }
 
@@ -261,7 +260,7 @@ func (m *GroupManager) GetNodesNum() int {
 	return len(m.nodesBalancer.GetAll())
 }
 
-// AllocNodesForGroup allocates nodes for the keyspace group.
+// AllocNodesForKeyspaceGroup allocates nodes for the keyspace group.
 func (m *GroupManager) AllocNodesForKeyspaceGroup(id uint32, replica int) ([]endpoint.KeyspaceGroupMember, error) {
 	ctx, cancel := context.WithTimeout(m.ctx, allocNodeTimeout)
 	defer cancel()
