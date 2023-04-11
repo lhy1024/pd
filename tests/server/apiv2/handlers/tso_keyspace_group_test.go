@@ -77,7 +77,7 @@ func (suite *keyspaceGroupTestSuite) TestCreateKeyspaceGroups() {
 	// miss user kind, use default value.
 	kgs = &handlers.CreateKeyspaceGroupParams{KeyspaceGroups: []*endpoint.KeyspaceGroup{
 		{
-			ID:      uint32(3),
+			ID: uint32(3),
 		},
 	}}
 	code = suite.tryCreateKeyspaceGroup(kgs)
