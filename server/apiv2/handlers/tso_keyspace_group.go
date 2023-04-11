@@ -19,7 +19,6 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pingcap/failpoint"
 	"github.com/pkg/errors"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/mcs/utils"
@@ -43,12 +42,13 @@ type CreateKeyspaceGroupParams struct {
 	KeyspaceGroups []*endpoint.KeyspaceGroup `json:"keyspace-groups"`
 }
 
+type AllocNodeForKeyspaceGroupParams struct {
+	KeyspaceGroupID uint32 `json:"keyspace-group-id"`
+	Replica         int    `json:"replica"`
+}
+
 // CreateKeyspaceGroups creates keyspace groups.
 func CreateKeyspaceGroups(c *gin.Context) {
-	enableAllocate := true
-	failpoint.Inject("disableAllocate", func() {
-		enableAllocate = false
-	})
 	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
 	manager := svr.GetKeyspaceGroupManager()
 	createParams := &CreateKeyspaceGroupParams{}
@@ -63,13 +63,10 @@ func CreateKeyspaceGroups(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid keyspace group id")
 			return
 		}
-		if !endpoint.IsUserKindValid(keyspaceGroup.UserKind) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid user kind")
-			return
-		}
-		if enableAllocate && (manager.GetNodesNum() < keyspaceGroup.Replica || keyspaceGroup.Replica < 1) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid replica")
-			return
+		if keyspaceGroup.UserKind == "" {
+			keyspaceGroup.UserKind = endpoint.Basic.String()
+		} else if !endpoint.IsUserKindValid(keyspaceGroup.UserKind) {
+			keyspaceGroup.UserKind = endpoint.Basic.String()
 		}
 	}
 
@@ -79,6 +76,37 @@ func CreateKeyspaceGroups(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, nil)
+}
+
+func AllocNodeForKeyspaceGroup(c *gin.Context) {
+	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
+	manager := svr.GetKeyspaceGroupManager()
+	allocParams := &AllocNodeForKeyspaceGroupParams{}
+	err := c.BindJSON(allocParams)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause())
+		return
+	}
+	if manager.GetNodesNum() < allocParams.Replica || allocParams.Replica < 1 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, "invalid replica")
+		return
+	}
+	keyspaceGroup, err := manager.GetKeyspaceGroupByID(allocParams.KeyspaceGroupID)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, "invalid keyspace group id")
+		return
+	}
+	if len(keyspaceGroup.Members) >= allocParams.Replica {
+		c.AbortWithStatusJSON(http.StatusBadRequest, "invalid replica")
+		return
+	}
+	// get the nodes
+	nodes, err := manager.AllocNodesForKeyspaceGroup(allocParams.KeyspaceGroupID, allocParams.Replica)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, nodes)
 }
 
 // GetKeyspaceGroups gets keyspace groups from the start ID with limit.

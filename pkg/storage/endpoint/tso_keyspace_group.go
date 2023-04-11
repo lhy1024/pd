@@ -83,8 +83,6 @@ type KeyspaceGroup struct {
 	Members []KeyspaceGroupMember `json:"members"`
 	// Keyspaces are the keyspace IDs which belong to the keyspace group.
 	Keyspaces []uint32 `json:"keyspaces"`
-	// Replica is the tso replica count of the keyspace group.
-	Replica int `json:"replica"`
 }
 
 // KeyspaceGroupStorage is the interface for keyspace group storage.

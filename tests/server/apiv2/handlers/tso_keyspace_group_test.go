@@ -89,7 +89,7 @@ func (suite *keyspaceGroupTestSuite) TestCreateKeyspaceGroups() {
 		},
 	}}
 	code = suite.tryCreateKeyspaceGroup(kgs)
-	re.Equal(http.StatusBadRequest, code)
+	re.Equal(http.StatusOK, code)
 
 	// invalid user kind.
 	kgs = &handlers.CreateKeyspaceGroupParams{KeyspaceGroups: []*endpoint.KeyspaceGroup{
