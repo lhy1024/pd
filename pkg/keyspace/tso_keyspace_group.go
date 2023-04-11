@@ -118,13 +118,13 @@ func (m *GroupManager) startWatchLoop() {
 		case <-time.After(retryInterval):
 		}
 		resp, err := etcdutil.EtcdKVGet(m.client, m.tsoServiceKey, clientv3.WithRange(m.tsoServiceEndKey))
-		if err == nil { // success
+		if err == nil {
+			revision = resp.Header.Revision
+			for _, item := range resp.Kvs {
+				m.nodesBalancer.Put(string(item.Value))
+			}
 			break
 		}
-		for _, item := range resp.Kvs {
-			m.nodesBalancer.Put(string(item.Value))
-		}
-		revision = resp.Header.GetRevision()
 	}
 	if err != nil {
 		log.Warn("failed to get tso service addrs from etcd", zap.Error(err))
