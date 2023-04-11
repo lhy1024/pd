@@ -16,6 +16,7 @@ package keyspace
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -121,7 +122,12 @@ func (m *GroupManager) startWatchLoop() {
 		if err == nil {
 			revision = resp.Header.Revision
 			for _, item := range resp.Kvs {
-				m.nodesBalancer.Put(string(item.Value))
+				s := &discovery.ServiceRegistryEntry{}
+				if err := json.Unmarshal(item.Value, s); err != nil {
+					log.Warn("failed to unmarshal service registry entry", zap.Error(err))
+					continue
+				}
+				m.nodesBalancer.Put(s.ServiceAddr)
 			}
 			break
 		}
@@ -171,12 +177,15 @@ func (m *GroupManager) watchServiceAddrs(ctx context.Context, revision int64) (i
 				return revision, wresp.Err()
 			}
 			for _, event := range wresp.Events {
-				addr := string(event.Kv.Value)
+				s := &discovery.ServiceRegistryEntry{}
+				if err := json.Unmarshal(event.Kv.Value, s); err != nil {
+					log.Warn("failed to unmarshal service registry entry", zap.Error(err))
+				}
 				switch event.Type {
 				case clientv3.EventTypePut:
-					m.nodesBalancer.Put(addr)
+					m.nodesBalancer.Put(s.ServiceAddr)
 				case clientv3.EventTypeDelete:
-					m.nodesBalancer.Delete(addr)
+					m.nodesBalancer.Delete(s.ServiceAddr)
 				}
 			}
 		}
@@ -259,7 +268,7 @@ func (m *GroupManager) AllocNodesForKeyspaceGroup(id uint32, replica int) ([]end
 	ticker := time.NewTicker(allocNodeInterval)
 	defer ticker.Stop()
 	nodes := make([]endpoint.KeyspaceGroupMember, 0, replica)
-	m.store.RunInTxn(m.ctx, func(txn kv.Txn) error {
+	err := m.store.RunInTxn(m.ctx, func(txn kv.Txn) error {
 		kg, err := m.store.LoadKeyspaceGroup(txn, id)
 		if err != nil {
 			return err
@@ -280,11 +289,11 @@ func (m *GroupManager) AllocNodesForKeyspaceGroup(id uint32, replica int) ([]end
 			}
 			num := len(m.nodesBalancer.GetAll())
 			if num < replica || num == 0 { // double check
-				return nil
+				return errNoAvailableNode
 			}
 			addr := m.nodesBalancer.Next()
 			if addr == "" {
-				return nil
+				return errNoAvailableNode
 			}
 			if _, ok := exists[addr]; ok {
 				continue
@@ -296,5 +305,8 @@ func (m *GroupManager) AllocNodesForKeyspaceGroup(id uint32, replica int) ([]end
 		m.store.SaveKeyspaceGroup(txn, kg)
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	return nodes, nil
 }

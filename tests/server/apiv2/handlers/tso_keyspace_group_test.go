@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/mcs/utils"
 	"github.com/tikv/pd/pkg/storage/endpoint"
@@ -66,22 +65,19 @@ func (suite *keyspaceGroupTestSuite) TestCreateKeyspaceGroups() {
 		{
 			ID:       uint32(1),
 			UserKind: endpoint.Standard.String(),
-			Replica:  1,
 		},
 		{
 			ID:       uint32(2),
 			UserKind: endpoint.Standard.String(),
-			Replica:  1,
 		},
 	}}
 	code := suite.tryCreateKeyspaceGroup(kgs)
 	re.Equal(http.StatusOK, code)
 
-	// miss user kind.
+	// miss user kind, use default value.
 	kgs = &handlers.CreateKeyspaceGroupParams{KeyspaceGroups: []*endpoint.KeyspaceGroup{
 		{
 			ID:      uint32(3),
-			Replica: 1,
 		},
 	}}
 	code = suite.tryCreateKeyspaceGroup(kgs)
@@ -92,7 +88,6 @@ func (suite *keyspaceGroupTestSuite) TestCreateKeyspaceGroups() {
 		{
 			ID:       uint32(3),
 			UserKind: "invalid",
-			Replica:  1,
 		},
 	}}
 	code = suite.tryCreateKeyspaceGroup(kgs)
@@ -102,7 +97,6 @@ func (suite *keyspaceGroupTestSuite) TestCreateKeyspaceGroups() {
 	kgs = &handlers.CreateKeyspaceGroupParams{KeyspaceGroups: []*endpoint.KeyspaceGroup{
 		{
 			UserKind: endpoint.Standard.String(),
-			Replica:  1,
 		},
 	}}
 	code = suite.tryCreateKeyspaceGroup(kgs)
@@ -113,7 +107,6 @@ func (suite *keyspaceGroupTestSuite) TestCreateKeyspaceGroups() {
 		{
 			ID:       utils.MaxKeyspaceGroupCount + 1,
 			UserKind: endpoint.Standard.String(),
-			Replica:  1,
 		},
 	}}
 	code = suite.tryCreateKeyspaceGroup(kgs)
@@ -124,7 +117,6 @@ func (suite *keyspaceGroupTestSuite) TestCreateKeyspaceGroups() {
 		{
 			ID:       uint32(2),
 			UserKind: endpoint.Standard.String(),
-			Replica:  1,
 		},
 	}}
 	code = suite.tryCreateKeyspaceGroup(kgs)
@@ -137,12 +129,10 @@ func (suite *keyspaceGroupTestSuite) TestLoadKeyspaceGroup() {
 		{
 			ID:       uint32(1),
 			UserKind: endpoint.Standard.String(),
-			Replica:  1,
 		},
 		{
 			ID:       uint32(2),
 			UserKind: endpoint.Standard.String(),
-			Replica:  1,
 		},
 	}}
 
