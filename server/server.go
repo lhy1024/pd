@@ -1722,6 +1722,12 @@ func (s *Server) GetServicePrimaryAddr(ctx context.Context, serviceName string) 
 	return "", false
 }
 
+// SetServicePrimaryAddr sets the primary address directly.
+// Note: This function is only used for test.
+func (s *Server) SetServicePrimaryAddr(serviceName, addr string) {
+	s.servicePrimaryMap.Store(serviceName, addr)
+}
+
 // startWatchServicePrimaryAddrLoop starts a loop to watch the primary address of a given service.
 func (s *Server) startWatchServicePrimaryAddrLoop(serviceName string) {
 	defer logutil.LogPanic()

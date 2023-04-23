@@ -18,6 +18,9 @@ if [[ $3 ]]; then
         elif [[ "$t" = "./tests/integrations/mcs" && "$2" = 2 ]]; then
             printf "%s " "$t"
             break
+        elif [[ "$t" = "./tests/compatibility" && "$2" = 1 ]]; then
+            printf "%s " "$t"
+            break
         fi
     done
 else
