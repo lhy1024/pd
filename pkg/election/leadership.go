@@ -25,6 +25,7 @@ import (
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"go.etcd.io/etcd/clientv3"
+	"go.etcd.io/etcd/clientv3/concurrency"
 	"go.etcd.io/etcd/mvcc/mvccpb"
 	"go.uber.org/zap"
 )
@@ -180,24 +181,51 @@ func (ls *Leadership) Watch(serverCtx context.Context, revision int64) {
 	}
 	watcher := clientv3.NewWatcher(ls.client)
 	defer watcher.Close()
-	ctx, cancel := context.WithCancel(serverCtx)
-	defer cancel()
 	// The revision is the revision of last modification on this key.
 	// If the revision is compacted, will meet required revision has been compacted error.
 	// In this case, use the compact revision to re-watch the key.
 	for {
+	WatchChan:
 		failpoint.Inject("delayWatcher", nil)
-		rch := watcher.Watch(ctx, ls.leaderKey, clientv3.WithRev(revision))
-		for wresp := range rch {
+		session, err := concurrency.NewSession(
+			ls.client, concurrency.WithTTL(3),
+		)
+		if err != nil {
+			log.Error("failed to establish a session to the etcd", errs.ZapError(errs.ErrEtcdWatcherCancel, err))
+			return
+		}
+		defer session.Close()
+
+		// In order to prevent a watch stream being stuck in a partitioned node,
+		// make sure to wrap context with "WithRequireLeader".
+		watchChanCtx, watchChanCancel := context.WithCancel(clientv3.WithRequireLeader(serverCtx))
+		defer watchChanCancel()
+		watchChan := watcher.Watch(watchChanCtx, ls.leaderKey, clientv3.WithRev(revision))
+		log.Info("start to watch the leadership", zap.Int64("revision", revision))
+		select {
+		case <-session.Done():
+			// session expired, retry
+			log.Warn("leadership watcher session is expired, retry",
+				zap.Int64("revision", revision),
+				zap.String("leader-key", ls.leaderKey),
+				zap.String("purpose", ls.purpose))
+			watchChanCancel()
+			session.Close()
+			goto WatchChan
+		case <-serverCtx.Done():
+			// server closed, return
+			return
+		case wresp := <-watchChan:
 			// meet compacted error, use the compact revision.
 			if wresp.CompactRevision != 0 {
 				log.Warn("required revision has been compacted, use the compact revision",
 					zap.Int64("required-revision", revision),
 					zap.Int64("compact-revision", wresp.CompactRevision))
 				revision = wresp.CompactRevision
-				break
-			}
-			if wresp.Canceled {
+				watchChanCancel()
+				session.Close()
+				goto WatchChan
+			} else if wresp.Err() != nil { // wresp.Err() contains CompactRevision not equal to 0
 				log.Error("leadership watcher is canceled with",
 					zap.Int64("revision", revision),
 					zap.String("leader-key", ls.leaderKey),
@@ -209,19 +237,17 @@ func (ls *Leadership) Watch(serverCtx context.Context, revision int64) {
 			for _, ev := range wresp.Events {
 				if ev.Type == mvccpb.DELETE {
 					log.Info("current leadership is deleted",
+						zap.Int64("revision", wresp.Header.Revision),
 						zap.String("leader-key", ls.leaderKey),
 						zap.String("purpose", ls.purpose))
 					return
 				}
 			}
+			log.Info("revision = wresp.Header.Revision + 1")
+			revision = wresp.Header.Revision + 1
 		}
-
-		select {
-		case <-ctx.Done():
-			// server closed, return
-			return
-		default:
-		}
+		log.Info("leadership watcher is canceled")
+		watchChanCancel()
 	}
 }
 

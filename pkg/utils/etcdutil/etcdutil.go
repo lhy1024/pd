@@ -206,6 +206,16 @@ func CreateClients(tlsConfig *tls.Config, acUrls url.URL) (*clientv3.Client, *ht
 	return client, httpClient, nil
 }
 
+// CreateClientsWithMultiEndpoint creates etcd v3 client with multi endpoint and http client.
+func CreateClientsWithMultiEndpoint(tlsConfig *tls.Config, acUrls []url.URL) (*clientv3.Client, *http.Client, error) {
+	client, err := createEtcdClientWithMultiEndpoint(tlsConfig, acUrls)
+	if err != nil {
+		return nil, nil, errs.ErrNewEtcdClient.Wrap(err).GenWithStackByCause()
+	}
+	httpClient := createHTTPClient(tlsConfig)
+	return client, httpClient, nil
+}
+
 // createEtcdClientWithMultiEndpoint creates etcd v3 client.
 // Note: it will be used by micro service server and support multi etcd endpoints.
 // FIXME: But it cannot switch etcd endpoints as soon as possible when one of endpoints is with io hang.
