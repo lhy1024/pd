@@ -190,6 +190,7 @@ func TestEtcdClientSync(t *testing.T) {
 		})
 
 		// Remove the first member and close the etcd1.
+		fmt.Println("TestEtcdClientSync remove etcd member")
 		_, err := RemoveEtcdMember(client1, uint64(etcd1.Server.ID()))
 		re.NoError(err)
 		etcd1.Close()
@@ -208,7 +209,8 @@ func TestEtcdClientSync(t *testing.T) {
 }
 
 func TestEtcdScaleInAndOut(t *testing.T) {
-	// https://github.com/lhy1024/pd/actions/runs/6065360172/job/16454765904
+	// https://github.com/lhy1024/pd/actions/runs/6082053357/job/16499013117
+	// https://github.com/lhy1024/pd/pull/10/commits/bc5aa572426dccd1ab1a0fdd66be0436df153624
 	check := func(i int) {
 		fmt.Println("TestEtcdScaleInAndOut ========================================", i)
 		re := require.New(t)
@@ -237,6 +239,7 @@ func TestEtcdScaleInAndOut(t *testing.T) {
 		checkMembers(re, client2, []*embed.Etcd{etcd1, etcd2})
 
 		// scale in etcd1
+		fmt.Println("TestEtcdScaleInAndOut remove etcd member")
 		_, err = RemoveEtcdMember(client1, uint64(etcd1.Server.ID()))
 		re.NoError(err)
 		checkMembers(re, client2, []*embed.Etcd{etcd2})
