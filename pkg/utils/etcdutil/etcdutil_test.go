@@ -165,60 +165,82 @@ func TestInitClusterID(t *testing.T) {
 }
 
 func TestEtcdClientSync(t *testing.T) {
-	re := require.New(t)
-	re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/utils/etcdutil/fastTick", "return(true)"))
+	check := func() {
+		re := require.New(t)
+		re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/utils/etcdutil/fastTick", "return(true)"))
 
-	servers, client1, clean := NewTestEtcdCluster(t, 1)
-	defer clean()
-	etcd1, cfg1 := servers[0], servers[0].Config()
+		servers, client1, clean := NewTestEtcdCluster(t, 1)
+		defer func() {
+			clean()
+			fmt.Println("TestEtcdClientSync clean")
+		}()
+		etcd1, cfg1 := servers[0], servers[0].Config()
 
-	// Add a new member.
-	etcd2 := MustAddEtcdMember(t, &cfg1, client1)
-	defer etcd2.Close()
-	checkMembers(re, client1, []*embed.Etcd{etcd1, etcd2})
-	testutil.Eventually(re, func() bool {
-		// wait for etcd client sync endpoints
-		return len(client1.Endpoints()) == 2
-	})
+		// Add a new member.
+		etcd2 := MustAddEtcdMember(t, &cfg1, client1)
+		defer func() {
+			etcd2.Close()
+			fmt.Println("TestEtcdClientSync close etcd2", etcd2.Config().LCUrls)
+		}()
+		checkMembers(re, client1, []*embed.Etcd{etcd1, etcd2})
+		testutil.Eventually(re, func() bool {
+			// wait for etcd client sync endpoints
+			return len(client1.Endpoints()) == 2
+		})
 
-	// Remove the first member and close the etcd1.
-	_, err := RemoveEtcdMember(client1, uint64(etcd1.Server.ID()))
-	re.NoError(err)
-	etcd1.Close()
+		// Remove the first member and close the etcd1.
+		_, err := RemoveEtcdMember(client1, uint64(etcd1.Server.ID()))
+		re.NoError(err)
+		etcd1.Close()
 
-	// Check the client can get the new member with the new endpoints.
-	testutil.Eventually(re, func() bool {
-		// wait for etcd client sync endpoints
-		return len(client1.Endpoints()) == 1
-	})
+		// Check the client can get the new member with the new endpoints.
+		testutil.Eventually(re, func() bool {
+			// wait for etcd client sync endpoints
+			return len(client1.Endpoints()) == 1
+		})
 
-	re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/utils/etcdutil/fastTick"))
+		re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/utils/etcdutil/fastTick"))
+	}
+	for i := 0; i < 50; i++ {
+		check()
+	}
 }
 
 func TestEtcdScaleInAndOut(t *testing.T) {
-	re := require.New(t)
-	// Start a etcd server.
-	servers, _, clean := NewTestEtcdCluster(t, 1)
-	defer clean()
-	etcd1, cfg1 := servers[0], servers[0].Config()
+	check := func() {
+		re := require.New(t)
+		// Start a etcd server.
+		servers, _, clean := NewTestEtcdCluster(t, 1)
+		defer func() {
+			clean()
+			fmt.Println("TestEtcdScaleInAndOut clean")
+		}()
+		etcd1, cfg1 := servers[0], servers[0].Config()
 
-	// Create two etcd clients with etcd1 as endpoint.
-	client1, err := CreateEtcdClient(nil, cfg1.LCUrls) // execute member change operation with this client
-	re.NoError(err)
-	defer client1.Close()
-	client2, err := CreateEtcdClient(nil, cfg1.LCUrls) // check member change with this client
-	re.NoError(err)
-	defer client2.Close()
+		// Create two etcd clients with etcd1 as endpoint.
+		client1, err := CreateEtcdClient(nil, cfg1.LCUrls) // execute member change operation with this client
+		re.NoError(err)
+		defer client1.Close()
+		client2, err := CreateEtcdClient(nil, cfg1.LCUrls) // check member change with this client
+		re.NoError(err)
+		defer client2.Close()
 
-	// Add a new member and check members
-	etcd2 := MustAddEtcdMember(t, &cfg1, client1)
-	defer etcd2.Close()
-	checkMembers(re, client2, []*embed.Etcd{etcd1, etcd2})
+		// Add a new member and check members
+		etcd2 := MustAddEtcdMember(t, &cfg1, client1)
+		defer func() {
+			etcd2.Close()
+			fmt.Println("TestEtcdScaleInAndOut close etcd2", etcd2.Config().LCUrls)
+		}()
+		checkMembers(re, client2, []*embed.Etcd{etcd1, etcd2})
 
-	// scale in etcd1
-	_, err = RemoveEtcdMember(client1, uint64(etcd1.Server.ID()))
-	re.NoError(err)
-	checkMembers(re, client2, []*embed.Etcd{etcd2})
+		// scale in etcd1
+		_, err = RemoveEtcdMember(client1, uint64(etcd1.Server.ID()))
+		re.NoError(err)
+		checkMembers(re, client2, []*embed.Etcd{etcd2})
+	}
+	for i := 0; i < 50; i++ {
+		check()
+	}
 }
 
 func TestRandomKillEtcd(t *testing.T) {
