@@ -165,7 +165,8 @@ func TestInitClusterID(t *testing.T) {
 }
 
 func TestEtcdClientSync(t *testing.T) {
-	check := func() {
+	check := func(i int) {
+		fmt.Println("TestEtcdClientSync ========================================", i)
 		re := require.New(t)
 		re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/utils/etcdutil/fastTick", "return(true)"))
 
@@ -202,12 +203,14 @@ func TestEtcdClientSync(t *testing.T) {
 		re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/utils/etcdutil/fastTick"))
 	}
 	for i := 0; i < 50; i++ {
-		check()
+		check(i)
 	}
 }
 
 func TestEtcdScaleInAndOut(t *testing.T) {
-	check := func() {
+	// https://github.com/lhy1024/pd/actions/runs/6065360172/job/16454765904
+	check := func(i int) {
+		fmt.Println("TestEtcdScaleInAndOut ========================================", i)
 		re := require.New(t)
 		// Start a etcd server.
 		servers, _, clean := NewTestEtcdCluster(t, 1)
@@ -239,7 +242,7 @@ func TestEtcdScaleInAndOut(t *testing.T) {
 		checkMembers(re, client2, []*embed.Etcd{etcd2})
 	}
 	for i := 0; i < 50; i++ {
-		check()
+		check(i)
 	}
 }
 
