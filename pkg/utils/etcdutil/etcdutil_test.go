@@ -170,18 +170,12 @@ func TestEtcdClientSync(t *testing.T) {
 		re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/utils/etcdutil/fastTick", "return(true)"))
 
 		servers, client1, clean := NewTestEtcdCluster(t, 1)
-		defer func() {
-			clean()
-			fmt.Println("TestEtcdClientSync clean")
-		}()
+		defer clean()
 		etcd1, cfg1 := servers[0], servers[0].Config()
 
 		// Add a new member.
 		etcd2 := MustAddEtcdMember(t, &cfg1, client1)
-		defer func() {
-			etcd2.Close()
-			fmt.Println("TestEtcdClientSync close etcd2", etcd2.Config().LCUrls)
-		}()
+		defer etcd2.Close()
 		checkMembers(re, client1, []*embed.Etcd{etcd1, etcd2})
 		testutil.Eventually(re, func() bool {
 			// wait for etcd client sync endpoints
@@ -211,10 +205,7 @@ func TestEtcdScaleInAndOut(t *testing.T) {
 		re := require.New(t)
 		// Start a etcd server.
 		servers, _, clean := NewTestEtcdCluster(t, 1)
-		defer func() {
-			clean()
-			fmt.Println("TestEtcdScaleInAndOut clean")
-		}()
+		defer clean()
 		etcd1, cfg1 := servers[0], servers[0].Config()
 
 		// Create two etcd clients with etcd1 as endpoint.
@@ -227,10 +218,7 @@ func TestEtcdScaleInAndOut(t *testing.T) {
 
 		// Add a new member and check members
 		etcd2 := MustAddEtcdMember(t, &cfg1, client1)
-		defer func() {
-			etcd2.Close()
-			fmt.Println("TestEtcdScaleInAndOut close etcd2", etcd2.Config().LCUrls)
-		}()
+		defer etcd2.Close()
 		checkMembers(re, client2, []*embed.Etcd{etcd1, etcd2})
 
 		// scale in etcd1
