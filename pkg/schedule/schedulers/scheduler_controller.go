@@ -40,7 +40,10 @@ var denySchedulersByLabelerCounter = labeler.LabelerEventCounter.WithLabelValues
 // Controller is used to manage all schedulers.
 type Controller struct {
 	sync.RWMutex
-	wg      sync.WaitGroup
+	// we cannot use waitGroup here because addScheduler will be called in any time
+	// but `new Add calls must happen after all previous Wait calls have returned`
+	// so we need to use a counter to avoid this
+	count   atomic.Int32
 	ctx     context.Context
 	cluster sche.SchedulerCluster
 	storage endpoint.ConfigStorage
@@ -67,7 +70,9 @@ func NewController(ctx context.Context, cluster sche.SchedulerCluster, storage e
 
 // Wait waits on all schedulers to exit.
 func (c *Controller) Wait() {
-	c.wg.Wait()
+	for c.count.Load() > 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // GetScheduler returns a schedule controller by name.
@@ -184,7 +189,7 @@ func (c *Controller) AddScheduler(scheduler Scheduler, args ...string) error {
 		return err
 	}
 
-	c.wg.Add(1)
+	c.count.Add(1)
 	go c.runScheduler(s)
 	c.schedulers[s.Scheduler.GetName()] = s
 	c.cluster.GetSchedulerConfig().AddSchedulerCfg(s.Scheduler.GetType(), args)
@@ -320,7 +325,7 @@ func (c *Controller) IsSchedulerExisted(name string) (bool, error) {
 
 func (c *Controller) runScheduler(s *ScheduleController) {
 	defer logutil.LogPanic()
-	defer c.wg.Done()
+	defer c.count.Add(-1)
 	defer s.Scheduler.Cleanup(c.cluster)
 
 	ticker := time.NewTicker(s.GetInterval())
