@@ -226,7 +226,7 @@ basic-test: install-tools
 
 ci-test-job: install-tools dashboard-ui
 	@$(FAILPOINT_ENABLE)
-	CGO_ENABLED=1 go test -timeout=15m -tags deadlock -race github.com/tikv/pd/pkg/election github.com/tikv/pd/pkg/utils/etcdutil
+	CGO_ENABLED=1 go test -timeout=15m -tags deadlock -race github.com/tikv/pd/tests/integrations/mcs/scheduling
 	@$(FAILPOINT_DISABLE)
 
 TSO_INTEGRATION_TEST_PKGS := $(PD_PKG)/tests/server/tso
