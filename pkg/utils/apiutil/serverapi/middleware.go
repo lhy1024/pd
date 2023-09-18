@@ -19,7 +19,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/pingcap/failpoint"
+	//"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/slice"
@@ -172,11 +172,11 @@ func (h *redirector) ServeHTTP(w http.ResponseWriter, r *http.Request, next http
 			return
 		}
 		clientUrls = append(clientUrls, targetAddr)
-		failpoint.Inject("checkHeader", func() {
-			// add a header to the response, this is not a failure injection
-			// it is used for testing, to check whether the request is forwarded to the micro service
-			w.Header().Set(apiutil.ForwardToMicroServiceHeader, "true")
-		})
+		//failpoint.Inject("checkHeader", func() {
+		// add a header to the response, this is not a failure injection
+		// it is used for testing, to check whether the request is forwarded to the micro service
+		w.Header().Set(apiutil.ForwardToMicroServiceHeader, "true")
+		//})
 	} else {
 		leader := h.s.GetMember().GetLeader()
 		if leader == nil {

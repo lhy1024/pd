@@ -112,15 +112,18 @@ func (suite *apiTestSuite) TestGetCheckerByName() {
 
 func (suite *apiTestSuite) TestAPIForward() {
 	re := suite.Require()
+	fmt.Println("====== TestAPIForward ======")
 	tc, err := tests.NewTestSchedulingCluster(suite.ctx, 2, suite.backendEndpoints)
 	re.NoError(err)
 	defer tc.Destroy()
+	fmt.Println("====== TestAPIForward2 ======")
 	tc.WaitForPrimaryServing(re)
+	fmt.Println("====== TestAPIForward3 ======")
 
-	failpoint.Enable("github.com/tikv/pd/pkg/utils/apiutil/serverapi/checkHeader", "return(true)")
-	defer func() {
-		failpoint.Disable("github.com/tikv/pd/pkg/utils/apiutil/serverapi/checkHeader")
-	}()
+	//failpoint.Enable("github.com/tikv/pd/pkg/utils/apiutil/serverapi/checkHeader", "return(true)")
+	//defer func() {
+	failpoint.Disable("github.com/tikv/pd/pkg/utils/apiutil/serverapi/checkHeader")
+	//}()
 
 	urlPrefix := fmt.Sprintf("%s/pd/api/v1", suite.backendEndpoints)
 	var slice []string

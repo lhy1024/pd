@@ -72,7 +72,7 @@ func NewCluster(parentCtx context.Context, persistConfig *config.PersistConfig, 
 		clusterID:         clusterID,
 		checkMembershipCh: checkMembershipCh,
 	}
-	c.coordinator = schedule.NewCoordinator(ctx, c, hbStreams)
+	c.coordinator = schedule.NewCoordinator(ctx, c, hbStreams, "sc")
 	err = c.ruleManager.Initialize(persistConfig.GetMaxReplicas(), persistConfig.GetLocationLabels())
 	if err != nil {
 		cancel()

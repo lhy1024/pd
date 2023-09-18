@@ -17,6 +17,7 @@ package schedule
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -85,15 +86,17 @@ type Coordinator struct {
 	hbStreams         *hbstream.HeartbeatStreams
 	pluginInterface   *PluginInterface
 	diagnosticManager *diagnostic.Manager
+	name              string
 }
 
 // NewCoordinator creates a new Coordinator.
-func NewCoordinator(ctx context.Context, cluster sche.ClusterInformer, hbStreams *hbstream.HeartbeatStreams) *Coordinator {
+func NewCoordinator(ctx context.Context, cluster sche.ClusterInformer, hbStreams *hbstream.HeartbeatStreams, name string) *Coordinator {
 	ctx, cancel := context.WithCancel(ctx)
 	opController := operator.NewController(ctx, cluster.GetBasicCluster(), cluster.GetSharedConfig(), hbStreams)
 	schedulers := schedulers.NewController(ctx, cluster, cluster.GetStorage(), opController)
 	checkers := checker.NewController(ctx, cluster, cluster.GetCheckerConfig(), cluster.GetRuleManager(), cluster.GetRegionLabeler(), opController)
 	return &Coordinator{
+		name:                  name,
 		ctx:                   ctx,
 		cancel:                cancel,
 		schedulersInitialized: false,
@@ -370,7 +373,8 @@ func (c *Coordinator) driveSlowNodeScheduler() {
 func (c *Coordinator) RunUntilStop() {
 	c.Run()
 	<-c.ctx.Done()
-	log.Info("Coordinator is stopping")
+	fmt.Println("======== RunUntilStop")
+	log.Info("Coordinator is stopping", zap.String("name", c.name))
 	c.GetSchedulersController().Wait()
 	c.wg.Wait()
 	log.Info("Coordinator has been stopped")

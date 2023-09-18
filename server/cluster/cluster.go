@@ -315,7 +315,7 @@ func (c *RaftCluster) Start(s Server) error {
 		return err
 	}
 
-	c.coordinator = schedule.NewCoordinator(c.ctx, cluster, s.GetHBStreams())
+	c.coordinator = schedule.NewCoordinator(c.ctx, cluster, s.GetHBStreams(),"pd")
 	c.regionStats = statistics.NewRegionStatistics(c.core, c.opt, c.ruleManager)
 	c.limiter = NewStoreLimiter(s.GetPersistOptions())
 	c.externalTS, err = c.storage.LoadExternalTS()
