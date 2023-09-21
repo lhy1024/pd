@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -554,4 +555,76 @@ func TestForwardSchedulerRequest(t *testing.T) {
 	re.NoError(err)
 	re.NoError(json.Unmarshal(output, &slice))
 	re.Contains(slice, "balance-leader-scheduler")
+}
+
+func TestAddSchedulerWhenServerClosing(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cluster, err := tests.NewTestCluster(ctx, 1)
+	re.NoError(err)
+	defer cluster.Destroy()
+	err = cluster.RunInitialServers()
+	re.NoError(err)
+	cluster.WaitLeader()
+	backendEndpoints := cluster.GetConfig().GetClientURL()
+
+	stores := []*metapb.Store{
+		{
+			Id:            1,
+			State:         metapb.StoreState_Up,
+			LastHeartbeat: time.Now().UnixNano(),
+		},
+		{
+			Id:            2,
+			State:         metapb.StoreState_Up,
+			LastHeartbeat: time.Now().UnixNano(),
+		},
+		{
+			Id:            3,
+			State:         metapb.StoreState_Up,
+			LastHeartbeat: time.Now().UnixNano(),
+		},
+		{
+			Id:            4,
+			State:         metapb.StoreState_Up,
+			LastHeartbeat: time.Now().UnixNano(),
+		},
+	}
+
+	leaderServer := cluster.GetServer(cluster.GetLeader())
+	re.NoError(leaderServer.BootstrapCluster())
+	for _, store := range stores {
+		pdctl.MustPutStore(re, leaderServer.GetServer(), store)
+	}
+
+	// note: because pdqsort is a unstable sort algorithm, set ApproximateSize for this region.
+	pdctl.MustPutRegion(re, cluster, 1, 1, []byte("a"), []byte("b"), core.SetApproximateSize(10))
+	time.Sleep(3 * time.Second)
+
+	// show scheduler
+	cmd := pdctlCmd.GetRootCmd()
+	args := []string{"-u", backendEndpoints, "scheduler", "show"}
+	var slice []string
+	output, err := pdctl.ExecuteCommand(cmd, args...)
+	re.NoError(err)
+	re.NoError(json.Unmarshal(output, &slice))
+	re.Contains(slice, "balance-leader-scheduler")
+
+	// remove and add scheduler when coordinator closing
+	cluster.GetServer(cluster.GetLeader()).GetRaftCluster().GetCoordinator().Stop()
+
+	re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/schedule/schedulers/slowExitScheduler", "return(true)"))
+	for i := 0; i < 100; i++ {
+		cmd = pdctlCmd.GetRootCmd()
+		args = []string{"-u", backendEndpoints, "scheduler", "remove", "balance-leader-scheduler"}
+		output, err = pdctl.ExecuteCommand(cmd, args...)
+		re.NoError(err)
+		re.Contains(string(output), "Success!")
+		args = []string{"-u", backendEndpoints, "scheduler", "add", "balance-leader-scheduler"}
+		output, err = pdctl.ExecuteCommand(cmd, args...)
+		re.NoError(err)
+		re.Contains(string(output), "Success!")
+	}
+	re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/schedulers/slowExitScheduler"))
 }

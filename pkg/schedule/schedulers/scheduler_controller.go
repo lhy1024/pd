@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
@@ -30,7 +31,6 @@ import (
 	"github.com/tikv/pd/pkg/schedule/plan"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/logutil"
-	"github.com/tikv/pd/pkg/utils/syncutil"
 	"go.uber.org/zap"
 )
 
@@ -41,7 +41,7 @@ var denySchedulersByLabelerCounter = labeler.LabelerEventCounter.WithLabelValues
 // Controller is used to manage all schedulers.
 type Controller struct {
 	sync.RWMutex
-	wg      *syncutil.FlexibleWaitGroup
+	wg      sync.WaitGroup
 	ctx     context.Context
 	cluster sche.SchedulerCluster
 	storage endpoint.ConfigStorage
@@ -58,7 +58,6 @@ type Controller struct {
 func NewController(ctx context.Context, cluster sche.SchedulerCluster, storage endpoint.ConfigStorage, opController *operator.Controller) *Controller {
 	return &Controller{
 		ctx:               ctx,
-		wg:                syncutil.NewFlexibleWaitGroup(),
 		cluster:           cluster,
 		storage:           storage,
 		schedulers:        make(map[string]*ScheduleController),
@@ -69,7 +68,9 @@ func NewController(ctx context.Context, cluster sche.SchedulerCluster, storage e
 
 // Wait waits on all schedulers to exit.
 func (c *Controller) Wait() {
+	log.Info("wg waiting ===")
 	c.wg.Wait()
+	log.Info("wg wait is done ===")
 }
 
 // GetScheduler returns a schedule controller by name.
@@ -187,6 +188,7 @@ func (c *Controller) AddScheduler(scheduler Scheduler, args ...string) error {
 	}
 
 	c.wg.Add(1)
+	log.Info("wg add ===")
 	go c.runScheduler(s)
 	c.schedulers[s.Scheduler.GetName()] = s
 	c.cluster.GetSchedulerConfig().AddSchedulerCfg(s.Scheduler.GetType(), args)
@@ -322,7 +324,10 @@ func (c *Controller) IsSchedulerExisted(name string) (bool, error) {
 
 func (c *Controller) runScheduler(s *ScheduleController) {
 	defer logutil.LogPanic()
-	defer c.wg.Done()
+	defer func() {
+		c.wg.Done()
+		log.Info("wg done ===")
+	}()
 	defer s.Scheduler.Cleanup(c.cluster)
 
 	ticker := time.NewTicker(s.GetInterval())
@@ -344,6 +349,10 @@ func (c *Controller) runScheduler(s *ScheduleController) {
 			log.Info("scheduler has been stopped",
 				zap.String("scheduler-name", s.Scheduler.GetName()),
 				errs.ZapError(s.Ctx().Err()))
+			time.Sleep(3 * time.Second)
+			failpoint.Inject("slowExitScheduler", func() {
+				time.Sleep(3 * time.Second)
+			})
 			return
 		}
 	}
