@@ -1,4 +1,4 @@
-// Copyright 2022 TiKV Project Authors.
+// Copyright 2023 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -83,7 +83,7 @@ func TestNegativeDelta(t *testing.T) {
 		fwg.Done()
 	}()
 	fwg.Wait()
-	require.Equal(0, fwg.count)
+	require.Equal(0, fwg.getCount())
 }
 
 // TestMultipleWait tests the case where Wait is called multiple times concurrently.
@@ -108,7 +108,7 @@ func TestMultipleWait(t *testing.T) {
 	}()
 	<-done
 	<-done
-	require.Equal(0, fwg.count)
+	require.Equal(0, fwg.getCount())
 }
 
 // TestAddAfterWaitFinished tests the case where Add is called after Wait has finished.
@@ -126,7 +126,7 @@ func TestAddAfterWaitFinished(t *testing.T) {
 	}()
 	<-done
 	fwg.Add(1)
-	require.Equal(1, fwg.count)
+	require.Equal(1, fwg.getCount())
 	fwg.Done()
-	require.Equal(0, fwg.count)
+	require.Equal(0, fwg.getCount())
 }
