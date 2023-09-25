@@ -281,3 +281,24 @@ func TestForwardOperatorRequest(t *testing.T) {
 	re.NoError(err)
 	re.Contains(string(output), "null")
 }
+
+func TestRequest(t *testing.T) {
+	re := require.New(t)
+	for i := 0; i < 100; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cluster, err := tests.NewTestCluster(ctx, 1)
+		re.NoError(err)
+		re.NoError(cluster.RunInitialServers())
+		re.NotEmpty(cluster.WaitLeader())
+		server := cluster.GetLeaderServer()
+		re.NoError(server.BootstrapCluster())
+		backendEndpoints := server.GetAddr()
+
+		cmd := pdctlCmd.GetRootCmd()
+		args := []string{"-u", backendEndpoints, "operator", "check", "2"}
+		output, err := pdctl.ExecuteCommand(cmd, args...)
+		re.NoError(err)
+		re.Contains(string(output), "operator not found")
+		cancel()
+	}
+}
