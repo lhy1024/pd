@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/core"
+	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server/config"
 	"github.com/tikv/pd/tests"
 	"github.com/tikv/pd/tests/pdctl"
@@ -221,9 +222,15 @@ func (suite *operatorTestSuite) checkOperator(cluster *tests.TestCluster) {
 
 	_, err = pdctl.ExecuteCommand(cmd, "config", "set", "enable-placement-rules", "true")
 	re.NoError(err)
+	// wait for the config to take effect in scheduling server when cluster is in ap mode.
+	if sche := cluster.GetSchedulingPrimaryServer(); sche != nil {
+		testutil.Eventually(re, func() bool {
+			return sche.GetCluster().GetSchedulerConfig().IsPlacementRulesEnabled()
+		})
+	}
 	output, err = pdctl.ExecuteCommand(cmd, "operator", "add", "transfer-region", "1", "2", "3")
 	re.NoError(err)
-	re.Contains(string(output), "not supported")
+	re.Contains(string(output), "not supported", "output: "+string(output))
 	output, err = pdctl.ExecuteCommand(cmd, "operator", "add", "transfer-region", "1", "2", "follower", "3")
 	re.NoError(err)
 	re.Contains(string(output), "not match")

@@ -28,6 +28,7 @@ import (
 	"github.com/tikv/pd/pkg/core"
 	pdoperator "github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
+	"github.com/tikv/pd/pkg/utils/testutil"
 	tu "github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server/config"
 	"github.com/tikv/pd/tests"
@@ -410,11 +411,12 @@ func (suite *operatorTestSuite) checkTransferRegionWithPlacementRule(cluster *te
 	svr := cluster.GetLeaderServer()
 	for _, testCase := range testCases {
 		suite.T().Log(testCase.name)
-		// TODO: remove this after we can sync this config to all servers.
+		svr.GetPersistOptions().SetPlacementRuleEnabled(testCase.placementRuleEnable)
+		// wait for the config to take effect in scheduling server when cluster is in api mode.
 		if sche := cluster.GetSchedulingPrimaryServer(); sche != nil {
-			sche.GetCluster().GetSchedulerConfig().SetPlacementRuleEnabled(testCase.placementRuleEnable)
-		} else {
-			svr.GetRaftCluster().GetOpts().SetPlacementRuleEnabled(testCase.placementRuleEnable)
+			testutil.Eventually(re, func() bool {
+				return sche.GetCluster().GetSchedulerConfig().IsPlacementRulesEnabled() == testCase.placementRuleEnable
+			})
 		}
 		manager := svr.GetRaftCluster().GetRuleManager()
 		if sche := cluster.GetSchedulingPrimaryServer(); sche != nil {
