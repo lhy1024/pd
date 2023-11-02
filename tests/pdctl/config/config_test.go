@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	sc "github.com/tikv/pd/pkg/schedule/config"
 	"github.com/tikv/pd/pkg/schedule/placement"
+	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 	"github.com/tikv/pd/server/config"
 	"github.com/tikv/pd/tests"
@@ -289,16 +290,15 @@ func (suite *configTestSuite) checkConfig(cluster *tests.TestCluster) {
 	re.Contains(string(output), "is invalid")
 }
 
-func TestPlacementRules(t *testing.T) {
-	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cluster, err := tests.NewTestCluster(ctx, 1)
-	re.NoError(err)
-	err = cluster.RunInitialServers()
-	re.NoError(err)
-	cluster.WaitLeader()
-	pdAddr := cluster.GetConfig().GetClientURL()
+func (suite *configTestSuite) TestPlacementRules() {
+	env := tests.NewSchedulingTestEnvironment(suite.T())
+	env.RunTestInTwoModes(suite.checkPlacementRules)
+}
+
+func (suite *configTestSuite) checkPlacementRules(cluster *tests.TestCluster) {
+	re := suite.Require()
+	leaderServer := cluster.GetLeaderServer()
+	pdAddr := leaderServer.GetAddr()
 	cmd := pdctlCmd.GetRootCmd()
 
 	store := &metapb.Store{
@@ -306,8 +306,6 @@ func TestPlacementRules(t *testing.T) {
 		State:         metapb.StoreState_Up,
 		LastHeartbeat: time.Now().UnixNano(),
 	}
-	leaderServer := cluster.GetLeaderServer()
-	re.NoError(leaderServer.BootstrapCluster())
 	tests.MustPutStore(re, cluster, store)
 	defer cluster.Destroy()
 
@@ -386,16 +384,15 @@ func TestPlacementRules(t *testing.T) {
 	re.Equal([2]string{"pd", "test1"}, rules[0].Key())
 }
 
-func TestPlacementRuleGroups(t *testing.T) {
-	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cluster, err := tests.NewTestCluster(ctx, 1)
-	re.NoError(err)
-	err = cluster.RunInitialServers()
-	re.NoError(err)
-	cluster.WaitLeader()
-	pdAddr := cluster.GetConfig().GetClientURL()
+func (suite *configTestSuite) TestPlacementRuleGroups() {
+	env := tests.NewSchedulingTestEnvironment(suite.T())
+	env.RunTestInTwoModes(suite.checkPlacementRuleGroups)
+}
+
+func (suite *configTestSuite) checkPlacementRuleGroups(cluster *tests.TestCluster) {
+	re := suite.Require()
+	leaderServer := cluster.GetLeaderServer()
+	pdAddr := leaderServer.GetAddr()
 	cmd := pdctlCmd.GetRootCmd()
 
 	store := &metapb.Store{
@@ -403,8 +400,6 @@ func TestPlacementRuleGroups(t *testing.T) {
 		State:         metapb.StoreState_Up,
 		LastHeartbeat: time.Now().UnixNano(),
 	}
-	leaderServer := cluster.GetLeaderServer()
-	re.NoError(leaderServer.BootstrapCluster())
 	tests.MustPutStore(re, cluster, store)
 	defer cluster.Destroy()
 
@@ -460,16 +455,15 @@ func TestPlacementRuleGroups(t *testing.T) {
 	re.Contains(string(output), "404")
 }
 
-func TestPlacementRuleBundle(t *testing.T) {
-	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cluster, err := tests.NewTestCluster(ctx, 1)
-	re.NoError(err)
-	err = cluster.RunInitialServers()
-	re.NoError(err)
-	cluster.WaitLeader()
-	pdAddr := cluster.GetConfig().GetClientURL()
+func (suite *configTestSuite) TestPlacementRuleBundle() {
+	env := tests.NewSchedulingTestEnvironment(suite.T())
+	env.RunTestInTwoModes(suite.checkPlacementRuleBundle)
+}
+
+func (suite *configTestSuite) checkPlacementRuleBundle(cluster *tests.TestCluster) {
+	re := suite.Require()
+	leaderServer := cluster.GetLeaderServer()
+	pdAddr := leaderServer.GetAddr()
 	cmd := pdctlCmd.GetRootCmd()
 
 	store := &metapb.Store{
@@ -477,8 +471,6 @@ func TestPlacementRuleBundle(t *testing.T) {
 		State:         metapb.StoreState_Up,
 		LastHeartbeat: time.Now().UnixNano(),
 	}
-	leaderServer := cluster.GetLeaderServer()
-	re.NoError(leaderServer.BootstrapCluster())
 	tests.MustPutStore(re, cluster, store)
 	defer cluster.Destroy()
 
@@ -678,7 +670,9 @@ func (suite *configTestSuite) checkUpdateDefaultReplicaConfig(cluster *tests.Tes
 		re.NoError(err)
 		replicationCfg := sc.ReplicationConfig{}
 		re.NoError(json.Unmarshal(output, &replicationCfg))
-		re.Equal(expect, replicationCfg.MaxReplicas)
+		testutil.Eventually(re, func() bool { // wait for the config to be synced to the scheduling server
+			return replicationCfg.MaxReplicas == expect
+		})
 	}
 
 	checkLocationLabels := func(expect int) {
@@ -687,7 +681,9 @@ func (suite *configTestSuite) checkUpdateDefaultReplicaConfig(cluster *tests.Tes
 		re.NoError(err)
 		replicationCfg := sc.ReplicationConfig{}
 		re.NoError(json.Unmarshal(output, &replicationCfg))
-		re.Len(replicationCfg.LocationLabels, expect)
+		testutil.Eventually(re, func() bool { // wait for the config to be synced to the scheduling server
+			return len(replicationCfg.LocationLabels) == expect
+		})
 	}
 
 	checkIsolationLevel := func(expect string) {
@@ -696,7 +692,9 @@ func (suite *configTestSuite) checkUpdateDefaultReplicaConfig(cluster *tests.Tes
 		re.NoError(err)
 		replicationCfg := sc.ReplicationConfig{}
 		re.NoError(json.Unmarshal(output, &replicationCfg))
-		re.Equal(replicationCfg.IsolationLevel, expect)
+		testutil.Eventually(re, func() bool { // wait for the config to be synced to the scheduling server
+			return replicationCfg.IsolationLevel == expect
+		})
 	}
 
 	checkRuleCount := func(expect int) {
@@ -705,7 +703,9 @@ func (suite *configTestSuite) checkUpdateDefaultReplicaConfig(cluster *tests.Tes
 		re.NoError(err)
 		rule := placement.Rule{}
 		re.NoError(json.Unmarshal(output, &rule))
-		re.Equal(expect, rule.Count)
+		testutil.Eventually(re, func() bool { // wait for the config to be synced to the scheduling server
+			return rule.Count == expect
+		})
 	}
 
 	checkRuleLocationLabels := func(expect int) {
@@ -714,7 +714,9 @@ func (suite *configTestSuite) checkUpdateDefaultReplicaConfig(cluster *tests.Tes
 		re.NoError(err)
 		rule := placement.Rule{}
 		re.NoError(json.Unmarshal(output, &rule))
-		re.Len(rule.LocationLabels, expect)
+		testutil.Eventually(re, func() bool { // wait for the config to be synced to the scheduling server
+			return len(rule.LocationLabels) == expect
+		})
 	}
 
 	checkRuleIsolationLevel := func(expect string) {
@@ -723,7 +725,9 @@ func (suite *configTestSuite) checkUpdateDefaultReplicaConfig(cluster *tests.Tes
 		re.NoError(err)
 		rule := placement.Rule{}
 		re.NoError(json.Unmarshal(output, &rule))
-		re.Equal(rule.IsolationLevel, expect)
+		testutil.Eventually(re, func() bool { // wait for the config to be synced to the scheduling server
+			return rule.IsolationLevel == expect
+		})
 	}
 
 	// update successfully when placement rules is not enabled.
