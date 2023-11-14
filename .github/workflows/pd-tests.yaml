@@ -55,24 +55,24 @@ jobs:
         with:
           name: cover-reports
           path: covprofile_${{ matrix.worker_id }}
-  report-coverage:
-    needs: chunks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      - name: Download chunk report
-        uses: actions/download-artifact@v2
-        with:
-          name: cover-reports
-      - name: Merge
-        env:
-          TOTAL_JOBS: ${{needs.chunks.outputs.job-total}}
-        run: for i in $(seq 1 $TOTAL_JOBS); do cat covprofile_$i >> covprofile; done
-      - name: Send coverage
-        uses: codecov/codecov-action@v1
-        with:
-          token: ${{ secrets.CODECOV }}
-          file: ./covprofile
-          flags: unittests
-          name: codecov-umbrella
+  # report-coverage:
+  #   needs: chunks
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v3
+  #     - name: Download chunk report
+  #       uses: actions/download-artifact@v2
+  #       with:
+  #         name: cover-reports
+  #     - name: Merge
+  #       env:
+  #         TOTAL_JOBS: ${{needs.chunks.outputs.job-total}}
+  #       run: for i in $(seq 1 $TOTAL_JOBS); do cat covprofile_$i >> covprofile; done
+  #     - name: Send coverage
+  #       uses: codecov/codecov-action@v1
+  #       with:
+  #         token: ${{ secrets.CODECOV }}
+  #         file: ./covprofile
+  #         flags: unittests
+  #         name: codecov-umbrella
