@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/ratelimit"
 	sc "github.com/tikv/pd/pkg/schedule/config"
+	"github.com/tikv/pd/pkg/utils/testutil"
 	tu "github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 	"github.com/tikv/pd/pkg/versioninfo"
@@ -272,10 +274,11 @@ func (suite *configTestSuite) checkConfigReplication(cluster *tests.TestCluster)
 	suite.NoError(err)
 
 	rc4 := &sc.ReplicationConfig{}
-	err = tu.ReadGetJSON(re, testDialClient, addr, rc4)
-	suite.NoError(err)
-
-	suite.Equal(*rc4, *rc)
+	testutil.Eventually(re, func() bool {
+		err = tu.ReadGetJSON(re, testDialClient, addr, rc4)
+		suite.NoError(err)
+		return reflect.DeepEqual(*rc4, *rc)
+	})
 }
 
 func (suite *configTestSuite) TestConfigLabelProperty() {
