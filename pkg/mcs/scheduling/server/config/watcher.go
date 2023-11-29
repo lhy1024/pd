@@ -128,7 +128,10 @@ func (cw *Watcher) initializeConfigWatcher() error {
 				zap.String("event-kv-key", string(kv.Key)), zap.Error(err))
 			return err
 		}
-		log.Info("update scheduling config", zap.Reflect("new", cfg))
+		log.Info("update scheduling config", zap.Reflect("new", cfg),
+			zap.Int64("version", kv.Version),
+			zap.Int64("create-revision", kv.CreateRevision),
+			zap.Int64("mod-revision", kv.ModRevision))
 		cw.AdjustScheduleCfg(&cfg.Schedule)
 		cw.SetClusterVersion(&cfg.ClusterVersion)
 		cw.SetScheduleConfig(&cfg.Schedule)
