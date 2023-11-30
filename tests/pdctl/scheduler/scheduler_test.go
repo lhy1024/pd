@@ -39,8 +39,7 @@ import (
 
 type schedulerTestSuite struct {
 	suite.Suite
-	env               *tests.SchedulingTestEnvironment
-	defaultSchedulers []string
+	env *tests.SchedulingTestEnvironment
 }
 
 func TestSchedulerTestSuite(t *testing.T) {
@@ -49,49 +48,16 @@ func TestSchedulerTestSuite(t *testing.T) {
 
 func (suite *schedulerTestSuite) SetupSuite() {
 	suite.env = tests.NewSchedulingTestEnvironment(suite.T())
-	suite.defaultSchedulers = []string{
-		"balance-leader-scheduler",
-		"balance-region-scheduler",
-		"balance-hot-region-scheduler",
-		"balance-witness-scheduler",
-		"transfer-witness-leader-scheduler",
-	}
 }
 
 func (suite *schedulerTestSuite) TearDownSuite() {
 	suite.env.Cleanup()
 }
 
-func (suite *schedulerTestSuite) TearDownTest() {
-	cleanFunc := func(cluster *tests.TestCluster) {
-		re := suite.Require()
-		pdAddr := cluster.GetConfig().GetClientURL()
-		cmd := pdctlCmd.GetRootCmd()
-
-		var currentSchedulers []string
-		mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "show"}, &currentSchedulers)
-		for _, scheduler := range suite.defaultSchedulers {
-			if slice.NoneOf(currentSchedulers, func(i int) bool {
-				return currentSchedulers[i] == scheduler
-			}) {
-				echo := mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", scheduler}, nil)
-				re.Contains(echo, "Success!")
-			}
-		}
-		for _, scheduler := range currentSchedulers {
-			if slice.NoneOf(suite.defaultSchedulers, func(i int) bool {
-				return suite.defaultSchedulers[i] == scheduler
-			}) {
-				echo := mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "remove", scheduler}, nil)
-				re.Contains(echo, "Success!")
-			}
-		}
-	}
-	suite.env.RunFuncInTwoModes(cleanFunc)
-}
-
 func (suite *schedulerTestSuite) TestScheduler() {
-	suite.env.RunTestInTwoModes(suite.checkScheduler)
+	env := tests.NewSchedulingTestEnvironment(suite.T())
+	env.RunTestInTwoModes(suite.checkScheduler)
+	env.Cleanup()
 }
 
 func (suite *schedulerTestSuite) checkScheduler(cluster *tests.TestCluster) {
