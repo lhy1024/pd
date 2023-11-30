@@ -48,11 +48,13 @@ func TestScheduleTestSuite(t *testing.T) {
 }
 
 func (suite *scheduleTestSuite) SetupSuite() {
+	suite.NoError(failpoint.Enable("github.com/tikv/pd/server/cluster/skipStoreConfigSync", `return(true)`))
 	suite.env = tests.NewSchedulingTestEnvironment(suite.T())
 }
 
 func (suite *scheduleTestSuite) TearDownSuite() {
 	suite.env.Cleanup()
+	suite.NoError(failpoint.Disable("github.com/tikv/pd/server/cluster/skipStoreConfigSync"))
 }
 
 func (suite *scheduleTestSuite) TestOriginAPI() {
