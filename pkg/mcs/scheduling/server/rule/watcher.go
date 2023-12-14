@@ -20,12 +20,12 @@ import (
 	"sync"
 
 	"github.com/pingcap/log"
+	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/checker"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/placement"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
-	"github.com/tikv/pd/pkg/utils/syncutil"
 	"go.etcd.io/etcd/clientv3"
 	"go.etcd.io/etcd/mvcc/mvccpb"
 	"go.uber.org/zap"
@@ -66,17 +66,6 @@ type Watcher struct {
 
 	ruleWatcher  *etcdutil.LoopWatcher
 	labelWatcher *etcdutil.LoopWatcher
-
-	// pendingDeletion is a structure used to track the rules or rule groups that are marked for deletion.
-	// If a rule or rule group cannot be deleted immediately due to the absence of rules,
-	// it will be held here and removed later when a new rule or rule group put event allows for its deletion.
-	pendingDeletion struct {
-		syncutil.RWMutex
-		// key: path, value: [groupID, ruleID]
-		// The map 'kvs' holds the rules or rule groups that are pending deletion.
-		// If a rule group needs to be deleted, the ruleID will be an empty string.
-		kvs map[string][2]string
-	}
 }
 
 // NewWatcher creates a new watcher to watch the Placement Rule change from PD API server.
@@ -102,12 +91,6 @@ func NewWatcher(
 		checkerController:     checkerController,
 		ruleManager:           ruleManager,
 		regionLabeler:         regionLabeler,
-		pendingDeletion: struct {
-			syncutil.RWMutex
-			kvs map[string][2]string
-		}{
-			kvs: make(map[string][2]string),
-		},
 	}
 	err := rw.initializeRuleWatcher()
 	if err != nil {
@@ -121,82 +104,138 @@ func NewWatcher(
 }
 
 func (rw *Watcher) initializeRuleWatcher() error {
-	putFn := func(kv *mvccpb.KeyValue) error {
-		err := func() error {
-			key := string(kv.Key)
-			if strings.HasPrefix(key, rw.rulesPathPrefix) {
-				log.Info("update placement rule", zap.String("key", key), zap.String("value", string(kv.Value)))
-				rule, err := placement.NewRuleFromJSON(kv.Value)
-				if err != nil {
-					return err
-				}
-				// Update the suspect key ranges in the checker.
-				rw.checkerController.AddSuspectKeyRange(rule.StartKey, rule.EndKey)
-				if oldRule := rw.ruleManager.GetRule(rule.GroupID, rule.ID); oldRule != nil {
-					rw.checkerController.AddSuspectKeyRange(oldRule.StartKey, oldRule.EndKey)
-				}
-				return rw.ruleManager.SetRule(rule)
-			} else if strings.HasPrefix(key, rw.ruleGroupPathPrefix) {
-				log.Info("update placement rule group", zap.String("key", key), zap.String("value", string(kv.Value)))
-				ruleGroup, err := placement.NewRuleGroupFromJSON(kv.Value)
-				if err != nil {
-					return err
-				}
-				// Add all rule key ranges within the group to the suspect key ranges.
-				for _, rule := range rw.ruleManager.GetRulesByGroup(ruleGroup.ID) {
-					rw.checkerController.AddSuspectKeyRange(rule.StartKey, rule.EndKey)
-				}
-				return rw.ruleManager.SetRuleGroup(ruleGroup)
-			} else {
-				log.Warn("unknown key when update placement rule", zap.String("key", key))
-				return nil
-			}
-		}()
-		if err == nil && rw.hasPendingDeletion() {
-			rw.tryFinishPendingDeletion()
+	var p *placement.RuleConfigPatch
+	var suspectKeyRanges *core.KeyRanges
+
+	preFn := func(events []*clientv3.Event) error {
+		suspectKeyRanges = &core.KeyRanges{}
+		if len(events) != 0 {
+			rw.ruleManager.Lock()
+			p = rw.ruleManager.BeginPatch()
+			log.Info("begin to prepare placement rules")
 		}
-		return err
+		return nil
+	}
+	putFn := func(kv *mvccpb.KeyValue) error {
+		key := string(kv.Key)
+		if strings.HasPrefix(key, rw.rulesPathPrefix) {
+			log.Info("update placement rule", zap.String("key", key), zap.String("value", string(kv.Value)))
+			rule, err := placement.NewRuleFromJSON(kv.Value)
+			if err != nil {
+				return err
+			}
+			// Try to add the rule to the patch or directly update the rule manager.
+			err = func() error {
+				if p == nil {
+					return rw.ruleManager.SetRule(rule)
+				}
+				if err := rw.ruleManager.AdjustRule(rule, ""); err != nil {
+					return err
+				}
+				p.SetRule(rule)
+				return nil
+			}()
+			// Update the suspect key ranges
+			if err == nil {
+				suspectKeyRanges.Append(rule.StartKey, rule.EndKey)
+				if oldRule := rw.ruleManager.GetRule(rule.GroupID, rule.ID); oldRule != nil {
+					suspectKeyRanges.Append(oldRule.StartKey, oldRule.EndKey)
+				}
+			}
+			return err
+		} else if strings.HasPrefix(key, rw.ruleGroupPathPrefix) {
+			log.Info("update placement rule group", zap.String("key", key), zap.String("value", string(kv.Value)))
+			ruleGroup, err := placement.NewRuleGroupFromJSON(kv.Value)
+			if err != nil {
+				return err
+			}
+			// Try to add the rule to the patch or directly update the rule manager.
+			err = func() error {
+				if p == nil {
+					return rw.ruleManager.SetRuleGroup(ruleGroup)
+				}
+				p.SetGroup(ruleGroup)
+				return nil
+			}()
+			// Update the suspect key ranges
+			if err == nil {
+				for _, rule := range rw.ruleManager.GetRulesByGroup(ruleGroup.ID) {
+					suspectKeyRanges.Append(rule.StartKey, rule.EndKey)
+				}
+			}
+			return err
+		} else {
+			log.Warn("unknown key when update placement rule", zap.String("key", key))
+			return nil
+		}
 	}
 	deleteFn := func(kv *mvccpb.KeyValue) error {
 		key := string(kv.Key)
-		groupID, ruleID, err := func() (string, string, error) {
-			if strings.HasPrefix(key, rw.rulesPathPrefix) {
-				log.Info("delete placement rule", zap.String("key", key))
-				ruleJSON, err := rw.ruleStorage.LoadRule(strings.TrimPrefix(key, rw.rulesPathPrefix+"/"))
-				if err != nil {
-					return "", "", err
-				}
-				rule, err := placement.NewRuleFromJSON([]byte(ruleJSON))
-				if err != nil {
-					return "", "", err
-				}
-				rw.checkerController.AddSuspectKeyRange(rule.StartKey, rule.EndKey)
-				return rule.GroupID, rule.ID, rw.ruleManager.DeleteRule(rule.GroupID, rule.ID)
-			} else if strings.HasPrefix(key, rw.ruleGroupPathPrefix) {
-				log.Info("delete placement rule group", zap.String("key", key))
-				trimmedKey := strings.TrimPrefix(key, rw.ruleGroupPathPrefix+"/")
-				for _, rule := range rw.ruleManager.GetRulesByGroup(trimmedKey) {
-					rw.checkerController.AddSuspectKeyRange(rule.StartKey, rule.EndKey)
-				}
-				return trimmedKey, "", rw.ruleManager.DeleteRuleGroup(trimmedKey)
-			} else {
-				log.Warn("unknown key when delete placement rule", zap.String("key", key))
-				return "", "", nil
+		if strings.HasPrefix(key, rw.rulesPathPrefix) {
+			log.Info("delete placement rule", zap.String("key", key))
+			ruleJSON, err := rw.ruleStorage.LoadRule(strings.TrimPrefix(key, rw.rulesPathPrefix+"/"))
+			if err != nil {
+				return err
 			}
-		}()
-		if err != nil && strings.Contains(err.Error(), "no rule left") && groupID != "" {
-			rw.addPendingDeletion(key, groupID, ruleID)
+			rule, err := placement.NewRuleFromJSON([]byte(ruleJSON))
+			if err != nil {
+				return err
+			}
+			// Try to add the rule to the patch or directly update the rule manager.
+			err = func() error {
+				if p == nil {
+					return rw.ruleManager.DeleteRule(rule.GroupID, rule.ID)
+				}
+				p.DeleteRule(rule.GroupID, rule.ID)
+				return nil
+			}()
+			// Update the suspect key ranges
+			if err == nil {
+				suspectKeyRanges.Append(rule.StartKey, rule.EndKey)
+			}
+			return err
+		} else if strings.HasPrefix(key, rw.ruleGroupPathPrefix) {
+			log.Info("delete placement rule group", zap.String("key", key))
+			trimmedKey := strings.TrimPrefix(key, rw.ruleGroupPathPrefix+"/")
+			// Try to add the rule to the patch or directly update the rule manager.
+			err := func() error {
+				if p == nil {
+					return rw.ruleManager.DeleteRuleGroup(trimmedKey)
+				}
+				p.DeleteGroup(trimmedKey)
+				return nil
+			}()
+			// Update the suspect key ranges
+			if err == nil {
+				for _, rule := range rw.ruleManager.GetRulesByGroup(trimmedKey) {
+					suspectKeyRanges.Append(rule.StartKey, rule.EndKey)
+				}
+			}
+			return nil
+		} else {
+			log.Warn("unknown key when delete placement rule", zap.String("key", key))
+			return nil
 		}
-		return err
 	}
-	postEventFn := func() error {
+	postFn := func(events []*clientv3.Event) error {
+		if len(events) > 0 {
+			if err := rw.ruleManager.TryCommitPatch(p); err != nil {
+				return err
+			}
+			rw.ruleManager.Unlock()
+		}
+		for _, kr := range suspectKeyRanges.Ranges() {
+			rw.checkerController.AddSuspectKeyRange(kr.StartKey, kr.EndKey)
+		}
 		return nil
 	}
 	rw.ruleWatcher = etcdutil.NewLoopWatcher(
 		rw.ctx, &rw.wg,
 		rw.etcdClient,
 		"scheduling-rule-watcher", rw.ruleCommonPathPrefix,
-		putFn, deleteFn, postEventFn,
+		preFn,
+		putFn, deleteFn,
+		postFn,
 		clientv3.WithPrefix(),
 	)
 	rw.ruleWatcher.StartWatchLoop()
@@ -219,14 +258,13 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 		log.Info("delete region label rule", zap.String("key", key))
 		return rw.regionLabeler.DeleteLabelRule(strings.TrimPrefix(key, prefixToTrim))
 	}
-	postEventFn := func() error {
-		return nil
-	}
 	rw.labelWatcher = etcdutil.NewLoopWatcher(
 		rw.ctx, &rw.wg,
 		rw.etcdClient,
 		"scheduling-region-label-watcher", rw.regionLabelPathPrefix,
-		putFn, deleteFn, postEventFn,
+		func([]*clientv3.Event) error { return nil },
+		putFn, deleteFn,
+		func([]*clientv3.Event) error { return nil },
 		clientv3.WithPrefix(),
 	)
 	rw.labelWatcher.StartWatchLoop()
@@ -237,38 +275,4 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 func (rw *Watcher) Close() {
 	rw.cancel()
 	rw.wg.Wait()
-}
-
-func (rw *Watcher) hasPendingDeletion() bool {
-	rw.pendingDeletion.RLock()
-	defer rw.pendingDeletion.RUnlock()
-	return len(rw.pendingDeletion.kvs) > 0
-}
-
-func (rw *Watcher) addPendingDeletion(path, groupID, ruleID string) {
-	rw.pendingDeletion.Lock()
-	defer rw.pendingDeletion.Unlock()
-	rw.pendingDeletion.kvs[path] = [2]string{groupID, ruleID}
-}
-
-func (rw *Watcher) tryFinishPendingDeletion() {
-	rw.pendingDeletion.Lock()
-	defer rw.pendingDeletion.Unlock()
-	previousLen := len(rw.pendingDeletion.kvs)
-	for k, v := range rw.pendingDeletion.kvs {
-		groupID, ruleID := v[0], v[1]
-		var err error
-		if ruleID == "" {
-			err = rw.ruleManager.DeleteRuleGroup(groupID)
-		} else {
-			err = rw.ruleManager.DeleteRule(groupID, ruleID)
-		}
-		if err == nil {
-			delete(rw.pendingDeletion.kvs, k)
-		}
-	}
-	// TODO: If the length of the map is changed, it means that some rules or rule groups have been deleted.
-	// We need to compare the rules and rule groups to make sure sync with etcd,
-	// rather than just force load all the rules and rule groups.
-	log.Info("clean pending deletion", zap.Int("current", len(rw.pendingDeletion.kvs)), zap.Int("previous", previousLen))
 }

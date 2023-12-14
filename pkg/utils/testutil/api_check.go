@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -26,6 +27,7 @@ import (
 // Status is used to check whether http response code is equal given code.
 func Status(re *require.Assertions, code int) func([]byte, int, http.Header) {
 	return func(resp []byte, i int, _ http.Header) {
+		fmt.Println("resp: ", string(resp))
 		re.Equal(code, i, "resp: "+string(resp))
 	}
 }

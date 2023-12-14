@@ -139,14 +139,13 @@ func (cw *Watcher) initializeConfigWatcher() error {
 	deleteFn := func(kv *mvccpb.KeyValue) error {
 		return nil
 	}
-	postEventFn := func() error {
-		return nil
-	}
 	cw.configWatcher = etcdutil.NewLoopWatcher(
 		cw.ctx, &cw.wg,
 		cw.etcdClient,
 		"scheduling-config-watcher", cw.configPath,
-		putFn, deleteFn, postEventFn,
+		func([]*clientv3.Event) error { return nil },
+		putFn, deleteFn,
+		func([]*clientv3.Event) error { return nil },
 	)
 	cw.configWatcher.StartWatchLoop()
 	return cw.configWatcher.WaitLoad()
@@ -170,14 +169,14 @@ func (cw *Watcher) initializeTTLConfigWatcher() error {
 		cw.ttl.PutWithTTL(key, nil, 0)
 		return nil
 	}
-	postEventFn := func() error {
-		return nil
-	}
 	cw.ttlConfigWatcher = etcdutil.NewLoopWatcher(
 		cw.ctx, &cw.wg,
 		cw.etcdClient,
 		"scheduling-ttl-config-watcher", cw.ttlConfigPrefix,
-		putFn, deleteFn, postEventFn, clientv3.WithPrefix(),
+		func([]*clientv3.Event) error { return nil },
+		putFn, deleteFn,
+		func([]*clientv3.Event) error { return nil },
+		clientv3.WithPrefix(),
 	)
 	cw.ttlConfigWatcher.StartWatchLoop()
 	return cw.ttlConfigWatcher.WaitLoad()
@@ -211,14 +210,13 @@ func (cw *Watcher) initializeSchedulerConfigWatcher() error {
 			strings.TrimPrefix(key, prefixToTrim),
 		)
 	}
-	postEventFn := func() error {
-		return nil
-	}
 	cw.schedulerConfigWatcher = etcdutil.NewLoopWatcher(
 		cw.ctx, &cw.wg,
 		cw.etcdClient,
 		"scheduling-scheduler-config-watcher", cw.schedulerConfigPathPrefix,
-		putFn, deleteFn, postEventFn,
+		func([]*clientv3.Event) error { return nil },
+		putFn, deleteFn,
+		func([]*clientv3.Event) error { return nil },
 		clientv3.WithPrefix(),
 	)
 	cw.schedulerConfigWatcher.StartWatchLoop()
