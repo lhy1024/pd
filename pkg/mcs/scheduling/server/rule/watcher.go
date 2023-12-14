@@ -66,6 +66,9 @@ type Watcher struct {
 
 	ruleWatcher  *etcdutil.LoopWatcher
 	labelWatcher *etcdutil.LoopWatcher
+
+	// patch is used to cache the placement rule changes.
+	patch *placement.RuleConfigPatch
 }
 
 // NewWatcher creates a new watcher to watch the Placement Rule change from PD API server.
@@ -104,18 +107,17 @@ func NewWatcher(
 }
 
 func (rw *Watcher) initializeRuleWatcher() error {
-	var p *placement.RuleConfigPatch
 	var suspectKeyRanges *core.KeyRanges
 
 	preFn := func(events []*clientv3.Event) error {
 		suspectKeyRanges = &core.KeyRanges{}
 		if len(events) != 0 {
 			rw.ruleManager.Lock()
-			p = rw.ruleManager.BeginPatch()
-			log.Info("begin to prepare placement rules")
+			rw.patch = rw.ruleManager.BeginPatch()
 		}
 		return nil
 	}
+
 	putFn := func(kv *mvccpb.KeyValue) error {
 		key := string(kv.Key)
 		if strings.HasPrefix(key, rw.rulesPathPrefix) {
@@ -126,19 +128,19 @@ func (rw *Watcher) initializeRuleWatcher() error {
 			}
 			// Try to add the rule to the patch or directly update the rule manager.
 			err = func() error {
-				if p == nil {
+				if rw.patch == nil {
 					return rw.ruleManager.SetRule(rule)
 				}
 				if err := rw.ruleManager.AdjustRule(rule, ""); err != nil {
 					return err
 				}
-				p.SetRule(rule)
+				rw.patch.SetRule(rule)
 				return nil
 			}()
 			// Update the suspect key ranges
 			if err == nil {
 				suspectKeyRanges.Append(rule.StartKey, rule.EndKey)
-				if oldRule := rw.ruleManager.GetRule(rule.GroupID, rule.ID); oldRule != nil {
+				if oldRule := rw.getRule(rule.GroupID, rule.ID); oldRule != nil {
 					suspectKeyRanges.Append(oldRule.StartKey, oldRule.EndKey)
 				}
 			}
@@ -151,15 +153,15 @@ func (rw *Watcher) initializeRuleWatcher() error {
 			}
 			// Try to add the rule to the patch or directly update the rule manager.
 			err = func() error {
-				if p == nil {
+				if rw.patch == nil {
 					return rw.ruleManager.SetRuleGroup(ruleGroup)
 				}
-				p.SetGroup(ruleGroup)
+				rw.patch.SetGroup(ruleGroup)
 				return nil
 			}()
 			// Update the suspect key ranges
 			if err == nil {
-				for _, rule := range rw.ruleManager.GetRulesByGroup(ruleGroup.ID) {
+				for _, rule := range rw.getRulesByGroup(ruleGroup.ID) {
 					suspectKeyRanges.Append(rule.StartKey, rule.EndKey)
 				}
 			}
@@ -183,10 +185,10 @@ func (rw *Watcher) initializeRuleWatcher() error {
 			}
 			// Try to add the rule to the patch or directly update the rule manager.
 			err = func() error {
-				if p == nil {
+				if rw.patch == nil {
 					return rw.ruleManager.DeleteRule(rule.GroupID, rule.ID)
 				}
-				p.DeleteRule(rule.GroupID, rule.ID)
+				rw.patch.DeleteRule(rule.GroupID, rule.ID)
 				return nil
 			}()
 			// Update the suspect key ranges
@@ -199,19 +201,19 @@ func (rw *Watcher) initializeRuleWatcher() error {
 			trimmedKey := strings.TrimPrefix(key, rw.ruleGroupPathPrefix+"/")
 			// Try to add the rule to the patch or directly update the rule manager.
 			err := func() error {
-				if p == nil {
+				if rw.patch == nil {
 					return rw.ruleManager.DeleteRuleGroup(trimmedKey)
 				}
-				p.DeleteGroup(trimmedKey)
+				rw.patch.DeleteGroup(trimmedKey)
 				return nil
 			}()
 			// Update the suspect key ranges
 			if err == nil {
-				for _, rule := range rw.ruleManager.GetRulesByGroup(trimmedKey) {
+				for _, rule := range rw.getRulesByGroup(trimmedKey) {
 					suspectKeyRanges.Append(rule.StartKey, rule.EndKey)
 				}
 			}
-			return nil
+			return err
 		} else {
 			log.Warn("unknown key when delete placement rule", zap.String("key", key))
 			return nil
@@ -219,7 +221,7 @@ func (rw *Watcher) initializeRuleWatcher() error {
 	}
 	postFn := func(events []*clientv3.Event) error {
 		if len(events) > 0 {
-			if err := rw.ruleManager.TryCommitPatch(p); err != nil {
+			if err := rw.ruleManager.TryCommitPatch(rw.patch); err != nil {
 				return err
 			}
 			rw.ruleManager.Unlock()
@@ -275,4 +277,18 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 func (rw *Watcher) Close() {
 	rw.cancel()
 	rw.wg.Wait()
+}
+
+func (rw *Watcher) getRule(groupID, ruleID string) *placement.Rule {
+	if rw.patch != nil { // patch is not nil means there are locked.
+		return rw.ruleManager.GetRuleLocked(groupID, ruleID)
+	}
+	return rw.ruleManager.GetRule(groupID, ruleID)
+}
+
+func (rw *Watcher) getRulesByGroup(groupID string) []*placement.Rule {
+	if rw.patch != nil { // patch is not nil means there are locked.
+		return rw.ruleManager.GetRulesByGroupLocked(groupID)
+	}
+	return rw.ruleManager.GetRulesByGroup(groupID)
 }

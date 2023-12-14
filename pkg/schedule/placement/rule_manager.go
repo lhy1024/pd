@@ -287,6 +287,11 @@ func (m *RuleManager) AdjustRule(r *Rule, groupID string) (err error) {
 func (m *RuleManager) GetRule(group, id string) *Rule {
 	m.RLock()
 	defer m.RUnlock()
+	return m.GetRuleLocked(group, id)
+}
+
+// GetRuleLocked returns the Rule with the same (group, id).
+func (m *RuleManager) GetRuleLocked(group, id string) *Rule {
 	if r := m.ruleConfig.getRule([2]string{group, id}); r != nil {
 		return r.Clone()
 	}
@@ -359,6 +364,11 @@ func (m *RuleManager) GetGroupsCount() int {
 func (m *RuleManager) GetRulesByGroup(group string) []*Rule {
 	m.RLock()
 	defer m.RUnlock()
+	return m.GetRulesByGroupLocked(group)
+}
+
+// GetRulesByGroupLocked returns sorted rules of a group.
+func (m *RuleManager) GetRulesByGroupLocked(group string) []*Rule {
 	var rules []*Rule
 	for _, r := range m.ruleConfig.rules {
 		if r.GroupID == group {
