@@ -37,22 +37,36 @@ type RegionLabeler struct {
 	rangeList  rangelist.List // sorted LabelRules of the type `KeyRange`
 	ctx        context.Context
 	minExpire  *time.Time
+	gcInterval time.Duration
+	onlyRead   bool
 }
 
 // NewRegionLabeler creates a Labeler instance.
-func NewRegionLabeler(ctx context.Context, storage endpoint.RuleStorage, gcInterval time.Duration) (*RegionLabeler, error) {
-	l := &RegionLabeler{
+func NewRegionLabeler(ctx context.Context, storage endpoint.RuleStorage, gcInterval time.Duration) *RegionLabeler {
+	return &RegionLabeler{
 		storage:    storage,
 		labelRules: make(map[string]*LabelRule),
 		ctx:        ctx,
 		minExpire:  nil,
+		gcInterval: gcInterval,
 	}
+}
 
+// Init loads rules from storage.
+func (l *RegionLabeler) Init() error {
 	if err := l.loadRules(); err != nil {
-		return nil, err
+		return err
 	}
-	go l.doGC(gcInterval)
-	return l, nil
+	go l.doGC(l.gcInterval)
+	return nil
+}
+
+// SetOnlyRead sets the labeler manager to read-only mode.
+// If it is set, the labeler manager will not write any data to storage.
+func (l *RegionLabeler) SetOnlyRead() {
+	l.Lock()
+	defer l.Unlock()
+	l.onlyRead = true
 }
 
 func (l *RegionLabeler) doGC(gcInterval time.Duration) {

@@ -51,8 +51,9 @@ const (
 // RuleManager is responsible for the lifecycle of all placement Rules.
 // It is thread safe.
 type RuleManager struct {
-	ctx     context.Context
-	storage endpoint.RuleStorage
+	ctx      context.Context
+	onlyRead bool
+	storage  endpoint.RuleStorage
 	syncutil.RWMutex
 	initialized bool
 	ruleConfig  *ruleConfig
@@ -75,6 +76,14 @@ func NewRuleManager(ctx context.Context, storage endpoint.RuleStorage, storeSetI
 		ruleConfig:       newRuleConfig(),
 		cache:            NewRegionRuleFitCacheManager(),
 	}
+}
+
+// SetOnlyRead sets the rule manager to read-only mode.
+// If it is set, the rule manager will not write any data to storage.
+func (m *RuleManager) SetOnlyRead() {
+	m.Lock()
+	defer m.Unlock()
+	m.onlyRead = true
 }
 
 // Initialize loads rules from storage. If Placement Rules feature is never enabled, it creates default rule that is
@@ -129,17 +138,23 @@ func (m *RuleManager) Initialize(maxReplica int, locationLabels []string, isolat
 				IsolationLevel: isolationLevel,
 			})
 		}
-		if err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) (err error) {
-			for _, defaultRule := range defaultRules {
-				if err := m.storage.SaveRule(txn, defaultRule.StoreKey(), defaultRule); err != nil {
-					// TODO: Need to delete the previously successfully saved Rules?
-					return err
+		// save default rules to storage.
+		if !m.onlyRead {
+			if err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) (err error) {
+				for _, defaultRule := range defaultRules {
+					if err := m.storage.SaveRule(txn, defaultRule.StoreKey(), defaultRule); err != nil {
+						// TODO: Need to delete the previously successfully saved Rules?
+						return err
+					}
 				}
-				m.ruleConfig.setRule(defaultRule)
+				return nil
+			}); err != nil {
+				return err
 			}
-			return nil
-		}); err != nil {
-			return err
+		}
+		// save default rules to memory.
+		for _, defaultRule := range defaultRules {
+			m.ruleConfig.setRule(defaultRule)
 		}
 	}
 	m.ruleConfig.adjust()
@@ -157,8 +172,10 @@ func (m *RuleManager) loadRules() error {
 		toSave   []*Rule
 		toDelete []string
 	)
-	return m.storage.RunInTxn(m.ctx, func(txn kv.Txn) (err error) {
-		err = m.storage.LoadRules(txn, func(k, v string) {
+	// Load rules from storage and check rule format.
+	// Save rules to memory if the rule is valid.
+	if err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) (err error) {
+		return m.storage.LoadRules(txn, func(k, v string) {
 			r, err := NewRuleFromJSON([]byte(v))
 			if err != nil {
 				log.Error("failed to unmarshal rule value", zap.String("rule-key", k), zap.String("rule-value", v), errs.ZapError(errs.ErrLoadRule))
@@ -184,22 +201,26 @@ func (m *RuleManager) loadRules() error {
 			}
 			m.ruleConfig.rules[r.Key()] = r
 		})
-		if err != nil {
-			return err
-		}
-
-		for _, s := range toSave {
-			if err = m.storage.SaveRule(txn, s.StoreKey(), s); err != nil {
-				return err
+	}); err != nil {
+		return err
+	}
+	// Save rules to storage with correct key.
+	if !m.onlyRead {
+		return m.storage.RunInTxn(m.ctx, func(txn kv.Txn) (err error) {
+			for _, s := range toSave {
+				if err = m.storage.SaveRule(txn, s.StoreKey(), s); err != nil {
+					return err
+				}
 			}
-		}
-		for _, d := range toDelete {
-			if err = m.storage.DeleteRule(txn, d); err != nil {
-				return err
+			for _, d := range toDelete {
+				if err = m.storage.DeleteRule(txn, d); err != nil {
+					return err
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
+	return nil
 }
 
 func (m *RuleManager) loadGroups() error {
@@ -479,10 +500,12 @@ func (m *RuleManager) TryCommitPatch(patch *RuleConfigPatch) error {
 
 	patch.trim()
 
-	// save updates
-	err = m.savePatch(patch.mut)
-	if err != nil {
-		return err
+	// save updates to storage
+	if !m.onlyRead {
+		err = m.savePatch(patch.mut)
+		if err != nil {
+			return err
+		}
 	}
 
 	// update in-memory state

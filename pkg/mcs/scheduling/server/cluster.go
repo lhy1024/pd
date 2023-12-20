@@ -60,12 +60,15 @@ const (
 // NewCluster creates a new cluster.
 func NewCluster(parentCtx context.Context, persistConfig *config.PersistConfig, storage storage.Storage, basicCluster *core.BasicCluster, hbStreams *hbstream.HeartbeatStreams, clusterID uint64, checkMembershipCh chan struct{}) (*Cluster, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
-	labelerManager, err := labeler.NewRegionLabeler(ctx, storage, regionLabelGCInterval)
+	labelerManager := labeler.NewRegionLabeler(ctx, storage, regionLabelGCInterval)
+	labelerManager.SetOnlyRead()
+	err := labelerManager.Init()
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	ruleManager := placement.NewRuleManager(ctx, storage, basicCluster, persistConfig)
+	ruleManager.SetOnlyRead()
 	c := &Cluster{
 		ctx:               ctx,
 		cancel:            cancel,

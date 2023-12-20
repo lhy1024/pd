@@ -78,7 +78,8 @@ func NewCluster(ctx context.Context, opts *config.PersistOptions) *Cluster {
 	}
 	// It should be updated to the latest feature version.
 	c.PersistOptions.SetClusterVersion(versioninfo.MinSupportedVersion(versioninfo.HotScheduleWithQuery))
-	c.RegionLabeler, _ = labeler.NewRegionLabeler(ctx, c.Storage, time.Second*5)
+	c.RegionLabeler = labeler.NewRegionLabeler(ctx, c.Storage, time.Second*5)
+	c.RegionLabeler.Init()
 	return c
 }
 

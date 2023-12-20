@@ -91,7 +91,8 @@ func TestAdjustRule2(t *testing.T) {
 func TestGetSetRule(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	labeler, err := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	labeler := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	err := labeler.Init()
 	re.NoError(err)
 	rules := []*LabelRule{
 		{ID: "rule1", Labels: []RegionLabel{{Key: "k1", Value: "v1"}}, RuleType: "key-range", Data: MakeKeyRanges("1234", "5678")},
@@ -137,7 +138,8 @@ func TestGetSetRule(t *testing.T) {
 func TestIndex(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	labeler, err := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	labeler := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	err := labeler.Init()
 	re.NoError(err)
 	rules := []*LabelRule{
 		{ID: "rule0", Labels: []RegionLabel{{Key: "k1", Value: "v0"}}, RuleType: "key-range", Data: MakeKeyRanges("", "")},
@@ -179,7 +181,8 @@ func TestIndex(t *testing.T) {
 func TestSaveLoadRule(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	labeler, err := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	labeler := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	err := labeler.Init()
 	re.NoError(err)
 	rules := []*LabelRule{
 		{ID: "rule1", Labels: []RegionLabel{{Key: "k1", Value: "v1"}}, RuleType: "key-range", Data: MakeKeyRanges("1234", "5678")},
@@ -191,7 +194,8 @@ func TestSaveLoadRule(t *testing.T) {
 		re.NoError(err)
 	}
 
-	labeler, err = NewRegionLabeler(context.Background(), store, time.Millisecond*100)
+	labeler = NewRegionLabeler(context.Background(), store, time.Millisecond*100)
+	err = labeler.Init()
 	re.NoError(err)
 	for _, r := range rules {
 		r2 := labeler.GetLabelRule(r.ID)
@@ -224,7 +228,8 @@ func expectSameRules(re *require.Assertions, r1, r2 *LabelRule) {
 func TestKeyRange(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	labeler, err := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	labeler := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	err := labeler.Init()
 	re.NoError(err)
 	rules := []*LabelRule{
 		{ID: "rule1", Labels: []RegionLabel{{Key: "k1", Value: "v1"}}, RuleType: "key-range", Data: MakeKeyRanges("1234", "5678")},
@@ -265,7 +270,8 @@ func TestKeyRange(t *testing.T) {
 func TestLabelerRuleTTL(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	labeler, err := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	labeler := NewRegionLabeler(context.Background(), store, time.Millisecond*10)
+	err := labeler.Init()
 	re.NoError(err)
 	rules := []*LabelRule{
 		{
@@ -338,7 +344,8 @@ func TestGC(t *testing.T) {
 	re := require.New(t)
 	// set gcInterval to 1 hour.
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	labeler, err := NewRegionLabeler(context.Background(), store, time.Hour)
+	labeler := NewRegionLabeler(context.Background(), store, time.Hour)
+	err := labeler.Init()
 	re.NoError(err)
 	ttls := []string{"1ms", "1ms", "1ms", "5ms", "5ms", "10ms", "1h", "24h"}
 	start, _ := hex.DecodeString("1234")

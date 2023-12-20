@@ -2117,8 +2117,8 @@ func newTestScheduleConfig() (*sc.ScheduleConfig, *config.PersistOptions, error)
 func newTestCluster(ctx context.Context, opt *config.PersistOptions) *testCluster {
 	rc := newTestRaftCluster(ctx, mockid.NewIDAllocator(), opt, storage.NewStorageWithMemoryBackend())
 	storage := storage.NewStorageWithMemoryBackend()
-	rc.regionLabeler, _ = labeler.NewRegionLabeler(ctx, storage, time.Second*5)
-
+	rc.regionLabeler = labeler.NewRegionLabeler(ctx, storage, time.Second*5)
+	rc.regionLabeler.Init()
 	return &testCluster{RaftCluster: rc}
 }
 

@@ -303,7 +303,8 @@ func (c *RaftCluster) Start(s Server) error {
 		return nil
 	}
 
-	c.regionLabeler, err = labeler.NewRegionLabeler(c.ctx, c.storage, regionLabelGCInterval)
+	c.regionLabeler = labeler.NewRegionLabeler(c.ctx, c.storage, regionLabelGCInterval)
+	err = c.regionLabeler.Init()
 	if err != nil {
 		return err
 	}
