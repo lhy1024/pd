@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/core"
@@ -69,6 +70,8 @@ type Watcher struct {
 
 	// patch is used to cache the placement rule changes.
 	patch *placement.RuleConfigPatch
+
+	ruleManagerLocked int32
 }
 
 // NewWatcher creates a new watcher to watch the Placement Rule change from PD API server.
@@ -110,8 +113,7 @@ func (rw *Watcher) initializeRuleWatcher() error {
 	var suspectKeyRanges *core.KeyRanges
 
 	preEventsFn := func(events []*clientv3.Event) error {
-		// It will be locked until the postFn is finished.
-		rw.ruleManager.Lock()
+		rw.tryLockRuleManager()
 		rw.patch = rw.ruleManager.BeginPatch()
 		suspectKeyRanges = &core.KeyRanges{}
 		return nil
@@ -186,9 +188,17 @@ func (rw *Watcher) initializeRuleWatcher() error {
 			return nil
 		}
 	}
-	postEventsFn := func(events []*clientv3.Event) error {
-		defer rw.ruleManager.Unlock()
-		if err := rw.ruleManager.TryCommitPatch(rw.patch); err != nil {
+	postEventsFn := func(events []*clientv3.Event) (err error) {
+		defer func() {
+			rw.unlockRuleManager()
+			if err != nil {
+				// rw.ruleWatcher.clean()
+				rw.ruleWatcher.ForceLoad()
+				// FIXME: but if the batch is too large, api server only write a part of them.
+				// This time we force load the rules, but the rules may be inconsistent.
+			}
+		}()
+		if err = rw.ruleManager.TryCommitPatch(rw.patch); err != nil {
 			log.Error("failed to commit patch", zap.Error(err))
 			return err
 		}
@@ -236,6 +246,21 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 	)
 	rw.labelWatcher.StartWatchLoop()
 	return rw.labelWatcher.WaitLoad()
+}
+
+// tryLockRuleManager tries to lock the rule manager.
+// If the rule manager is already locked by watcher, it will return false.
+func (rw *Watcher) tryLockRuleManager() bool {
+	if atomic.CompareAndSwapInt32(&rw.ruleManagerLocked, 0, 1) {
+		rw.ruleManager.Lock()
+		return true
+	}
+	return false
+}
+
+func (rw *Watcher) unlockRuleManager() {
+	rw.ruleManager.Unlock()
+	atomic.StoreInt32(&rw.ruleManagerLocked, 0)
 }
 
 // Close closes the watcher.
