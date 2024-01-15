@@ -485,8 +485,6 @@ func (kgm *KeyspaceGroupManager) GetServiceConfig() ServiceConfig {
 // Key: /ms/{cluster_id}/tso/registry/{tsoServerAddress}
 // Value: discover.ServiceRegistryEntry
 func (kgm *KeyspaceGroupManager) InitializeTSOServerWatchLoop() error {
-	tsoServiceEndKey := clientv3.GetPrefixRangeEnd(kgm.tsoServiceKey) + "/"
-
 	putFn := func(kv *mvccpb.KeyValue) error {
 		s := &discovery.ServiceRegistryEntry{}
 		if err := json.Unmarshal(kv.Value, s); err != nil {
@@ -518,7 +516,7 @@ func (kgm *KeyspaceGroupManager) InitializeTSOServerWatchLoop() error {
 		putFn,
 		deleteFn,
 		func([]*clientv3.Event) error { return nil },
-		clientv3.WithRange(tsoServiceEndKey),
+		clientv3.WithPrefix(),
 	)
 	kgm.tsoNodesWatcher.StartWatchLoop()
 	if err := kgm.tsoNodesWatcher.WaitLoad(); err != nil {

@@ -691,10 +691,9 @@ func (lw *LoopWatcher) initFromEtcd(ctx context.Context) int64 {
 	)
 	ticker := time.NewTicker(defaultLoadFromEtcdRetryInterval)
 	defer ticker.Stop()
-	ctx, cancel := context.WithTimeout(ctx, lw.loadTimeout)
-	defer cancel()
-
 	for i := 0; i < lw.loadRetryTimes; i++ {
+		ctx, cancel := context.WithTimeout(ctx, lw.loadTimeout)
+		defer cancel()
 		failpoint.Inject("loadTemporaryFail", func(val failpoint.Value) {
 			if maxFailTimes, ok := val.(int); ok && i < maxFailTimes {
 				err = errors.New("fail to read from etcd")
