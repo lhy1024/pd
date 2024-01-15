@@ -533,9 +533,8 @@ func (kgm *KeyspaceGroupManager) InitializeTSOServerWatchLoop() error {
 // Value: endpoint.KeyspaceGroup
 func (kgm *KeyspaceGroupManager) InitializeGroupWatchLoop() error {
 	rootPath := kgm.legacySvcRootPath
-	startKey := strings.Join([]string{rootPath, endpoint.KeyspaceGroupIDPath(mcsutils.DefaultKeyspaceGroupID)}, "/")
-	endKey := strings.Join(
-		[]string{rootPath, clientv3.GetPrefixRangeEnd(endpoint.KeyspaceGroupIDPrefix())}, "/")
+	startKey := strings.Join(
+		[]string{rootPath, endpoint.KeyspaceGroupIDPrefix()}, "/")
 
 	defaultKGConfigured := false
 	putFn := func(kv *mvccpb.KeyValue) error {
@@ -575,7 +574,7 @@ func (kgm *KeyspaceGroupManager) InitializeGroupWatchLoop() error {
 		putFn,
 		deleteFn,
 		postEventsFn,
-		clientv3.WithRange(endKey),
+		clientv3.WithPrefix(),
 	)
 	if kgm.loadKeyspaceGroupsTimeout > 0 {
 		kgm.groupWatcher.SetLoadTimeout(kgm.loadKeyspaceGroupsTimeout)
