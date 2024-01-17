@@ -42,6 +42,7 @@ func TestLoadLargeRules(t *testing.T) {
 	ctx, client, clean := prepare(t)
 	defer clean()
 	runWatcherLoadLabelRule(ctx, re, client)
+	re.True(false)
 }
 
 func BenchmarkLoadLargeRules(b *testing.B) {
