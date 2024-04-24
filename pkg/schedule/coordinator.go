@@ -206,11 +206,6 @@ func (c *Coordinator) PatrolRegions() {
 
 			c.waitDrainRegionChan(regionChan)
 			regions = c.cluster.ScanRegions(key, nil, c.cluster.GetCheckerConfig().GetPatrolRegionConcurrency())
-			if len(regions) == 0 {
-				continue
-			}
-			// Updates the label level isolation statistics.
-			c.cluster.UpdateRegionsLabelLevelStats(regions)
 			if len(key) == 0 {
 				// Resets the scan key.
 				key = nil
@@ -219,6 +214,11 @@ func (c *Coordinator) PatrolRegions() {
 				c.setPatrolRegionsDuration(dur)
 				start = time.Now()
 			}
+			if len(regions) == 0 {
+				continue
+			}
+			// Updates the label level isolation statistics.
+			c.cluster.UpdateRegionsLabelLevelStats(regions)
 			for _, region := range regions {
 				regionChan <- region
 				key = region.GetEndKey()
