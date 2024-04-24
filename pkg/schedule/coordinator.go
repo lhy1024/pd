@@ -205,25 +205,19 @@ func (c *Coordinator) PatrolRegions() {
 			c.checkWaitingRegions(regionChan)
 
 			c.waitDrainRegionChan(regionChan)
-			regions = c.cluster.ScanRegions(key, nil, c.cluster.GetCheckerConfig().GetPatrolRegionConcurrency())
-			if len(key) == 0 {
-				// Resets the scan key.
-				key = nil
-				dur := time.Since(start)
-				patrolCheckRegionsGauge.Set(dur.Seconds())
-				c.setPatrolRegionsDuration(dur)
-				start = time.Now()
-			}
+
+			key, regions = c.checkRegions(key, c.cluster.GetCheckerConfig().GetPatrolRegionBatchLimit(), regionChan)
 			if len(regions) == 0 {
 				continue
 			}
 			// Updates the label level isolation statistics.
 			c.cluster.UpdateRegionsLabelLevelStats(regions)
-			for _, region := range regions {
-				regionChan <- region
-				key = region.GetEndKey()
+			if len(key) == 0 {
+				dur := time.Since(start)
+				patrolCheckRegionsGauge.Set(dur.Seconds())
+				c.setPatrolRegionsDuration(dur)
+				start = time.Now()
 			}
-
 			failpoint.Inject("break-patrol", func() {
 				failpoint.Break()
 			})
@@ -277,6 +271,21 @@ func (c *Coordinator) waitDrainRegionChan(regionChan chan *core.RegionInfo) {
 			}
 		}
 	}
+}
+
+func (c *Coordinator) checkRegions(startKey []byte, patrolScanRegionLimit int, regionChan chan *core.RegionInfo) (key []byte, regions []*core.RegionInfo) {
+	regions = c.cluster.ScanRegions(startKey, nil, patrolScanRegionLimit)
+	if len(regions) == 0 {
+		// Resets the scan key.
+		key = nil
+		return
+	}
+
+	for _, region := range regions {
+		regionChan <- region
+		key = region.GetEndKey()
+	}
+	return
 }
 
 func (c *Coordinator) isSchedulingHalted() bool {
