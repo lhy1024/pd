@@ -240,6 +240,7 @@ func (c *Coordinator) startPatrolRegionWorkers(workers int, regionChan <-chan *c
 		go func() {
 			defer wg.Done()
 			for {
+				patrolCheckRegionsChanLenGauge.Set(float64(len(regionChan)))
 				select {
 				case region, ok := <-regionChan:
 					if ok {
@@ -256,7 +257,6 @@ func (c *Coordinator) startPatrolRegionWorkers(workers int, regionChan <-chan *c
 // waitDrainRegionChan is used to drain the regionChan.
 // It is used to avoid duplicated regions in the regionChan from different sources.
 func (c *Coordinator) waitDrainRegionChan(regionChan chan *core.RegionInfo) {
-	patrolCheckRegionsChanLenGauge.Set(float64(len(regionChan)))
 	if len(regionChan) == 0 {
 		return
 	}
