@@ -51,6 +51,7 @@ const (
 	maxLoadConfigRetries       = 10
 	// pushOperatorTickInterval is the interval try to push the operator.
 	pushOperatorTickInterval = 500 * time.Millisecond
+	patrolRegionChanLen      = 1024
 
 	// PluginLoad means action for load plugin
 	PluginLoad = "PluginLoad"
@@ -160,7 +161,7 @@ func (c *Coordinator) PatrolRegions() {
 	defer ticker.Stop()
 
 	workersCount := c.cluster.GetCheckerConfig().GetPatrolRegionConcurrency()
-	regionChan := make(chan *core.RegionInfo, c.cluster.GetCheckerConfig().GetPatrolRegionConcurrency())
+	regionChan := make(chan *core.RegionInfo, patrolRegionChanLen)
 	quit := make(chan bool)
 	var wg sync.WaitGroup
 	c.startPatrolRegionWorkers(workersCount, regionChan, quit, &wg)
