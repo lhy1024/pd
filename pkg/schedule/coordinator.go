@@ -238,6 +238,7 @@ func (c *Coordinator) startPatrolRegionWorkers(workers int, regionChan <-chan *c
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
+			defer logutil.LogPanic()
 			defer wg.Done()
 			for {
 				patrolCheckRegionsChanLenGauge.Set(float64(len(regionChan)))
