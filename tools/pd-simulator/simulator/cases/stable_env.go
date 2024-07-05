@@ -15,6 +15,8 @@
 package cases
 
 import (
+	"fmt"
+
 	"github.com/docker/go-units"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/pd/pkg/core"
@@ -26,6 +28,7 @@ import (
 // newStableEnv provides a stable environment for test.
 func newStableEnv(config *sc.SimConfig) *Case {
 	var simCase Case
+	simCase.Labels = []string{"zone", "host"}
 
 	totalStore := config.TotalStore
 	totalRegion := config.TotalRegion
@@ -37,6 +40,10 @@ func newStableEnv(config *sc.SimConfig) *Case {
 		simCase.Stores = append(simCase.Stores, &Store{
 			ID:     id,
 			Status: metapb.StoreState_Up,
+			Labels: []*metapb.StoreLabel{
+				{Key: "zone", Value: fmt.Sprintf("zone-%d", id%3)},
+				{Key: "host", Value: fmt.Sprintf("host-%d", id)},
+			},
 		})
 		allStores[id] = struct{}{}
 		arrStoresID = append(arrStoresID, id)
@@ -54,8 +61,8 @@ func newStableEnv(config *sc.SimConfig) *Case {
 			ID:     simutil.IDAllocator.NextID(),
 			Peers:  peers,
 			Leader: peers[0],
-			Size:   96 * units.MiB,
-			Keys:   960000,
+			Size:   1 * units.MiB,
+			Keys:   100,
 		})
 	}
 
