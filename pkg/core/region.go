@@ -2209,11 +2209,3 @@ func NewTestRegionInfo(regionID, storeID uint64, start, end []byte, opts ...Regi
 	}
 	return NewRegionInfo(metaRegion, leader, opts...)
 }
-
-// TraverseRegions executes a function on all regions.
-// ONLY for simulator now and function need to be self-locked.
-func (r *RegionsInfo) TraverseRegions(lockedFunc func(*RegionInfo)) {
-	for _, item := range r.regions {
-		lockedFunc(item.RegionInfo)
-	}
-}

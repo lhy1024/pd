@@ -27,6 +27,7 @@ import (
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/ratelimit"
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"github.com/tikv/pd/pkg/utils/typeutil"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/cases"
 	sc "github.com/tikv/pd/tools/pd-simulator/simulator/config"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/info"
@@ -51,7 +52,7 @@ type Node struct {
 	cancel            context.CancelFunc
 	raftEngine        *RaftEngine
 	limiter           *ratelimit.RateLimiter
-	sizeMutex         syncutil.Mutex
+	statsMutex        syncutil.RWMutex
 	hasExtraUsedSpace bool
 	snapStats         []*pdpb.SnapshotStat
 	// PD client
@@ -128,7 +129,6 @@ func (n *Node) Tick(wg *sync.WaitGroup) {
 	if n.GetNodeState() != metapb.NodeState_Preparing && n.GetNodeState() != metapb.NodeState_Serving {
 		return
 	}
-	n.stepHeartBeat()
 	n.stepCompaction()
 	n.stepTask()
 	n.tick++
@@ -153,38 +153,26 @@ func (n *Node) stepTask() {
 	}
 }
 
-var schedulerCheck sync.Once
-
-func (n *Node) stepHeartBeat() {
-	config := n.raftEngine.storeConfig
-
-	period := uint64(config.RaftStore.StoreHeartBeatInterval.Duration / config.SimTickInterval.Duration)
-	if n.tick%period == 0 {
-		n.storeHeartBeat()
-	}
-	period = uint64(config.RaftStore.RegionHeartBeatInterval.Duration / config.SimTickInterval.Duration)
-	if n.tick%period == 0 {
-		n.regionHeartBeat()
-		schedulerCheck.Do(func() { ChooseToHaltPDSchedule(false) })
-	}
-}
-
 func (n *Node) stepCompaction() {
 	if n.tick%compactionDelayPeriod == 0 {
 		n.compaction()
 	}
 }
 
-func (n *Node) storeHeartBeat() {
+func (n *Node) storeHeartBeat(wg *sync.WaitGroup) {
+	defer wg.Done()
 	if n.GetNodeState() != metapb.NodeState_Preparing && n.GetNodeState() != metapb.NodeState_Serving {
 		return
 	}
-	ctx, cancel := context.WithTimeout(n.ctx, pdTimeout)
+	n.statsMutex.Lock()
 	stats := make([]*pdpb.SnapshotStat, len(n.snapStats))
 	copy(stats, n.snapStats)
 	n.snapStats = n.snapStats[:0]
 	n.stats.SnapshotStats = stats
-	err := n.client.StoreHeartbeat(ctx, &n.stats.StoreStats)
+	newStats := typeutil.DeepClone(&n.stats.StoreStats, core.StoreStatsFactory)
+	n.statsMutex.Unlock()
+	ctx, cancel := context.WithTimeout(n.ctx, pdTimeout)
+	err := n.client.StoreHeartbeat(ctx, newStats)
 	if err != nil {
 		simutil.Logger.Info("report store heartbeat error",
 			zap.Uint64("node-id", n.GetId()),
@@ -194,33 +182,23 @@ func (n *Node) storeHeartBeat() {
 }
 
 func (n *Node) compaction() {
-	n.sizeMutex.Lock()
-	defer n.sizeMutex.Unlock()
+	n.statsMutex.Lock()
+	defer n.statsMutex.Unlock()
 	n.stats.Available += n.stats.ToCompactionSize
 	n.stats.UsedSize -= n.stats.ToCompactionSize
 	n.stats.ToCompactionSize = 0
 }
 
-func (n *Node) regionHeartBeat() {
-	if n.GetNodeState() != metapb.NodeState_Preparing && n.GetNodeState() != metapb.NodeState_Serving {
-		return
+func (n *Node) regionHeartBeat(region *core.RegionInfo) {
+	ctx, cancel := context.WithTimeout(n.ctx, pdTimeout)
+	err := n.client.RegionHeartbeat(ctx, region)
+	if err != nil {
+		simutil.Logger.Info("report region heartbeat error",
+			zap.Uint64("node-id", n.Id),
+			zap.Uint64("region-id", region.GetID()),
+			zap.Error(err))
 	}
-	n.raftEngine.TraverseRegions(func(region *core.RegionInfo) {
-		if region.GetLeader() != nil && region.GetLeader().GetStoreId() == n.Id {
-			ctx, cancel := context.WithTimeout(n.ctx, pdTimeout)
-			if region == nil {
-				simutil.Logger.Fatal("region not found")
-			}
-			err := n.client.RegionHeartbeat(ctx, region)
-			if err != nil {
-				simutil.Logger.Info("report region heartbeat error",
-					zap.Uint64("node-id", n.Id),
-					zap.Uint64("region-id", region.GetID()),
-					zap.Error(err))
-			}
-			cancel()
-		}
-	})
+	cancel()
 }
 
 func (n *Node) reportRegionChange() {
@@ -267,19 +245,21 @@ func (n *Node) Stop() {
 }
 
 func (n *Node) incUsedSize(size uint64) {
-	n.sizeMutex.Lock()
-	defer n.sizeMutex.Unlock()
+	n.statsMutex.Lock()
+	defer n.statsMutex.Unlock()
 	n.stats.Available -= size
 	n.stats.UsedSize += size
 }
 
 func (n *Node) decUsedSize(size uint64) {
-	n.sizeMutex.Lock()
-	defer n.sizeMutex.Unlock()
+	n.statsMutex.Lock()
+	defer n.statsMutex.Unlock()
 	n.stats.ToCompactionSize += size
 }
 
 func (n *Node) registerSnapStats(generate, send, total uint64) {
+	n.statsMutex.Lock()
+	defer n.statsMutex.Unlock()
 	stat := pdpb.SnapshotStat{
 		GenerateDurationSec: generate,
 		SendDurationSec:     send,
