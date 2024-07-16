@@ -176,7 +176,7 @@ func (c *ttlCache) UpdateTTL(duration time.Duration) {
 	if c.ttl == duration {
 		return
 	}
-
+	log.Info("update ttl", zap.Duration("old-ttl", c.ttl), zap.Duration("new-ttl", duration))
 	for key := range c.items {
 		c.items[key] = ttlCacheItem{
 			value:  c.items[key].value,

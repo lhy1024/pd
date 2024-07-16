@@ -89,6 +89,7 @@ func (m *MergeChecker) Check(region *core.RegionInfo) []*operator.Operator {
 	}
 
 	expireTime := m.startTime.Add(m.conf.GetSplitMergeInterval())
+	// log.Info("merge checker is trying to merge region", zap.Duration("split-merge-interval", m.conf.GetSplitMergeInterval()))
 	if time.Now().Before(expireTime) {
 		mergeCheckerRecentlyStartCounter.Inc()
 		return nil
