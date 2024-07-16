@@ -77,6 +77,7 @@ type Controller struct {
 func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config.CheckerConfigProvider, ruleManager *placement.RuleManager, labeler *labeler.RegionLabeler, opController *operator.Controller) *Controller {
 	pendingProcessedRegions := cache.NewDefaultCache(DefaultWaitingCacheSize)
 	return &Controller{
+		ctx:                     ctx,
 		cluster:                 cluster,
 		conf:                    conf,
 		opController:            opController,
