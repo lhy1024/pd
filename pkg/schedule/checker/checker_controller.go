@@ -203,6 +203,15 @@ func (c *Controller) checkRegions(startKey []byte) (key []byte, regions []*core.
 	return
 }
 
+func (c *Controller) checkPendingProcessedRegions() {
+	ids := c.GetPendingProcessedRegions()
+	pendingProcessedRegionsGauge.Set(float64(len(ids)))
+	for _, id := range ids {
+		region := c.cluster.GetRegion(id)
+		c.tryAddOperators(region)
+	}
+}
+
 // checkPriorityRegions checks priority regions
 func (c *Controller) checkPriorityRegions() {
 	items := c.GetPriorityRegions()
@@ -225,15 +234,6 @@ func (c *Controller) checkPriorityRegions() {
 	}
 	for _, v := range removes {
 		c.RemovePriorityRegions(v)
-	}
-}
-
-func (c *Controller) checkPendingProcessedRegions() {
-	ids := c.GetPendingProcessedRegions()
-	pendingProcessedRegionsGauge.Set(float64(len(ids)))
-	for _, id := range ids {
-		region := c.cluster.GetRegion(id)
-		c.tryAddOperators(region)
 	}
 }
 
@@ -397,6 +397,7 @@ func (c *Controller) CheckSuspectRanges() {
 			for _, region := range regions {
 				regionIDList = append(regionIDList, region.GetID())
 			}
+
 			// if the last region's end key is smaller the keyRange[1] which means there existed the remaining regions between
 			// keyRange[0] and keyRange[1] after scan regions, so we put the end key and keyRange[1] into Suspect KeyRanges
 			lastRegion := regions[len(regions)-1]

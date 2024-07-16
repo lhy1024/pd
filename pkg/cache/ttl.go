@@ -177,10 +177,11 @@ func (c *ttlCache) UpdateTTL(duration time.Duration) {
 		return
 	}
 
+	log.Info("update ttl cache ttl for region splitting and merging", zap.Duration("old", c.ttl), zap.Duration("new", duration))
 	for key := range c.items {
 		c.items[key] = ttlCacheItem{
 			value:  c.items[key].value,
-			expire: time.Now().Add(duration),
+			expire: c.items[key].expire.Add(-c.ttl).Add(duration),
 		}
 	}
 	c.ttl = duration
