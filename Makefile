@@ -39,10 +39,10 @@ ifeq ($(FAILPOINT), 1)
 	BUILD_TAGS += with_fail
 endif
 
-ifeq ("$(WITH_RACE)", "1")
+# ifeq ("$(WITH_RACE)", "1")
 	BUILD_FLAGS += -race
 	BUILD_CGO_ENABLED := 1
-endif
+# endif
 
 ifeq ($(PLUGIN), 1)
 	BUILD_TAGS += with_plugin
