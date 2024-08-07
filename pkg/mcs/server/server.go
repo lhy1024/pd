@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/mcs/utils"
 	"github.com/tikv/pd/pkg/utils/grpcutil"
-	"go.etcd.io/etcd/clientv3"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 )
 
@@ -95,8 +95,8 @@ func (bs *BaseServer) GetHTTPClient() *http.Client {
 	return bs.httpClient
 }
 
-// SetETCDClient sets the etcd client.
-func (bs *BaseServer) SetETCDClient(etcdClient *clientv3.Client) {
+// SetEtcdClient sets the etcd client.
+func (bs *BaseServer) SetEtcdClient(etcdClient *clientv3.Client) {
 	bs.etcdClient = etcdClient
 }
 
