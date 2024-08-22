@@ -23,15 +23,16 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
+	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server"
 	"github.com/tikv/pd/server/join"
 	"github.com/tikv/pd/tests"
+	"go.uber.org/goleak"
 )
 
-// TODO: enable it when we fix TestFailedAndDeletedPDJoinsPreviousCluster
-// func TestMain(m *testing.M) {
-// 	goleak.VerifyTestMain(m, testutil.LeakOptions...)
-// }
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m, testutil.LeakOptions...)
+}
 
 func TestSimpleJoin(t *testing.T) {
 	re := require.New(t)
@@ -99,7 +100,7 @@ func TestFailedAndDeletedPDJoinsPreviousCluster(t *testing.T) {
 	time.Sleep(time.Second * 5)
 
 	pd3 := cluster.GetServer("pd3")
-	err = pd3.Stop()
+	err = pd3.Destroy()
 	re.NoError(err)
 
 	client := cluster.GetServer("pd1").GetEtcdClient()
