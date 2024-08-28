@@ -80,6 +80,13 @@ var (
 			Help:      "Bucketed histogram of the operator region size.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 20), // 1MB~1TB
 		}, []string{"type"})
+	debugOperatorCounter = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "pd",
+			Subsystem: "schedule",
+			Name:      "debug_operator_count",
+			Help:      "Counter of debug schedule operators.",
+		}, []string{"type"})
 )
 
 func init() {
@@ -90,9 +97,15 @@ func init() {
 	prometheus.MustRegister(operatorDuration)
 	prometheus.MustRegister(operatorSizeHist)
 	prometheus.MustRegister(storeLimitCostCounter)
+	prometheus.MustRegister(debugOperatorCounter)
 }
 
 // IncOperatorLimitCounter increases the counter of operator meeting limit.
 func IncOperatorLimitCounter(typ types.CheckerSchedulerType, kind OpKind) {
 	operatorLimitCounter.WithLabelValues(typ.String(), kind.String()).Inc()
+}
+
+// DebugIncOperatorCounter increases the counter of debug schedule operators.
+func DebugIncOperatorCounter(typ string, num uint64) {
+	debugOperatorCounter.WithLabelValues(typ).Set(float64(num))
 }
