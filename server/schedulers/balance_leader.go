@@ -531,6 +531,13 @@ func (l *balanceLeaderScheduler) transferLeaderIn(solver *solver, collector *pla
 	if leaderFilter := filter.NewPlacementLeaderSafeguard(l.GetName(), opts, solver.GetBasicCluster(), solver.GetRuleManager(), solver.region, solver.source, false /*allowMoveLeader*/); leaderFilter != nil {
 		finalFilters = append(l.filters, leaderFilter)
 	}
+	sources := filter.NewCandidates([]*core.StoreInfo{solver.source}).
+		FilterSource(opts, nil, l.filterCounter, l.filters...).PickAll()
+	if len(sources) == 0 {
+		log.Debug("store cannot be used as source", zap.String("scheduler", l.GetName()), zap.Uint64("store-id", solver.source.GetID()))
+		schedulerCounter.WithLabelValues(l.GetName(), "store-source-filtered").Inc()
+		return nil
+	}
 	target := filter.NewCandidates([]*core.StoreInfo{solver.target}).
 		FilterTarget(opts, nil, l.filterCounter, finalFilters...).
 		PickFirst()
