@@ -815,7 +815,7 @@ func (suite *schedulerTestSuite) checkSchedulerDiagnostic(cluster *pdTests.TestC
 
 func (suite *schedulerTestSuite) TestEvictLeaderScheduler() {
 	// FIXME: API mode may have the problem
-	suite.env.RunTestInPDMode(suite.checkEvictLeaderScheduler)
+	suite.env.RunTestBasedOnMode(suite.checkEvictLeaderScheduler)
 }
 
 func (suite *schedulerTestSuite) checkEvictLeaderScheduler(cluster *pdTests.TestCluster) {
