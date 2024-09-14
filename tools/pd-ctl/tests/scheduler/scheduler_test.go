@@ -312,10 +312,14 @@ func (suite *schedulerTestSuite) checkScheduler(cluster *pdTests.TestCluster) {
 	re.NotContains(echo, "Success!")
 	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "balance-region-scheduler"}, nil)
 	re.Contains(echo, "Success!")
+
+	// add evict-leader-scheduler 1,2
 	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "evict-leader-scheduler", "1"}, nil)
 	re.Equal("Success! The scheduler is created.\n", echo)
 	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "evict-leader-scheduler", "2"}, nil)
 	re.Equal("Success! The scheduler has been applied to the store.\n", echo)
+
+	// remove evict-leader-scheduler 1,2
 	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "remove", "evict-leader-scheduler-1"}, nil)
 	re.Contains(echo, "Success!")
 	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "remove", "evict-leader-scheduler-2"}, nil)
@@ -326,6 +330,29 @@ func (suite *schedulerTestSuite) checkScheduler(cluster *pdTests.TestCluster) {
 	})
 	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "remove", "evict-leader-scheduler-1"}, nil)
 	re.Contains(echo, "Unable to update config: scheduler evict-leader-scheduler does not exist.")
+
+	// add evict-leader-scheduler 1,2
+	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "evict-leader-scheduler", "1"}, nil)
+	re.Equal("Success! The scheduler is created.\n", echo)
+	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "evict-leader-scheduler", "2"}, nil)
+	re.Equal("Success! The scheduler has been applied to the store.\n", echo)
+
+	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "config", "evict-leader-scheduler"}, nil)
+	re.Contains(echo, "2")
+	re.Contains(echo, "1")
+
+	// remove totally
+	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "remove", "evict-leader-scheduler"}, nil)
+	re.Contains(echo, "Success!")
+
+	// add evict-leader-scheduler again
+	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "evict-leader-scheduler", "1"}, nil)
+	re.Equal("Success! The scheduler is created.\n", echo)
+	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "evict-leader-scheduler", "2"}, nil)
+	re.Equal("Success! The scheduler has been applied to the store.\n", echo)
+	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "config", "evict-leader-scheduler"}, nil)
+	re.Contains(echo, "2")
+	re.Contains(echo, "1")
 
 	// test remove and add
 	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "remove", "balance-hot-region-scheduler"}, nil)
