@@ -98,6 +98,15 @@ func (suite *schedulerTestSuite) TearDownTest() {
 	suite.env.Cleanup()
 }
 
+func (suite *schedulerTestSuite) checkDefaultSchedulers(re *require.Assertions, cmd *cobra.Command, pdAddr string) {
+	// scheduler show command
+	expected := make(map[string]bool)
+	for _, scheduler := range suite.defaultSchedulers {
+		expected[scheduler] = true
+	}
+	checkSchedulerCommand(re, cmd, pdAddr, nil, expected)
+}
+
 func (suite *schedulerTestSuite) TestScheduler() {
 	suite.env.RunTestInTwoModes(suite.checkScheduler)
 }
@@ -172,18 +181,11 @@ func (suite *schedulerTestSuite) checkScheduler(cluster *pdTests.TestCluster) {
 	// note: because pdqsort is a unstable sort algorithm, set ApproximateSize for this region.
 	pdTests.MustPutRegion(re, cluster, 1, 1, []byte("a"), []byte("b"), core.SetApproximateSize(10))
 
-	// scheduler show command
-	expected := map[string]bool{
-		"balance-region-scheduler":     true,
-		"balance-leader-scheduler":     true,
-		"balance-hot-region-scheduler": true,
-		"evict-slow-store-scheduler":   true,
-	}
-	checkSchedulerCommand(nil, expected)
+	suite.checkDefaultSchedulers(re, cmd, pdAddr)
 
 	// scheduler delete command
 	args := []string{"-u", pdAddr, "scheduler", "remove", "balance-region-scheduler"}
-	expected = map[string]bool{
+	expected := map[string]bool{
 		"balance-leader-scheduler":     true,
 		"balance-hot-region-scheduler": true,
 		"evict-slow-store-scheduler":   true,
@@ -705,7 +707,7 @@ func (suite *schedulerTestSuite) checkSchedulerDiagnostic(cluster *pdTests.TestC
 
 	// note: because pdqsort is an unstable sort algorithm, set ApproximateSize for this region.
 	pdTests.MustPutRegion(re, cluster, 1, 1, []byte("a"), []byte("b"), core.SetApproximateSize(10))
-
+	suite.checkDefaultSchedulers(re, cmd, pdAddr)
 	echo := mustExec(re, cmd, []string{"-u", pdAddr, "config", "set", "enable-diagnostic", "true"}, nil)
 	re.Contains(echo, "Success!")
 	checkSchedulerDescribeCommand("balance-region-scheduler", "pending", "1 store(s) RegionNotMatchRule; ")
@@ -739,4 +741,24 @@ func mightExec(re *require.Assertions, cmd *cobra.Command, args []string, v any)
 		return
 	}
 	json.Unmarshal(output, v)
+}
+
+func checkSchedulerCommand(re *require.Assertions, cmd *cobra.Command, pdAddr string, args []string, expected map[string]bool) {
+	if args != nil {
+		echo := mustExec(re, cmd, args, nil)
+		re.Contains(echo, "Success!")
+	}
+	testutil.Eventually(re, func() bool {
+		var schedulers []string
+		mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "show"}, &schedulers)
+		if len(schedulers) != len(expected) {
+			return false
+		}
+		for _, scheduler := range schedulers {
+			if _, ok := expected[scheduler]; !ok {
+				return false
+			}
+		}
+		return true
+	})
 }
