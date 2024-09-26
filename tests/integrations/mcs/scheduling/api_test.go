@@ -12,6 +12,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/core"
 	_ "github.com/tikv/pd/pkg/mcs/scheduling/server/apis/v1"
@@ -24,9 +25,11 @@ import (
 	"github.com/tikv/pd/pkg/statistics"
 	"github.com/tikv/pd/pkg/storage"
 	"github.com/tikv/pd/pkg/utils/apiutil"
+	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/pkg/versioninfo"
 	"github.com/tikv/pd/tests"
+	"go.uber.org/zap"
 )
 
 type apiTestSuite struct {
@@ -517,7 +520,10 @@ func (suite *apiTestSuite) checkFollowerForward(cluster *tests.TestCluster) {
 		leader := cluster.GetLeaderServer()
 		cli := leader.GetEtcdClient()
 		testutil.Eventually(re, func() bool {
-			_, err = cli.MemberRemove(context.Background(), follower.GetServer().GetMember().ID())
+			_, err = etcdutil.RemoveEtcdMember(cli, follower.GetServerID())
+			if err != nil {
+				log.Info("failed to remove member", zap.Error(err))
+			}
 			return err == nil
 		})
 		testutil.Eventually(re, func() bool {
