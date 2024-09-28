@@ -520,6 +520,11 @@ func (suite *apiTestSuite) checkFollowerForward(cluster *tests.TestCluster) {
 		leader := cluster.GetLeaderServer()
 		cli := leader.GetEtcdClient()
 		testutil.Eventually(re, func() bool {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			return etcdutil.IsHealthy(ctx, cli)
+		})
+		testutil.Eventually(re, func() bool {
 			_, err = etcdutil.RemoveEtcdMember(cli, follower.GetServerID())
 			if err != nil {
 				log.Info("failed to remove member", zap.Error(err))
