@@ -30,10 +30,11 @@ const (
 )
 
 const (
-	defaultReserveRatio    = 0.5
-	defaultLoanCoefficient = 2
-	maxAssignTokens        = math.MaxFloat64 / 1024 // assume max client connect is 1024
-	slotExpireTimeout      = 10 * time.Minute
+	defaultBurstLimitFactor = 2.0
+	defaultReserveRatio     = 0.5
+	defaultLoanCoefficient  = 2
+	maxAssignTokens         = math.MaxFloat64 / 1024 // assume max client connect is 1024
+	slotExpireTimeout       = 10 * time.Minute
 )
 
 // GroupTokenBucket is a token bucket for a resource group.
@@ -42,7 +43,8 @@ type GroupTokenBucket struct {
 	// Settings is the setting of TokenBucket.
 	// BurstLimit is used as below:
 	//   - If b == 0, that means the limiter is unlimited capacity. default use in resource controller (burst with a rate within an unlimited capacity).
-	//   - If b < 0, that means the limiter is unlimited capacity and fillrate(r) is ignored, can be seen as r == Inf (burst within an unlimited capacity).
+	//   - If b == -1, that means the limiter is unlimited capacity and fillrate(r) is ignored, can be seen as r == Inf (burst within an unlimited capacity).
+	//   - If b == -2, that means the limiter is limited capacity, but limit and fillrate(r) are bigger.
 	//   - If b > 0, that means the limiter is limited capacity.
 	// MaxTokens limits the number of tokens that can be accumulated
 	Settings              *rmpb.TokenLimitSettings `json:"settings,omitempty"`
@@ -82,6 +84,7 @@ type TokenSlot struct {
 	tokenCapacity     float64
 	lastTokenCapacity float64
 	lastReqTime       time.Time
+	burstLimitFactor  uint64
 }
 
 // GroupTokenBucketState is the running state of TokenBucket.
@@ -92,8 +95,9 @@ type GroupTokenBucketState struct {
 	clientConsumptionTokensSum float64
 	lastBurstTokens            float64
 
-	LastUpdate  *time.Time `json:"last_update,omitempty"`
-	Initialized bool       `json:"initialized"`
+	LastUpdate       *time.Time `json:"last_update,omitempty"`
+	Initialized      bool       `json:"initialized"`
+	BurstLimitFactor uint64     `json:"burst_limit_factor,omitempty"`
 	// settingChanged is used to avoid that the number of tokens returned is jitter because of changing fill rate.
 	settingChanged      bool
 	lastCheckExpireSlot time.Time
@@ -121,6 +125,7 @@ func (gts *GroupTokenBucketState) Clone() *GroupTokenBucketState {
 		tokenSlots:                 tokenSlots,
 		clientConsumptionTokensSum: gts.clientConsumptionTokensSum,
 		lastCheckExpireSlot:        gts.lastCheckExpireSlot,
+		BurstLimitFactor:           gts.BurstLimitFactor,
 	}
 }
 
@@ -151,7 +156,10 @@ func (gts *GroupTokenBucketState) balanceSlotTokens(
 		// Only slots that require a positive number will be considered alive,
 		// but still need to allocate the elapsed tokens as well.
 		if requiredToken != 0 {
-			slot = &TokenSlot{lastReqTime: now}
+			slot = &TokenSlot{
+				lastReqTime:      now,
+				burstLimitFactor: gts.BurstLimitFactor,
+			}
 			gts.tokenSlots[clientUniqueID] = slot
 			gts.clientConsumptionTokensSum = 0
 		}
@@ -256,8 +264,9 @@ func NewGroupTokenBucket(tokenBucket *rmpb.TokenBucket) *GroupTokenBucket {
 	return &GroupTokenBucket{
 		Settings: tokenBucket.GetSettings(),
 		GroupTokenBucketState: GroupTokenBucketState{
-			Tokens:     tokenBucket.GetTokens(),
-			tokenSlots: make(map[uint64]*TokenSlot),
+			Tokens:           tokenBucket.GetTokens(),
+			tokenSlots:       make(map[uint64]*TokenSlot),
+			BurstLimitFactor: defaultBurstLimitFactor,
 		},
 	}
 }
@@ -300,6 +309,7 @@ func (gtb *GroupTokenBucket) init(now time.Time, clientID uint64) {
 		settings:          gtb.Settings,
 		tokenCapacity:     gtb.Tokens,
 		lastTokenCapacity: gtb.Tokens,
+		burstLimitFactor:  gtb.BurstLimitFactor,
 	}
 	gtb.LastUpdate = &now
 	gtb.lastCheckExpireSlot = now
@@ -354,9 +364,10 @@ func (gtb *GroupTokenBucket) request(now time.Time,
 func (ts *TokenSlot) assignSlotTokens(requiredToken float64, targetPeriodMs uint64) (*rmpb.TokenBucket, int64) {
 	var res rmpb.TokenBucket
 	burstLimit := ts.settings.GetBurstLimit()
+	fillRate := ts.settings.GetFillRate()
 	res.Settings = &rmpb.TokenLimitSettings{BurstLimit: burstLimit}
-	// If BurstLimit < 0, just return.
-	if burstLimit < 0 {
+	// If BurstLimit == -1, just return.
+	if burstLimit == -1 {
 		res.Tokens = requiredToken
 		return &res, 0
 	}
@@ -370,6 +381,12 @@ func (ts *TokenSlot) assignSlotTokens(requiredToken float64, targetPeriodMs uint
 		// granted the total request tokens
 		res.Tokens = requiredToken
 		return &res, 0
+	}
+
+	// If BurstLimit == -2, it means we can use bigger fillrate and burstLimit.
+	if burstLimit == -2 {
+		fillRate *= ts.burstLimitFactor
+		burstLimit = int64(fillRate)
 	}
 
 	// Firstly allocate the remaining tokens
@@ -386,7 +403,6 @@ func (ts *TokenSlot) assignSlotTokens(requiredToken float64, targetPeriodMs uint
 		targetPeriodTime    = time.Duration(targetPeriodMs) * time.Millisecond
 		targetPeriodTimeSec = targetPeriodTime.Seconds()
 		trickleTime         = 0.
-		fillRate            = ts.settings.GetFillRate()
 	)
 
 	loanCoefficient := defaultLoanCoefficient
