@@ -336,9 +336,11 @@ func (c *Controller) CheckRegion(region *core.RegionInfo) []*operator.Operator {
 				zap.Int("operators", len(opController.GetOperators())),
 				zap.Uint64("count", mergeOp), zap.Uint64("limit", c.conf.GetMergeScheduleLimit()))
 			if len(opController.GetOperators()) != int(mergeOp) && mergeOp > 0 {
-				for _, op := range opController.Operators() {
+				for regionID, op := range opController.Operators() {
 					log.Debug("merge check operator",
-						zap.String("id", timestampStr), zap.String("desc", op))
+						zap.String("id", timestampStr),
+						zap.Uint64("region-id", regionID),
+						zap.String("desc", op))
 				}
 			}
 			operator.IncOperatorLimitCounter(c.mergeChecker.GetType(), operator.OpMerge)

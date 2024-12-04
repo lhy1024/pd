@@ -66,6 +66,11 @@ func (c *opCounter) inc(kind OpKind, op *Operator) {
 		c.mergeMap = make(map[uint64]string)
 	}
 	c.mergeMap[op.RegionID()] = op.String()
+	log.Info("merge checker opCounter",
+		zap.String("kind", kind.String()),
+		zap.Uint64("op", op.RegionID()),
+		zap.String("op", op.String()),
+		zap.Int("count", int(c.count[kind])))
 }
 
 func (c *opCounter) dec(kind OpKind, op *Operator) {
@@ -78,6 +83,11 @@ func (c *opCounter) dec(kind OpKind, op *Operator) {
 		c.mergeMap = make(map[uint64]string)
 	}
 	delete(c.mergeMap, op.RegionID())
+	log.Info("merge checker opCounter",
+		zap.String("kind", kind.String()),
+		zap.Uint64("op", op.RegionID()),
+		zap.String("op", op.String()),
+		zap.Int("count", int(c.count[kind])))
 }
 
 func (c *opCounter) getCountByKind(kind OpKind) uint64 {
@@ -86,12 +96,12 @@ func (c *opCounter) getCountByKind(kind OpKind) uint64 {
 	return c.count[kind]
 }
 
-func (c *opCounter) operators() []string {
+func (c *opCounter) operators() map[uint64]string {
 	c.RLock()
 	defer c.RUnlock()
-	m := make([]string, len(c.mergeMap))
-	for _, op := range c.mergeMap {
-		m = append(m, op)
+	m := make(map[uint64]string)
+	for id, op := range c.mergeMap {
+		m[id] = op
 	}
 	return m
 }
@@ -863,7 +873,7 @@ func (oc *Controller) OperatorCount(kind OpKind) uint64 {
 	return oc.counts.getCountByKind(kind)
 }
 
-func (oc *Controller) Operators() []string {
+func (oc *Controller) Operators() map[uint64]string {
 	return oc.counts.operators()
 }
 
