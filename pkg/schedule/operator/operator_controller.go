@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
@@ -535,8 +536,11 @@ func isHigherPriorityOperator(new, old *Operator) bool {
 }
 
 func (oc *Controller) addOperatorInner(op *Operator) bool {
+	address := uintptr(unsafe.Pointer(op))
+	threadID := uint64(address)
 	regionID := op.RegionID()
 	log.Info("add operator",
+		zap.Uint64("thread-id", threadID),
 		zap.Uint64("region-id", regionID),
 		zap.Reflect("operator", op),
 		zap.String("additional-info", op.LogAdditionalInfo()))
@@ -544,10 +548,12 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 	// If there is an old operator, replace it. The priority should be checked
 	// already.
 	if oldi, ok := oc.operators.Load(regionID); ok {
+		log.Info("there has been operator",
+			zap.Uint64("thread-id", threadID))
 		old := oldi.(*Operator)
-		_ = oc.removeOperatorInner(old)
+		_ = oc.removeOperatorInner(old, threadID)
 		_ = old.Replace()
-		oc.buryOperator(old)
+		oc.buryOperator(old, threadID)
 	}
 
 	if !op.Start() {
@@ -563,7 +569,7 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 	}
 	oc.operators.Store(regionID, op)
 	oc.counts.inc(op.SchedulerKind(), op)
-	oc.opLog(op, "addOperatorInner")
+	oc.opLog(op, "addOperatorInner", 0)
 	operatorCounter.WithLabelValues(op.Desc(), "start").Inc()
 	operatorSizeHist.WithLabelValues(op.Desc()).Observe(float64(op.ApproximateSize))
 	opInfluence := NewTotalOpInfluence([]*Operator{op}, oc.cluster)
@@ -637,7 +643,7 @@ func (oc *Controller) removeOperatorsInner() []*Operator {
 		op := value.(*Operator)
 		oc.operators.Delete(regionID)
 		oc.counts.dec(op.SchedulerKind(), op)
-		oc.opLog(op, "removeOperatorsInner")
+		oc.opLog(op, "removeOperatorsInner", 0)
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.Kind()&OpMerge != 0 {
@@ -672,12 +678,16 @@ func (oc *Controller) removeOperatorWithoutBury(op *Operator) bool {
 	return oc.removeOperatorInner(op)
 }
 
-func (oc *Controller) removeOperatorInner(op *Operator) bool {
+func (oc *Controller) removeOperatorInner(op *Operator, threadIDs ...uint64) bool {
+	threadID := uint64(0)
+	if len(threadIDs) != 0 {
+		threadID = threadIDs[0]
+	}
 	regionID := op.RegionID()
 	if cur, ok := oc.operators.Load(regionID); ok && cur.(*Operator) == op {
 		oc.operators.Delete(regionID)
 		oc.counts.dec(op.SchedulerKind(), op)
-		oc.opLog(op, "removeOperatorInner")
+		oc.opLog(op, "removeOperatorInner", threadID)
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.Kind()&OpMerge != 0 {
@@ -688,8 +698,9 @@ func (oc *Controller) removeOperatorInner(op *Operator) bool {
 	return false
 }
 
-func (oc *Controller) opLog(op *Operator, function string) {
+func (oc *Controller) opLog(op *Operator, function string, threadID uint64) {
 	log.Info("merge check",
+		zap.Uint64("thread-id", threadID),
 		zap.String("function", function),
 		zap.Uint64("region", op.RegionID()),
 		zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
@@ -715,7 +726,11 @@ func (oc *Controller) removeRelatedMergeOperator(op *Operator) {
 	}
 }
 
-func (oc *Controller) buryOperator(op *Operator) {
+func (oc *Controller) buryOperator(op *Operator, threadIDs ...uint64) {
+	threadID := uint64(0)
+	if len(threadIDs) != 0 {
+		threadID = threadIDs[0]
+	}
 	st := op.Status()
 
 	if !IsEndStatus(st) {
@@ -733,6 +748,7 @@ func (oc *Controller) buryOperator(op *Operator) {
 	switch st {
 	case SUCCESS:
 		log.Info("operator finish",
+			zap.Uint64("thread-id", threadID),
 			zap.Uint64("region-id", op.RegionID()),
 			zap.Duration("takes", op.RunningTime()),
 			zap.Reflect("operator", op),
@@ -744,6 +760,7 @@ func (oc *Controller) buryOperator(op *Operator) {
 		}
 	case REPLACED:
 		log.Info("replace old operator",
+			zap.Uint64("thread-id", threadID),
 			zap.Uint64("region-id", op.RegionID()),
 			zap.Duration("takes", op.RunningTime()),
 			zap.Reflect("operator", op),
@@ -751,12 +768,14 @@ func (oc *Controller) buryOperator(op *Operator) {
 		operatorCounter.WithLabelValues(op.Desc(), "replace").Inc()
 	case EXPIRED:
 		log.Info("operator expired",
+			zap.Uint64("thread-id", threadID),
 			zap.Uint64("region-id", op.RegionID()),
 			zap.Duration("lives", op.ElapsedTime()),
 			zap.Reflect("operator", op))
 		operatorCounter.WithLabelValues(op.Desc(), "expire").Inc()
 	case TIMEOUT:
 		log.Info("operator timeout",
+			zap.Uint64("thread-id", threadID),
 			zap.Uint64("region-id", op.RegionID()),
 			zap.Duration("takes", op.RunningTime()),
 			zap.Reflect("operator", op),
@@ -764,6 +783,7 @@ func (oc *Controller) buryOperator(op *Operator) {
 		operatorCounter.WithLabelValues(op.Desc(), "timeout").Inc()
 	case CANCELED:
 		log.Info("operator canceled",
+			zap.Uint64("thread-id", threadID),
 			zap.Uint64("region-id", op.RegionID()),
 			zap.Duration("takes", op.RunningTime()),
 			zap.Reflect("operator", op),
