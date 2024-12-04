@@ -535,18 +535,7 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 	}
 	oc.operators.Store(regionID, op)
 	oc.counts.inc(op.SchedulerKind())
-	mergeNum := 0
-	for _, op := range oc.GetOperators() {
-		if op.Kind()&OpMerge != 0 {
-			mergeNum++
-		}
-	}
-	if strings.Contains(op.Desc(), "merge") && !strings.Contains(op.SchedulerKind().String(), "merge") {
-		log.Info("merge check", zap.Int("operators", mergeNum),
-			zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
-			zap.Any("kind", op.SchedulerKind().String()),
-			zap.Any("desc", op.Desc()))
-	}
+	oc.opLog(op, "addOperatorInner")
 	operatorCounter.WithLabelValues(op.Desc(), "start").Inc()
 	operatorSizeHist.WithLabelValues(op.Desc()).Observe(float64(op.ApproximateSize))
 	opInfluence := NewTotalOpInfluence([]*Operator{op}, oc.cluster)
@@ -620,18 +609,7 @@ func (oc *Controller) removeOperatorsInner() []*Operator {
 		op := value.(*Operator)
 		oc.operators.Delete(regionID)
 		oc.counts.dec(op.SchedulerKind())
-		mergeNum := 0
-		for _, op := range oc.GetOperators() {
-			if op.Kind()&OpMerge != 0 {
-				mergeNum++
-			}
-		}
-		if strings.Contains(op.Desc(), "merge") && !strings.Contains(op.SchedulerKind().String(), "merge") {
-			log.Info("merge check", zap.Int("operators", mergeNum),
-				zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
-				zap.Any("kind", op.SchedulerKind().String()),
-				zap.Any("desc", op.Desc()))
-		}
+		oc.opLog(op, "removeOperatorsInner")
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.Kind()&OpMerge != 0 {
@@ -671,18 +649,7 @@ func (oc *Controller) removeOperatorInner(op *Operator) bool {
 	if cur, ok := oc.operators.Load(regionID); ok && cur.(*Operator) == op {
 		oc.operators.Delete(regionID)
 		oc.counts.dec(op.SchedulerKind())
-		mergeNum := 0
-		for _, op := range oc.GetOperators() {
-			if op.Kind()&OpMerge != 0 {
-				mergeNum++
-			}
-		}
-		if strings.Contains(op.Desc(), "merge") && !strings.Contains(op.SchedulerKind().String(), "merge") {
-			log.Info("merge check", zap.Int("operators", mergeNum),
-				zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
-				zap.Any("kind", op.SchedulerKind().String()),
-				zap.Any("desc", op.Desc()))
-		}
+		oc.opLog(op, "removeOperatorInner")
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.Kind()&OpMerge != 0 {
@@ -691,6 +658,24 @@ func (oc *Controller) removeOperatorInner(op *Operator) bool {
 		return true
 	}
 	return false
+}
+
+func (oc *Controller) opLog(op *Operator, function string) {
+	if (strings.Contains(op.Desc(), "merge") && !strings.Contains(op.SchedulerKind().String(), "merge")) ||
+		(!strings.Contains(op.Desc(), "merge") && strings.Contains(op.SchedulerKind().String(), "merge")) {
+		mergeNum := 0
+		for _, op := range oc.GetOperators() {
+			if op.Kind()&OpMerge != 0 {
+				mergeNum++
+			}
+		}
+		log.Info("merge check",
+			zap.String("function", function),
+			zap.Int("operators", mergeNum),
+			zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
+			zap.Any("kind", op.SchedulerKind().String()),
+			zap.Any("desc", op.Desc()))
+	}
 }
 
 func (oc *Controller) removeRelatedMergeOperator(op *Operator) {
