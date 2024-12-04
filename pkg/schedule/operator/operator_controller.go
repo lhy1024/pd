@@ -569,7 +569,7 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 	}
 	oc.operators.Store(regionID, op)
 	oc.counts.inc(op.SchedulerKind(), op)
-	oc.opLog(op, "addOperatorInner", 0)
+	oc.opLog(op, "addOperatorInner", threadID)
 	operatorCounter.WithLabelValues(op.Desc(), "start").Inc()
 	operatorSizeHist.WithLabelValues(op.Desc()).Observe(float64(op.ApproximateSize))
 	opInfluence := NewTotalOpInfluence([]*Operator{op}, oc.cluster)
