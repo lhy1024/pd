@@ -62,9 +62,12 @@ type opCounter struct {
 func (c *opCounter) inc(kind OpKind, op *Operator) {
 	c.Lock()
 	defer c.Unlock()
+	address := uintptr(unsafe.Pointer(op))
+	threadID := uint64(address)
 	c.count[kind]++
 	c.mergeMap[op.RegionID()] = op.String()
 	log.Info("merge checker opCounter inc",
+		zap.Uint64("thread-id", threadID),
 		zap.String("kind", kind.String()),
 		zap.Uint64("op", op.RegionID()),
 		zap.String("op", op.String()),
@@ -74,11 +77,17 @@ func (c *opCounter) inc(kind OpKind, op *Operator) {
 func (c *opCounter) dec(kind OpKind, op *Operator) {
 	c.Lock()
 	defer c.Unlock()
+	address := uintptr(unsafe.Pointer(op))
+	threadID := uint64(address)
 	if c.count[kind] > 0 {
 		c.count[kind]--
+	} else {
+		log.Info("merge checker opCounter is negative",
+			zap.Uint64("thread-id", threadID))
 	}
 	if _, ok := c.mergeMap[op.RegionID()]; !ok {
 		log.Info("merge checker opCounter not exist",
+			zap.Uint64("thread-id", threadID),
 			zap.String("kind", kind.String()),
 			zap.Uint64("op", op.RegionID()),
 			zap.String("op", op.String()),
@@ -87,6 +96,7 @@ func (c *opCounter) dec(kind OpKind, op *Operator) {
 	}
 	delete(c.mergeMap, op.RegionID())
 	log.Info("merge checker opCounter dec",
+		zap.Uint64("thread-id", threadID),
 		zap.String("kind", kind.String()),
 		zap.Uint64("op", op.RegionID()),
 		zap.String("op", op.String()),
