@@ -328,7 +328,7 @@ func (c *Controller) CheckRegion(region *core.RegionInfo) []*operator.Operator {
 	if c.mergeChecker != nil {
 		allowed := opController.OperatorCount(operator.OpMerge) < c.conf.GetMergeScheduleLimit()
 		if !allowed {
-			log.Debug("merge check allowed", zap.Int("operators", len(opController.GetOperators())),
+			log.Debug("merge check not allowed", zap.Int("operators", len(opController.GetOperators())),
 				zap.Uint64("count", opController.OperatorCount(operator.OpMerge)), zap.Uint64("limit", c.conf.GetMergeScheduleLimit()))
 			operator.IncOperatorLimitCounter(c.mergeChecker.GetType(), operator.OpMerge)
 		} else if ops := c.mergeChecker.Check(region); ops != nil {

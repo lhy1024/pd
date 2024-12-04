@@ -534,6 +534,12 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 	}
 	oc.operators.Store(regionID, op)
 	oc.counts.inc(op.SchedulerKind())
+	if uint64(len(oc.GetOperators())) != oc.counts.getCountByKind(OpMerge) {
+		log.Info("merge check", zap.Int("operators", len(oc.GetOperators())),
+			zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
+			zap.Any("kind", op.SchedulerKind()),
+			zap.Any("desc", op.Desc()))
+	}
 	operatorCounter.WithLabelValues(op.Desc(), "start").Inc()
 	operatorSizeHist.WithLabelValues(op.Desc()).Observe(float64(op.ApproximateSize))
 	opInfluence := NewTotalOpInfluence([]*Operator{op}, oc.cluster)
@@ -607,6 +613,12 @@ func (oc *Controller) removeOperatorsInner() []*Operator {
 		op := value.(*Operator)
 		oc.operators.Delete(regionID)
 		oc.counts.dec(op.SchedulerKind())
+		if uint64(len(oc.GetOperators())) != oc.counts.getCountByKind(OpMerge) {
+			log.Info("merge check", zap.Int("operators", len(oc.GetOperators())),
+				zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
+				zap.Any("kind", op.SchedulerKind().String()),
+				zap.Any("desc", op.Desc()))
+		}
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.Kind()&OpMerge != 0 {
@@ -646,6 +658,12 @@ func (oc *Controller) removeOperatorInner(op *Operator) bool {
 	if cur, ok := oc.operators.Load(regionID); ok && cur.(*Operator) == op {
 		oc.operators.Delete(regionID)
 		oc.counts.dec(op.SchedulerKind())
+		if uint64(len(oc.GetOperators())) != oc.counts.getCountByKind(OpMerge) {
+			log.Info("merge check", zap.Int("operators", len(oc.GetOperators())),
+				zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
+				zap.Any("kind", op.SchedulerKind().String()),
+				zap.Any("desc", op.Desc()))
+		}
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.Kind()&OpMerge != 0 {
