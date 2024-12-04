@@ -56,7 +56,7 @@ var (
 type opCounter struct {
 	syncutil.RWMutex
 	count    map[OpKind]uint64
-	mergeMap map[uint64]*Operator
+	mergeMap map[uint64]string
 }
 
 func (c *opCounter) inc(kind OpKind, op *Operator) {
@@ -64,9 +64,9 @@ func (c *opCounter) inc(kind OpKind, op *Operator) {
 	defer c.Unlock()
 	c.count[kind]++
 	if c.mergeMap == nil {
-		c.mergeMap = make(map[uint64]*Operator)
+		c.mergeMap = make(map[uint64]string)
 	}
-	c.mergeMap[op.RegionID()] = op
+	c.mergeMap[op.RegionID()] = op.Desc()
 }
 
 func (c *opCounter) dec(kind OpKind, op *Operator) {
@@ -76,7 +76,7 @@ func (c *opCounter) dec(kind OpKind, op *Operator) {
 		c.count[kind]--
 	}
 	if c.mergeMap == nil {
-		c.mergeMap = make(map[uint64]*Operator)
+		c.mergeMap = make(map[uint64]string)
 	}
 	delete(c.mergeMap, op.RegionID())
 }
@@ -87,10 +87,10 @@ func (c *opCounter) getCountByKind(kind OpKind) uint64 {
 	return c.count[kind]
 }
 
-func (c *opCounter) operators() []*Operator {
+func (c *opCounter) operators() []string {
 	c.RLock()
 	defer c.RUnlock()
-	m := make([]*Operator, len(c.mergeMap))
+	m := make([]string, len(c.mergeMap))
 	for _, op := range c.mergeMap {
 		m = append(m, op)
 	}
@@ -873,7 +873,7 @@ func (oc *Controller) OperatorCount(kind OpKind) uint64 {
 	return oc.counts.getCountByKind(kind)
 }
 
-func (oc *Controller) Operators() []*Operator {
+func (oc *Controller) Operators() []string {
 	return oc.counts.operators()
 }
 
