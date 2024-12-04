@@ -66,7 +66,7 @@ func (c *opCounter) inc(kind OpKind, op *Operator) {
 	if c.mergeMap == nil {
 		c.mergeMap = make(map[uint64]string)
 	}
-	c.mergeMap[op.RegionID()] = op.Desc()
+	c.mergeMap[op.RegionID()] = op.String()
 }
 
 func (c *opCounter) dec(kind OpKind, op *Operator) {
