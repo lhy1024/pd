@@ -63,9 +63,6 @@ func (c *opCounter) inc(kind OpKind, op *Operator) {
 	c.Lock()
 	defer c.Unlock()
 	c.count[kind]++
-	if c.mergeMap == nil {
-		c.mergeMap = make(map[uint64]string)
-	}
 	c.mergeMap[op.RegionID()] = op.String()
 	log.Info("merge checker opCounter",
 		zap.String("kind", kind.String()),
@@ -79,9 +76,6 @@ func (c *opCounter) dec(kind OpKind, op *Operator) {
 	defer c.Unlock()
 	if c.count[kind] > 0 {
 		c.count[kind]--
-	}
-	if c.mergeMap == nil {
-		c.mergeMap = make(map[uint64]string)
 	}
 	delete(c.mergeMap, op.RegionID())
 	log.Info("merge checker opCounter",
@@ -142,7 +136,10 @@ func NewController(ctx context.Context, cluster *core.BasicCluster, config confi
 		records:   newRecords(ctx),
 		wop:       newRandBuckets(),
 		wopStatus: newWaitingOperatorStatus(),
-		counts:    &opCounter{count: make(map[OpKind]uint64)},
+		counts: &opCounter{
+			count:    make(map[OpKind]uint64),
+			mergeMap: make(map[uint64]string),
+		},
 	}
 }
 
