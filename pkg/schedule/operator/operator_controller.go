@@ -64,7 +64,7 @@ func (c *opCounter) inc(kind OpKind, op *Operator) {
 	defer c.Unlock()
 	c.count[kind]++
 	c.mergeMap[op.RegionID()] = op.String()
-	log.Info("merge checker opCounter",
+	log.Info("merge checker opCounter inc",
 		zap.String("kind", kind.String()),
 		zap.Uint64("op", op.RegionID()),
 		zap.String("op", op.String()),
@@ -77,8 +77,16 @@ func (c *opCounter) dec(kind OpKind, op *Operator) {
 	if c.count[kind] > 0 {
 		c.count[kind]--
 	}
+	if _, ok := c.mergeMap[op.RegionID()]; !ok {
+		log.Info("merge checker opCounter not exist",
+			zap.String("kind", kind.String()),
+			zap.Uint64("op", op.RegionID()),
+			zap.String("op", op.String()),
+			zap.Int("count", int(c.count[kind])))
+		return
+	}
 	delete(c.mergeMap, op.RegionID())
-	log.Info("merge checker opCounter",
+	log.Info("merge checker opCounter dec",
 		zap.String("kind", kind.String()),
 		zap.Uint64("op", op.RegionID()),
 		zap.String("op", op.String()),
