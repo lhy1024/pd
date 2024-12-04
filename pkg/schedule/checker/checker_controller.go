@@ -326,13 +326,14 @@ func (c *Controller) CheckRegion(region *core.RegionInfo) []*operator.Operator {
 	}
 
 	if c.mergeChecker != nil {
-		allowed := opController.OperatorCount(operator.OpMerge) < c.conf.GetMergeScheduleLimit()
+		mergeOp := opController.OperatorCount(operator.OpMerge)
+		allowed := mergeOp < c.conf.GetMergeScheduleLimit()
 		if !allowed {
 			log.Debug("merge check not allowed", zap.Int("operators", len(opController.GetOperators())),
-				zap.Uint64("count", opController.OperatorCount(operator.OpMerge)), zap.Uint64("limit", c.conf.GetMergeScheduleLimit()))
-			if len(opController.GetOperators()) == 0 && opController.OperatorCount(operator.OpMerge) > 0 {
+				zap.Uint64("count", mergeOp), zap.Uint64("limit", c.conf.GetMergeScheduleLimit()))
+			if len(opController.GetOperators()) != int(mergeOp) && mergeOp > 0 {
 				for _, op := range opController.Operators() {
-					log.Info("merge check operator", zap.String("desc", op.Desc()))
+					log.Debug("merge check operator", zap.String("desc", op.Desc()))
 				}
 			}
 			operator.IncOperatorLimitCounter(c.mergeChecker.GetType(), operator.OpMerge)
