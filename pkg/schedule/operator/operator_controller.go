@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -534,10 +535,16 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 	}
 	oc.operators.Store(regionID, op)
 	oc.counts.inc(op.SchedulerKind())
-	if uint64(len(oc.GetOperators())) != oc.counts.getCountByKind(OpMerge) {
-		log.Info("merge check", zap.Int("operators", len(oc.GetOperators())),
+	mergeNum := 0
+	for _, op := range oc.GetOperators() {
+		if op.Kind()&OpMerge != 0 {
+			mergeNum++
+		}
+	}
+	if strings.Contains(op.Desc(), "merge") && !strings.Contains(op.SchedulerKind().String(), "merge") {
+		log.Info("merge check", zap.Int("operators", mergeNum),
 			zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
-			zap.Any("kind", op.SchedulerKind()),
+			zap.Any("kind", op.SchedulerKind().String()),
 			zap.Any("desc", op.Desc()))
 	}
 	operatorCounter.WithLabelValues(op.Desc(), "start").Inc()
@@ -613,8 +620,14 @@ func (oc *Controller) removeOperatorsInner() []*Operator {
 		op := value.(*Operator)
 		oc.operators.Delete(regionID)
 		oc.counts.dec(op.SchedulerKind())
-		if uint64(len(oc.GetOperators())) != oc.counts.getCountByKind(OpMerge) {
-			log.Info("merge check", zap.Int("operators", len(oc.GetOperators())),
+		mergeNum := 0
+		for _, op := range oc.GetOperators() {
+			if op.Kind()&OpMerge != 0 {
+				mergeNum++
+			}
+		}
+		if strings.Contains(op.Desc(), "merge") && !strings.Contains(op.SchedulerKind().String(), "merge") {
+			log.Info("merge check", zap.Int("operators", mergeNum),
 				zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
 				zap.Any("kind", op.SchedulerKind().String()),
 				zap.Any("desc", op.Desc()))
@@ -658,8 +671,14 @@ func (oc *Controller) removeOperatorInner(op *Operator) bool {
 	if cur, ok := oc.operators.Load(regionID); ok && cur.(*Operator) == op {
 		oc.operators.Delete(regionID)
 		oc.counts.dec(op.SchedulerKind())
-		if uint64(len(oc.GetOperators())) != oc.counts.getCountByKind(OpMerge) {
-			log.Info("merge check", zap.Int("operators", len(oc.GetOperators())),
+		mergeNum := 0
+		for _, op := range oc.GetOperators() {
+			if op.Kind()&OpMerge != 0 {
+				mergeNum++
+			}
+		}
+		if strings.Contains(op.Desc(), "merge") && !strings.Contains(op.SchedulerKind().String(), "merge") {
+			log.Info("merge check", zap.Int("operators", mergeNum),
 				zap.Uint64("counts", oc.counts.getCountByKind(OpMerge)),
 				zap.Any("kind", op.SchedulerKind().String()),
 				zap.Any("desc", op.Desc()))
