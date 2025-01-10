@@ -326,8 +326,23 @@ func (c *Controller) CheckRegion(region *core.RegionInfo) []*operator.Operator {
 	}
 
 	if c.mergeChecker != nil {
-		allowed := opController.OperatorCount(operator.OpMerge) < c.conf.GetMergeScheduleLimit()
+		mergeOp := opController.OperatorCount(operator.OpMerge)
+		allowed := mergeOp < c.conf.GetMergeScheduleLimit()
 		if !allowed {
+			timestamp := time.Now().UnixNano()
+			timestampStr := strconv.FormatInt(timestamp, 10)
+			log.Debug("merge check not allowed",
+				zap.String("id", timestampStr),
+				zap.Int("operators", len(opController.GetOperators())),
+				zap.Uint64("count", mergeOp), zap.Uint64("limit", c.conf.GetMergeScheduleLimit()))
+			if len(opController.GetOperators()) != int(mergeOp) && mergeOp > 0 {
+				for regionID, op := range opController.Operators() {
+					log.Debug("merge check operator",
+						zap.String("id", timestampStr),
+						zap.Uint64("region-id", regionID),
+						zap.String("desc", op))
+				}
+			}
 			operator.IncOperatorLimitCounter(c.mergeChecker.GetType(), operator.OpMerge)
 		} else if ops := c.mergeChecker.Check(region); ops != nil {
 			// It makes sure that two operators can be added successfully altogether.

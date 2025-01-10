@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
@@ -54,27 +55,66 @@ var (
 
 type opCounter struct {
 	syncutil.RWMutex
-	count map[OpKind]uint64
+	count    map[OpKind]uint64
+	mergeMap map[uint64]string
 }
 
-func (c *opCounter) inc(kind OpKind) {
+func (c *opCounter) inc(kind OpKind, op *Operator) {
 	c.Lock()
 	defer c.Unlock()
+	address := uintptr(unsafe.Pointer(op))
+	opID := uint64(address)
 	c.count[kind]++
+	c.mergeMap[op.RegionID()] = op.String()
+	log.Info("merge checker opCounter inc",
+		zap.Uint64("op-id", opID),
+		zap.String("kind", kind.String()),
+		zap.String("op", op.String()),
+		zap.Int("current-count", int(c.count[kind])))
 }
 
-func (c *opCounter) dec(kind OpKind) {
+func (c *opCounter) dec(kind OpKind, op *Operator) {
 	c.Lock()
 	defer c.Unlock()
+	address := uintptr(unsafe.Pointer(op))
+	opID := uint64(address)
 	if c.count[kind] > 0 {
 		c.count[kind]--
+	} else {
+		log.Info("merge checker opCounter is negative",
+			zap.Uint64("op-id", opID))
 	}
+	if _, ok := c.mergeMap[op.RegionID()]; !ok {
+		log.Info("merge checker opCounter not exist",
+			zap.Uint64("op-id", opID),
+			zap.String("kind", kind.String()),
+			zap.String("op", op.String()),
+			zap.Int("current-count", int(c.count[kind])))
+		return
+	}
+	delete(c.mergeMap, op.RegionID())
+	log.Info("merge checker opCounter dec",
+		zap.Uint64("op-id", opID),
+		zap.String("kind", kind.String()),
+		zap.Uint64("op", op.RegionID()),
+		zap.String("op", op.String()),
+		zap.Int("count", int(c.count[kind])))
 }
 
 func (c *opCounter) getCountByKind(kind OpKind) uint64 {
 	c.RLock()
 	defer c.RUnlock()
 	return c.count[kind]
+}
+
+func (c *opCounter) operators() map[uint64]string {
+	c.RLock()
+	defer c.RUnlock()
+	m := make(map[uint64]string)
+	for id, op := range c.mergeMap {
+		m[id] = op
+	}
+	return m
 }
 
 // Controller is used to limit the speed of scheduling.
@@ -97,6 +137,7 @@ type Controller struct {
 	wop       WaitingOperator
 	wopStatus *waitingOperatorStatus
 	counts    *opCounter
+	mu        syncutil.Mutex
 }
 
 // NewController creates a Controller.
@@ -112,7 +153,10 @@ func NewController(ctx context.Context, cluster *core.BasicCluster, config confi
 		records:   newRecords(ctx),
 		wop:       newRandBuckets(),
 		wopStatus: newWaitingOperatorStatus(),
-		counts:    &opCounter{count: make(map[OpKind]uint64)},
+		counts: &opCounter{
+			count:    make(map[OpKind]uint64),
+			mergeMap: make(map[uint64]string),
+		},
 	}
 }
 
@@ -532,8 +576,7 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 		operatorCounter.WithLabelValues(op.Desc(), "unexpected").Inc()
 		return false
 	}
-	oc.operators.Store(regionID, op)
-	oc.counts.inc(op.SchedulerKind())
+	oc.SetOperator(op)
 	operatorCounter.WithLabelValues(op.Desc(), "start").Inc()
 	operatorSizeHist.WithLabelValues(op.Desc()).Observe(float64(op.ApproximateSize))
 	opInfluence := NewTotalOpInfluence([]*Operator{op}, oc.cluster)
@@ -605,8 +648,7 @@ func (oc *Controller) removeOperatorsInner() []*Operator {
 	var removed []*Operator
 	oc.operators.Range(func(regionID, value any) bool {
 		op := value.(*Operator)
-		oc.operators.Delete(regionID)
-		oc.counts.dec(op.SchedulerKind())
+		oc.DelOperator(op)
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.Kind()&OpMerge != 0 {
@@ -644,8 +686,7 @@ func (oc *Controller) removeOperatorWithoutBury(op *Operator) bool {
 func (oc *Controller) removeOperatorInner(op *Operator) bool {
 	regionID := op.RegionID()
 	if cur, ok := oc.operators.Load(regionID); ok && cur.(*Operator) == op {
-		oc.operators.Delete(regionID)
-		oc.counts.dec(op.SchedulerKind())
+		oc.DelOperator(op)
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.Kind()&OpMerge != 0 {
@@ -832,6 +873,10 @@ func (oc *Controller) OperatorCount(kind OpKind) uint64 {
 	return oc.counts.getCountByKind(kind)
 }
 
+func (oc *Controller) Operators() map[uint64]string {
+	return oc.counts.operators()
+}
+
 // GetOpInfluence gets OpInfluence.
 func (oc *Controller) GetOpInfluence(cluster *core.BasicCluster) OpInfluence {
 	influence := OpInfluence{
@@ -891,8 +936,18 @@ func NewTotalOpInfluence(operators []*Operator, cluster *core.BasicCluster) OpIn
 
 // SetOperator is only used for test.
 func (oc *Controller) SetOperator(op *Operator) {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 	oc.operators.Store(op.RegionID(), op)
-	oc.counts.inc(op.SchedulerKind())
+	oc.counts.inc(op.SchedulerKind(), op)
+}
+
+// DelOperator is only used for test.
+func (oc *Controller) DelOperator(op *Operator) {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	oc.operators.Delete(op.RegionID())
+	oc.counts.dec(op.SchedulerKind(), op)
 }
 
 // OpWithStatus records the operator and its status.
