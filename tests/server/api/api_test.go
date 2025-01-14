@@ -852,6 +852,9 @@ func TestRemovingProgress(t *testing.T) {
 				log.Info("store 2 progress", zap.Any("progress", p))
 			}
 		}()
+		if leader.GetRaftCluster() == nil {
+			return false
+		}
 		// wait for cluster prepare
 		if !leader.GetRaftCluster().IsPrepared() {
 			leader.GetRaftCluster().SetPrepared()
