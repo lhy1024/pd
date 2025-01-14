@@ -841,6 +841,14 @@ func TestRemovingProgress(t *testing.T) {
 	}
 
 	testutil.Eventually(re, func() bool {
+		defer func() {
+			output = sendRequest(re, leader.GetAddr()+"/pd/api/v1/stores/progress?id=1", http.MethodGet, http.StatusOK)
+			re.NoError(json.Unmarshal(output, &p))
+			log.Info("store 1 progress", zap.Any("progress", p))
+			output = sendRequest(re, leader.GetAddr()+"/pd/api/v1/stores/progress?id=2", http.MethodGet, http.StatusOK)
+			re.NoError(json.Unmarshal(output, &p))
+			log.Info("store 2 progress", zap.Any("progress", p))
+		}()
 		// wait for cluster prepare
 		if !leader.GetRaftCluster().IsPrepared() {
 			leader.GetRaftCluster().SetPrepared()
@@ -871,7 +879,7 @@ func TestRemovingProgress(t *testing.T) {
 		}
 		// store 1: 40/10s = 4
 		// store 2: 20/10s = 2
-		// average speed = (2+4)/2 = 33
+		// average speed = (2+4)/2 = 3.0
 		if p.CurrentSpeed != 3.0 {
 			log.Info("speed not match", zap.Float64("speed", p.CurrentSpeed))
 			return false
