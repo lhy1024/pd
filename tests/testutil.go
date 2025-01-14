@@ -212,7 +212,8 @@ func MustPutStore(re *require.Assertions, cluster *TestCluster, store *metapb.St
 		ts = time.Now().UnixNano()
 	}
 	raftCluster := grpcServer.GetRaftCluster()
-	storeInfo := raftCluster.GetStore(store.GetId())
+	id := store.GetId()
+	storeInfo := raftCluster.GetStore(id)
 	newStore := storeInfo.Clone(
 		core.SetStoreStats(&pdpb.StoreStats{
 			Capacity:  uint64(10 * units.GiB),

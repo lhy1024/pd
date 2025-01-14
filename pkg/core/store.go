@@ -666,6 +666,9 @@ func NewStoresInfo() *StoresInfo {
 func (s *StoresInfo) GetStore(storeID uint64) *StoreInfo {
 	s.RLock()
 	defer s.RUnlock()
+	if s.stores == nil {
+		return nil
+	}
 	store, ok := s.stores[storeID]
 	if !ok {
 		return nil
