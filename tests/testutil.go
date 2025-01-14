@@ -211,7 +211,8 @@ func MustPutStore(re *require.Assertions, cluster *TestCluster, store *metapb.St
 	if ts == 0 {
 		ts = time.Now().UnixNano()
 	}
-	storeInfo := grpcServer.GetRaftCluster().GetStore(store.GetId())
+	raftCluster := grpcServer.GetRaftCluster()
+	storeInfo := raftCluster.GetStore(store.GetId())
 	newStore := storeInfo.Clone(
 		core.SetStoreStats(&pdpb.StoreStats{
 			Capacity:  uint64(10 * units.GiB),
@@ -220,7 +221,7 @@ func MustPutStore(re *require.Assertions, cluster *TestCluster, store *metapb.St
 		}),
 		core.SetLastHeartbeatTS(time.Unix(ts/1e9, ts%1e9)),
 	)
-	grpcServer.GetRaftCluster().GetBasicCluster().PutStore(newStore)
+	raftCluster.GetBasicCluster().PutStore(newStore)
 	if cluster.GetSchedulingPrimaryServer() != nil {
 		cluster.GetSchedulingPrimaryServer().GetCluster().PutStore(newStore)
 	}
