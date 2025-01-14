@@ -827,7 +827,7 @@ func TestRemovingProgress(t *testing.T) {
 			resp, err := tests.TestDialClient.Do(req)
 			re.NoError(err)
 			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode != http.StatusOK /stores/progress{
 				return false
 			}
 			// is not prepared
