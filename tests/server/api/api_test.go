@@ -1120,7 +1120,9 @@ func sendRequest(re *require.Assertions, url string, method string, statusCode i
 		if resp.StatusCode == http.StatusServiceUnavailable {
 			return false
 		}
-		re.Equal(statusCode, resp.StatusCode)
+		if resp.StatusCode != statusCode {
+			return false
+		}
 		output, err = io.ReadAll(resp.Body)
 		re.NoError(err)
 		return true
