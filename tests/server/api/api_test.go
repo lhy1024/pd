@@ -30,10 +30,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/goleak"
+	"go.uber.org/zap"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/utils/apiutil"
@@ -850,30 +852,35 @@ func TestRemovingProgress(t *testing.T) {
 		re.NoError(err)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
+			log.Info("not ready", zap.String("url", url), zap.Int("status", resp.StatusCode))
 			return false
 		}
 		output, err := io.ReadAll(resp.Body)
 		re.NoError(err)
 		re.NoError(json.Unmarshal(output, &p))
 		if p.Action != "removing" {
+			log.Info("not removing", zap.String("action", p.Action))
 			return false
 		}
 		// store 1: (60-20)/(60+50) ~= 0.36
 		// store 2: (30-10)/(30+40) ~= 0.28
 		// average progress ~= (0.36+0.28)/2 = 0.32
 		if fmt.Sprintf("%.2f", p.Progress) != "0.32" {
+			log.Info("progress not match", zap.Float64("progress", p.Progress))
 			return false
 		}
 		// store 1: 40/10s = 4
 		// store 2: 20/10s = 2
 		// average speed = (2+4)/2 = 33
 		if p.CurrentSpeed != 3.0 {
+			log.Info("speed not match", zap.Float64("speed", p.CurrentSpeed))
 			return false
 		}
 		// store 1: (20+50)/4 = 17.5s
 		// store 2: (10+40)/2 = 25s
 		// average time = (17.5+25)/2 = 21.25s
 		if p.LeftSeconds != 21.25 {
+			log.Info("time not match", zap.Float64("time", p.LeftSeconds))
 			return false
 		}
 		return true
