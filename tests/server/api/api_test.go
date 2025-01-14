@@ -1112,7 +1112,9 @@ func sendRequest(re *require.Assertions, url string, method string, statusCode i
 
 	testutil.Eventually(re, func() bool {
 		resp, err := tests.TestDialClient.Do(req)
-		re.NoError(err)
+		if err != nil {
+			return false
+		}
 		defer resp.Body.Close()
 
 		// Due to service unavailability caused by environmental issues,
