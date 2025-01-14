@@ -667,6 +667,7 @@ func (s *StoresInfo) GetStore(storeID uint64) *StoreInfo {
 	s.RLock()
 	defer s.RUnlock()
 	if s.stores == nil {
+		log.Fatal("invalid stores")
 		return nil
 	}
 	store, ok := s.stores[storeID]
