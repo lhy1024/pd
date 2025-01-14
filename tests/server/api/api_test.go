@@ -840,14 +840,17 @@ func TestRemovingProgress(t *testing.T) {
 		})
 	}
 
+	now := time.Now()
 	testutil.Eventually(re, func() bool {
 		defer func() {
-			output = sendRequest(re, leader.GetAddr()+"/pd/api/v1/stores/progress?id=1", http.MethodGet, http.StatusOK)
-			re.NoError(json.Unmarshal(output, &p))
-			log.Info("store 1 progress", zap.Any("progress", p))
-			output = sendRequest(re, leader.GetAddr()+"/pd/api/v1/stores/progress?id=2", http.MethodGet, http.StatusOK)
-			re.NoError(json.Unmarshal(output, &p))
-			log.Info("store 2 progress", zap.Any("progress", p))
+			if time.Since(now) > 19*time.Second {
+				output = sendRequest(re, leader.GetAddr()+"/pd/api/v1/stores/progress?id=1", http.MethodGet, http.StatusOK)
+				re.NoError(json.Unmarshal(output, &p))
+				log.Info("store 1 progress", zap.Any("progress", p))
+				output = sendRequest(re, leader.GetAddr()+"/pd/api/v1/stores/progress?id=2", http.MethodGet, http.StatusOK)
+				re.NoError(json.Unmarshal(output, &p))
+				log.Info("store 2 progress", zap.Any("progress", p))
+			}
 		}()
 		// wait for cluster prepare
 		if !leader.GetRaftCluster().IsPrepared() {
@@ -1113,6 +1116,7 @@ func sendRequest(re *require.Assertions, url string, method string, statusCode i
 	testutil.Eventually(re, func() bool {
 		resp, err := tests.TestDialClient.Do(req)
 		if err != nil {
+			log.Info("send request failed", zap.Error(err))
 			return false
 		}
 		defer resp.Body.Close()
@@ -1120,9 +1124,11 @@ func sendRequest(re *require.Assertions, url string, method string, statusCode i
 		// Due to service unavailability caused by environmental issues,
 		// we will retry it.
 		if resp.StatusCode == http.StatusServiceUnavailable {
+			log.Info("service unavailable", zap.String("url", url))
 			return false
 		}
 		if resp.StatusCode != statusCode {
+			log.Info("status code not match", zap.String("url", url), zap.Int("status", resp.StatusCode))
 			return false
 		}
 		output, err = io.ReadAll(resp.Body)
