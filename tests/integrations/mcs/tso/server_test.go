@@ -537,7 +537,7 @@ func BenchmarkForwardTsoConcurrently(b *testing.B) {
 
 	initClients := func(num int) []pd.Client {
 		var clients []pd.Client
-		for i := 0; i < num; i++ {
+		for range num {
 			pdClient, err := pd.NewClientWithContext(context.Background(),
 				caller.TestComponent,
 				[]string{suite.backendEndpoints}, pd.SecurityOption{}, opt.WithMaxErrorRetry(1))
