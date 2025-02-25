@@ -509,9 +509,11 @@ func TestForwardTsoConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			pdClient, err := pd.NewClientWithContext(context.Background(),
+			pdClient, err := pd.NewClientWithContext(
+				context.Background(),
 				caller.TestComponent,
-				[]string{suite.backendEndpoints}, pd.SecurityOption{}, opt.WithMaxErrorRetry(1))
+				[]string{suite.backendEndpoints},
+				pd.SecurityOption{})
 			re.NoError(err)
 			re.NotNil(pdClient)
 			defer pdClient.Close()
