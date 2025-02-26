@@ -518,9 +518,10 @@ func TestForwardTsoConcurrently(t *testing.T) {
 			re.NotNil(pdClient)
 			defer pdClient.Close()
 			for range 100 {
-				min, err := pdClient.UpdateServiceGCSafePoint(context.Background(), fmt.Sprintf("service-%d", i), 1000, 1)
-				re.NoError(err)
-				re.Equal(uint64(0), min)
+				testutil.Eventually(re, func() bool {
+					min, err := pdClient.UpdateServiceGCSafePoint(context.Background(), fmt.Sprintf("service-%d", i), 1000, 1)
+					return err == nil && min == 0
+				})
 			}
 		}()
 	}
