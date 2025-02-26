@@ -498,7 +498,7 @@ func TestForwardTsoConcurrently(t *testing.T) {
 	suite := NewPDServiceForward(re)
 	defer suite.ShutDown()
 
-	tc, err := tests.NewTestTSOCluster(suite.ctx, 1, suite.backendEndpoints)
+	tc, err := tests.NewTestTSOCluster(suite.ctx, 2, suite.backendEndpoints)
 	re.NoError(err)
 	defer tc.Destroy()
 	tc.WaitForDefaultPrimaryServing(re)
