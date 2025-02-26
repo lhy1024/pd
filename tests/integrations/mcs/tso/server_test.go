@@ -502,9 +502,8 @@ func TestForwardTsoConcurrently(t *testing.T) {
 	re.NoError(err)
 	defer tc.Destroy()
 	tc.WaitForDefaultPrimaryServing(re)
-	var (
-		wg = sync.WaitGroup{}
-	)
+
+	wg := sync.WaitGroup{}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for i := range 3 {
