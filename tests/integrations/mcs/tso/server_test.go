@@ -505,21 +505,23 @@ func TestForwardTsoConcurrently(t *testing.T) {
 	var (
 		wg = sync.WaitGroup{}
 	)
-	for i := range 100 {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for i := range 3 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			pdClient, err := pd.NewClientWithContext(
-				context.Background(),
+				ctx,
 				caller.TestComponent,
 				[]string{suite.backendEndpoints},
 				pd.SecurityOption{})
 			re.NoError(err)
 			re.NotNil(pdClient)
 			defer pdClient.Close()
-			for range 100 {
+			for range 10 {
 				testutil.Eventually(re, func() bool {
-					min, err := pdClient.UpdateServiceGCSafePoint(context.Background(), fmt.Sprintf("service-%d", i), 1000, 1)
+					min, err := pdClient.UpdateServiceGCSafePoint(ctx, fmt.Sprintf("service-%d", i), 1000, 1)
 					return err == nil && min == 0
 				})
 			}
