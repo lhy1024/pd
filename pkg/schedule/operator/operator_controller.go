@@ -515,27 +515,37 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 		zap.Reflect("operator", op),
 		zap.String("additional-info", op.LogAdditionalInfo()))
 
-	// If there is an old operator, replace it. The priority should be checked
-	// already.
-	if oldi, ok := oc.operators.Load(regionID); ok {
-		old := oldi.(*Operator)
-		_ = oc.removeOperatorInner(old)
-		_ = old.Replace()
-		oc.buryOperator(old)
-	}
+	for {
+		oldi, _ := oc.operators.Load(regionID)
+		var old *Operator
+		if oldi != nil {
+			old = oldi.(*Operator)
+			if !isHigherPriorityOperator(op, old) {
+				log.Debug("existing operator has higher priority",
+					zap.Uint64("region-id", regionID),
+					zap.Reflect("old", old))
+				return false
+			}
+			_ = oc.removeOperatorInner(old)
+			_ = old.Replace()
+			oc.buryOperator(old)
+		}
 
-	if !op.Start() {
-		log.Error("adding operator with unexpected status",
-			zap.Uint64("region-id", regionID),
-			zap.String("status", OpStatusToString(op.Status())),
-			zap.Reflect("operator", op), errs.ZapError(errs.ErrUnexpectedOperatorStatus))
-		failpoint.Inject("unexpectedOperator", func() {
-			panic(op)
-		})
-		operatorCounter.WithLabelValues(op.Desc(), "unexpected").Inc()
-		return false
+		if !op.Start() {
+			log.Error("adding operator with unexpected status",
+				zap.Uint64("region-id", regionID),
+				zap.String("status", OpStatusToString(op.Status())),
+				zap.Reflect("operator", op), errs.ZapError(errs.ErrUnexpectedOperatorStatus))
+			failpoint.Inject("unexpectedOperator", func() {
+				panic(op)
+			})
+			operatorCounter.WithLabelValues(op.Desc(), "unexpected").Inc()
+			return false
+		}
+		if oc.operators.CompareAndSwap(regionID, oldi, op) {
+			break
+		}
 	}
-	oc.operators.Store(regionID, op)
 	oc.counts.inc(op.SchedulerKind())
 	operatorCounter.WithLabelValues(op.Desc(), "start").Inc()
 	operatorSizeHist.WithLabelValues(op.Desc()).Observe(float64(op.ApproximateSize))
