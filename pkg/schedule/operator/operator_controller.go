@@ -535,7 +535,7 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 
 	old, loaded := oc.operators.LoadOrStore(regionID, op)
 	if loaded {
-		log.Debug("operator already exists",
+		log.Info("operator already exists",
 			zap.Uint64("region-id", regionID),
 			zap.Reflect("old", old.(*Operator)),
 			zap.Reflect("new", op))
