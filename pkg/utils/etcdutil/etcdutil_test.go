@@ -734,7 +734,8 @@ func (suite *loopWatcherTestSuite) TestWatcherRequestProgress() {
 		suite.wg.Add(1)
 		go func() {
 			defer suite.wg.Done()
-			watcher.watch(suite.ctx, 0)
+			_, err := watcher.watch(suite.ctx, 0)
+			re.Error(err)
 		}()
 
 		if injectWatchChanBlock {

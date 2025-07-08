@@ -81,8 +81,12 @@ func (s *tsoProxyTestSuite) SetupTest() {
 }
 
 func (s *tsoProxyTestSuite) reCreateProxyClient() {
+	re := s.Require()
 	if s.proxyClient != nil {
-		_ = s.proxyClient.CloseSend()
+		defer func() {
+			err := s.proxyClient.CloseSend()
+			re.NoError(err)
+		}()
 		s.clientCancel()
 	}
 	s.proxyClient, s.clientCtx, s.clientCancel = s.createClient()
@@ -96,7 +100,11 @@ func (s *tsoProxyTestSuite) createClient() (pdpb.PD_TsoClient, context.Context, 
 }
 
 func (s *tsoProxyTestSuite) TearDownTest() {
-	_ = s.proxyClient.CloseSend()
+	re := s.Require()
+	defer func() {
+		err := s.proxyClient.CloseSend()
+		re.NoError(err)
+	}()
 	s.clientCancel()
 	s.cluster.Destroy()
 	s.serverCancel()
@@ -169,14 +177,19 @@ func (s *tsoProxyTestSuite) TestProxyCanNotCreateConnectionToLeader() {
 }
 
 func (s *tsoProxyTestSuite) TestClientsContinueToWorkAfterFirstStreamIsClosed() {
+	re := s.Require()
 	s.verifyProxyIsHealthy()
 	// open second stream
 	proxyClient, _, cancel := s.createClient()
 	defer cancel()
-	defer proxyClient.CloseSend()
+	defer func() {
+		err := s.proxyClient.CloseSend()
+		re.NoError(err)
+	}()
 
 	// close the first stream
-	s.proxyClient.CloseSend()
+	err := s.proxyClient.CloseSend()
+	re.NoError(err)
 
 	// verify other streams are still working
 	s.verifyProxyIsHealthyWith(proxyClient)

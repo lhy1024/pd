@@ -66,7 +66,8 @@ func TestRateLimitConfigReload(t *testing.T) {
 	re.Len(leader.GetServer().GetServiceMiddlewarePersistOptions().GetRateLimitConfig().LimiterConfig, 1)
 
 	oldLeaderName := leader.GetServer().Name()
-	leader.GetServer().GetMember().ResignEtcdLeader(leader.GetServer().Context(), oldLeaderName, "")
+	err = leader.GetServer().GetMember().ResignEtcdLeader(leader.GetServer().Context(), oldLeaderName, "")
+	re.NoError(err)
 	re.NotEmpty(cluster.WaitLeader())
 	leader = cluster.GetLeaderServer()
 	re.NotNil(leader)

@@ -201,7 +201,9 @@ func BenchmarkDoRequestWithServiceMiddleware(b *testing.B) {
 	b.StopTimer()
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster, _ := tests.NewTestCluster(ctx, 1)
-	cluster.RunInitialServers()
+	re := require.New(b)
+	err := cluster.RunInitialServers()
+	re.NoError(err)
 	cluster.WaitLeader()
 	leader := cluster.GetLeaderServer()
 	input := map[string]any{
@@ -304,7 +306,8 @@ func (suite *middlewareTestSuite) TestRateLimitMiddleware() {
 
 	// resign leader
 	oldLeaderName := leader.GetServer().Name()
-	leader.GetServer().GetMember().ResignEtcdLeader(leader.GetServer().Context(), oldLeaderName, "")
+	err = leader.GetServer().GetMember().ResignEtcdLeader(leader.GetServer().Context(), oldLeaderName, "")
+	re.NoError(err)
 	var servers []*server.Server
 	for _, s := range suite.cluster.GetServers() {
 		servers = append(servers, s.GetServer())
@@ -440,7 +443,8 @@ func (suite *middlewareTestSuite) TestAuditPrometheusBackend() {
 
 	// resign to test persist config
 	oldLeaderName := leader.GetServer().Name()
-	leader.GetServer().GetMember().ResignEtcdLeader(leader.GetServer().Context(), oldLeaderName, "")
+	err = leader.GetServer().GetMember().ResignEtcdLeader(leader.GetServer().Context(), oldLeaderName, "")
+	re.NoError(err)
 	var servers []*server.Server
 	for _, s := range suite.cluster.GetServers() {
 		servers = append(servers, s.GetServer())
@@ -508,7 +512,9 @@ func BenchmarkDoRequestWithLocalLogAudit(b *testing.B) {
 	b.StopTimer()
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster, _ := tests.NewTestCluster(ctx, 1)
-	cluster.RunInitialServers()
+	re := require.New(b)
+	err := cluster.RunInitialServers()
+	re.NoError(err)
 	cluster.WaitLeader()
 	leader := cluster.GetLeaderServer()
 	input := map[string]any{
@@ -530,7 +536,9 @@ func BenchmarkDoRequestWithPrometheusAudit(b *testing.B) {
 	b.StopTimer()
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster, _ := tests.NewTestCluster(ctx, 1)
-	cluster.RunInitialServers()
+	re := require.New(b)
+	err := cluster.RunInitialServers()
+	re.NoError(err)
 	cluster.WaitLeader()
 	leader := cluster.GetLeaderServer()
 	input := map[string]any{
@@ -552,7 +560,9 @@ func BenchmarkDoRequestWithoutServiceMiddleware(b *testing.B) {
 	b.StopTimer()
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster, _ := tests.NewTestCluster(ctx, 1)
-	cluster.RunInitialServers()
+	re := require.New(b)
+	err := cluster.RunInitialServers()
+	re.NoError(err)
 	cluster.WaitLeader()
 	leader := cluster.GetLeaderServer()
 	input := map[string]any{
@@ -686,7 +696,8 @@ func (suite *redirectorTestSuite) TestPing() {
 
 	for _, svr := range suite.cluster.GetServers() {
 		if svr.GetServer() != follower {
-			svr.Stop()
+			err := svr.Stop()
+			re.NoError(err)
 		}
 	}
 	addr := follower.GetAddr() + "/pd/api/v1/ping"
@@ -1081,9 +1092,9 @@ func TestPreparingProgress(t *testing.T) {
 
 	ch := make(chan struct{})
 	defer close(ch)
-	failpoint.EnableCall("github.com/tikv/pd/server/cluster/blockCheckStores", func() {
+	re.NoError(failpoint.EnableCall("github.com/tikv/pd/server/cluster/blockCheckStores", func() {
 		<-ch
-	})
+	}))
 	defer func() {
 		re.NoError(failpoint.Disable("github.com/tikv/pd/server/cluster/blockCheckStores"))
 	}()

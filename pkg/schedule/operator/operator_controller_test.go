@@ -998,12 +998,13 @@ func (suite *operatorControllerTestSuite) TestAddWaitingOperator() {
 
 	// test with label schedule=deny
 	labelerManager := cluster.GetRegionLabeler()
-	labelerManager.SetLabelRule(&labeler.LabelRule{
+	err = labelerManager.SetLabelRule(&labeler.LabelRule{
 		ID:       "schedulelabel",
 		Labels:   []labeler.RegionLabel{{Key: "schedule", Value: "deny"}},
 		RuleType: labeler.KeyRange,
 		Data:     []any{map[string]any{"start_key": "1a", "end_key": "1b"}},
 	})
+	re.NoError(err)
 
 	re.True(labelerManager.ScheduleDisabled(source))
 	// add operator should be success since it is not check in addWaitingOperator

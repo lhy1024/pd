@@ -304,13 +304,16 @@ func checkHotWriteRegionPlacement(re *require.Assertions, enablePlacementRules b
 	tc.AddLabelsStore(4, 2, map[string]string{"zone": "z2", "host": "h4"})
 	tc.AddLabelsStore(5, 2, map[string]string{"zone": "z2", "host": "h5"})
 	tc.AddLabelsStore(6, 2, map[string]string{"zone": "z2", "host": "h6"})
-	tc.SetRule(&placement.Rule{
+	err = tc.SetRule(&placement.Rule{
 		GroupID: "pd", ID: "leader", Role: placement.Leader, Count: 1, LabelConstraints: []placement.LabelConstraint{{Key: "zone", Op: "in", Values: []string{"z1"}}},
 	})
-	tc.SetRule(&placement.Rule{
+	re.NoError(err)
+	err = tc.SetRule(&placement.Rule{
 		GroupID: "pd", ID: "voter", Role: placement.Follower, Count: 2, LabelConstraints: []placement.LabelConstraint{{Key: "zone", Op: "in", Values: []string{"z2"}}},
 	})
-	tc.RuleManager.DeleteRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	re.NoError(err)
+	err = tc.RuleManager.DeleteRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	re.NoError(err)
 
 	tc.UpdateStorageWrittenBytes(1, 10*units.MiB*utils.StoreHeartBeatReportInterval)
 	tc.UpdateStorageWrittenBytes(2, 0)
@@ -331,10 +334,12 @@ func checkHotWriteRegionPlacement(re *require.Assertions, enablePlacementRules b
 	operatorutil.CheckTransferPeerWithLeaderTransfer(re, ops[0], operator.OpHotRegion, 1, 2)
 	clearPendingInfluence(hb.(*hotScheduler))
 
-	tc.SetRule(&placement.Rule{
+	err = tc.SetRule(&placement.Rule{
 		GroupID: "pd", ID: "voter", Role: placement.Voter, Count: 2, LabelConstraints: []placement.LabelConstraint{{Key: "zone", Op: "in", Values: []string{"z2"}}},
 	})
-	tc.RuleManager.DeleteRule("pd", "follower")
+	re.NoError(err)
+	err = tc.RuleManager.DeleteRule("pd", "follower")
+	re.NoError(err)
 	ops, _ = hb.Schedule(tc, false)
 	re.NotEmpty(ops)
 	re.NotContains(ops[0].Step(1).String(), "transfer leader")

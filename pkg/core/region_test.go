@@ -467,9 +467,11 @@ func TestSetRegionConcurrence(t *testing.T) {
 	regions := NewRegionsInfo()
 	region := NewTestRegionInfo(1, 1, []byte("a"), []byte("b"))
 	go func() {
-		regions.AtomicCheckAndPutRegion(ContextTODO(), region)
+		_, err := regions.AtomicCheckAndPutRegion(ContextTODO(), region)
+		re.NoError(err)
 	}()
-	regions.AtomicCheckAndPutRegion(ContextTODO(), region)
+	_, err := regions.AtomicCheckAndPutRegion(ContextTODO(), region)
+	re.NoError(err)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/core/UpdateSubTree"))
 }
 
@@ -975,11 +977,13 @@ func TestUpdateRegionEquivalence(t *testing.T) {
 	updateRegion := func(item *RegionInfo) {
 		// old way
 		ctx := ContextTODO()
-		regionsOld.AtomicCheckAndPutRegion(ctx, item)
+		_, err := regionsOld.AtomicCheckAndPutRegion(ctx, item)
+		re.NoError(err)
 		// new way
 		newItem := item.Clone()
 		ctx = ContextTODO()
-		regionsNew.CheckAndPutRootTree(ctx, newItem)
+		_, err = regionsNew.CheckAndPutRootTree(ctx, newItem)
+		re.NoError(err)
 		regionsNew.CheckAndPutSubTree(newItem)
 	}
 	checksEquivalence := func() {
@@ -1080,7 +1084,8 @@ func TestUpdateRegionEventualConsistency(t *testing.T) {
 	// Old way
 	{
 		ctx := ContextTODO()
-		regionsOld.AtomicCheckAndPutRegion(ctx, regionPendingItemA)
+		_, err := regionsOld.AtomicCheckAndPutRegion(ctx, regionPendingItemA)
+		re.NoError(err)
 		re.Equal(int32(2), regionPendingItemA.GetRef())
 		// check new item
 		saveKV, saveCache, needSync, _ := regionGuide(ctx, regionItemA, regionPendingItemA)
@@ -1088,7 +1093,8 @@ func TestUpdateRegionEventualConsistency(t *testing.T) {
 		re.True(saveCache)
 		re.False(saveKV)
 		// update cache
-		regionsOld.AtomicCheckAndPutRegion(ctx, regionItemA)
+		_, err = regionsOld.AtomicCheckAndPutRegion(ctx, regionItemA)
+		re.NoError(err)
 		re.Equal(int32(2), regionItemA.GetRef())
 	}
 
@@ -1096,10 +1102,12 @@ func TestUpdateRegionEventualConsistency(t *testing.T) {
 	{
 		// root tree part in order, and updated in order, updated regionPendingItemB first, then regionItemB
 		ctx := ContextTODO()
-		regionsNew.CheckAndPutRootTree(ctx, regionPendingItemB)
+		_, err := regionsNew.CheckAndPutRootTree(ctx, regionPendingItemB)
+		re.NoError(err)
 		re.Equal(int32(1), regionPendingItemB.GetRef())
 		ctx = ContextTODO()
-		regionsNew.CheckAndPutRootTree(ctx, regionItemB)
+		_, err = regionsNew.CheckAndPutRootTree(ctx, regionItemB)
+		re.NoError(err)
 		re.Equal(int32(1), regionItemB.GetRef())
 		re.Equal(int32(0), regionPendingItemB.GetRef())
 

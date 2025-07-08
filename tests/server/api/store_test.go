@@ -71,11 +71,12 @@ func (suite *storeTestSuite) checkStoresList(cluster *tests.TestCluster) {
 	urlPrefix := leader.GetAddr() + "/pd/api/v1"
 
 	// store 1 is used to bootstrapped that its state might be different the store inside initStores.
-	leader.GetRaftCluster().ReadyToServeLocked(1)
+	err := leader.GetRaftCluster().ReadyToServeLocked(1)
+	re.NoError(err)
 
 	url := fmt.Sprintf("%s/stores", urlPrefix)
 	info := new(response.StoresInfo)
-	err := testutil.ReadGetJSON(re, tests.TestDialClient, url, info)
+	err = testutil.ReadGetJSON(re, tests.TestDialClient, url, info)
 	re.NoError(err)
 	checkStoresInfo(re, info.Stores, stores[:3])
 
@@ -336,7 +337,8 @@ func (suite *storeTestSuite) checkStoreGet(cluster *tests.TestCluster) {
 
 	leader := cluster.GetLeaderServer()
 	// store 1 is used to bootstrapped that its state might be different the store inside initStores.
-	leader.GetRaftCluster().ReadyToServeLocked(1)
+	err := leader.GetRaftCluster().ReadyToServeLocked(1)
+	re.NoError(err)
 	urlPrefix := leader.GetAddr() + "/pd/api/v1"
 	url := fmt.Sprintf("%s/store/1", urlPrefix)
 
@@ -350,7 +352,7 @@ func (suite *storeTestSuite) checkStoreGet(cluster *tests.TestCluster) {
 		},
 	})
 	info := new(response.StoreInfo)
-	err := testutil.ReadGetJSON(re, tests.TestDialClient, url, info)
+	err = testutil.ReadGetJSON(re, tests.TestDialClient, url, info)
 	re.NoError(err)
 	capacity, _ := units.RAMInBytes("1.636TiB")
 	available, _ := units.RAMInBytes("1.555TiB")

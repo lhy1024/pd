@@ -688,7 +688,7 @@ func TestConcurrencyUpdateConfig(t *testing.T) {
 				return
 			default:
 			}
-			sche.config.buildWithArgs(args)
+			re.NoError(sche.config.buildWithArgs(args))
 			re.NoError(sche.config.persist())
 		}
 	}()

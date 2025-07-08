@@ -319,7 +319,8 @@ func TestControllerWithTwoGroupRequestConcurrency(t *testing.T) {
 	}()
 
 	mockProvider := newMockResourceGroupProvider()
-	controller, _ := NewResourceGroupController(ctx, 1, mockProvider, nil, constants.NullKeyspaceID)
+	controller, err := NewResourceGroupController(ctx, 1, mockProvider, nil, constants.NullKeyspaceID)
+	re.NoError(err)
 	controller.Start(ctx)
 
 	defaultResourceGroup := &rmpb.ResourceGroup{Name: defaultResourceGroupName, Mode: rmpb.GroupMode_RUMode, RUSettings: &rmpb.GroupRequestUnitSettings{RU: &rmpb.TokenBucket{Settings: &rmpb.TokenLimitSettings{FillRate: 1000000}}}}
@@ -420,7 +421,8 @@ func TestTryGetController(t *testing.T) {
 	defer cancel()
 
 	mockProvider := newMockResourceGroupProvider()
-	controller, _ := NewResourceGroupController(ctx, 1, mockProvider, nil, constants.NullKeyspaceID)
+	controller, err := NewResourceGroupController(ctx, 1, mockProvider, nil, constants.NullKeyspaceID)
+	re.NoError(err)
 	controller.Start(ctx)
 
 	defaultResourceGroup := &rmpb.ResourceGroup{Name: defaultResourceGroupName, Mode: rmpb.GroupMode_RUMode, RUSettings: &rmpb.GroupRequestUnitSettings{RU: &rmpb.TokenBucket{Settings: &rmpb.TokenLimitSettings{FillRate: 1000000}}}}
@@ -508,7 +510,8 @@ func TestGetResourceGroup(t *testing.T) {
 
 	opts := []ResourceControlCreateOption{WithDegradedRUSettings(expectRUSettings)}
 
-	controller, _ := NewResourceGroupController(ctx, 1, mockProvider, nil, constants.NullKeyspaceID, opts...)
+	controller, err := NewResourceGroupController(ctx, 1, mockProvider, nil, constants.NullKeyspaceID, opts...)
+	re.NoError(err)
 	controller.Start(ctx)
 
 	testResourceGroup := &rmpb.ResourceGroup{
@@ -546,7 +549,8 @@ func TestGetResourceGroup(t *testing.T) {
 		re.NoError(failpoint.Disable("github.com/tikv/pd/client/resource_group/controller/gerResourceGroupError"))
 	}()
 
-	controller02, _ := NewResourceGroupController(ctx, 1, mockProvider, nil, constants.NullKeyspaceID)
+	controller02, err := NewResourceGroupController(ctx, 1, mockProvider, nil, constants.NullKeyspaceID)
+	re.NoError(err)
 	controller02.Start(ctx)
 
 	gc02, err := controller02.tryGetResourceGroupController(ctx, "test-group", false)

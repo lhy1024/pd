@@ -357,18 +357,22 @@ func TestSomeStoresFilteredScatterGroupInConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	for j := range 10 {
 		wg.Add(1)
-		go scatterOnce(tc, scatterer, fmt.Sprintf("group-%v", j), &wg)
+		go func() {
+			defer wg.Done()
+			scatterOnce(re, tc, scatterer, fmt.Sprintf("group-%v", j))
+		}()
 	}
 	wg.Wait()
 }
 
-func scatterOnce(tc *mockcluster.Cluster, scatter *RegionScatterer, group string, wg *sync.WaitGroup) {
+func scatterOnce(re *require.Assertions, tc *mockcluster.Cluster, scatter *RegionScatterer, group string) {
 	regionID := 1
 	for range 100 {
-		scatter.scatterRegion(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group, false)
+		op, err := scatter.scatterRegion(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group, false)
+		re.NoError(err)
+		re.NotNil(op)
 		regionID++
 	}
-	wg.Done()
 }
 
 func TestScatterGroupInConcurrency(t *testing.T) {
@@ -411,8 +415,9 @@ func TestScatterGroupInConcurrency(t *testing.T) {
 		regionID := 1
 		for range 100 {
 			for j := range testCase.groupCount {
-				scatterer.scatterRegion(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3),
+				_, err := scatterer.scatterRegion(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3),
 					fmt.Sprintf("group-%v", j), false)
+				re.NoError(err)
 				regionID++
 			}
 		}
@@ -466,8 +471,11 @@ func TestScatterForManyRegion(t *testing.T) {
 	failures := map[uint64]error{}
 	group := "group"
 	re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/schedule/scatter/scatterHbStreamsDrain", `return(true)`))
-	scatterer.scatterRegions(regions, failures, group, 3, false)
-	re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/scatter/scatterHbStreamsDrain"))
+	defer func() {
+		re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/scatter/scatterHbStreamsDrain"))
+	}()
+	_, err := scatterer.scatterRegions(regions, failures, group, 3, false)
+	re.Error(err)
 	re.Empty(failures)
 }
 
@@ -510,7 +518,8 @@ func TestScattersGroup(t *testing.T) {
 			re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/schedule/scatter/scatterFail", `return(true)`))
 		}
 
-		scatterer.scatterRegions(regions, failures, group, 3, false)
+		_, err := scatterer.scatterRegions(regions, failures, group, 3, false)
+		re.Error(err)
 		max := uint64(0)
 		min := uint64(math.MaxUint64)
 		groupDistribution, exist := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
@@ -576,7 +585,7 @@ func TestRegionHasLearner(t *testing.T) {
 	for i := voterCount + 1; i <= 8; i++ {
 		tc.AddLabelsStore(i, 0, map[string]string{"zone": "z2"})
 	}
-	tc.SetRule(&placement.Rule{
+	err := tc.SetRule(&placement.Rule{
 		GroupID: placement.DefaultGroupID,
 		ID:      placement.DefaultRuleID,
 		Role:    placement.Voter,
@@ -589,7 +598,8 @@ func TestRegionHasLearner(t *testing.T) {
 			},
 		},
 	})
-	tc.SetRule(&placement.Rule{
+	re.NoError(err)
+	err = tc.SetRule(&placement.Rule{
 		GroupID: placement.DefaultGroupID,
 		ID:      "learner",
 		Role:    placement.Learner,
@@ -602,6 +612,7 @@ func TestRegionHasLearner(t *testing.T) {
 			},
 		},
 	})
+	re.NoError(err)
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	regionCount := 50
 	for i := 1; i <= regionCount; i++ {

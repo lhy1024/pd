@@ -140,7 +140,8 @@ func TestGetSetRule(t *testing.T) {
 	}
 
 	for _, r := range rules {
-		labeler.DeleteLabelRule(r.ID)
+		err = labeler.DeleteLabelRule(r.ID)
+		re.NoError(err)
 	}
 	re.Empty(labeler.GetAllLabelRules())
 }
@@ -278,14 +279,17 @@ func TestSaveLoadRule(t *testing.T) {
 }
 
 func expectSameRegionLabels(re *require.Assertions, r1, r2 *RegionLabel) {
-	r1.checkAndAdjustExpire()
-	r2.checkAndAdjustExpire()
+	err := r1.checkAndAdjustExpire()
+	re.NoError(err)
+	err = r2.checkAndAdjustExpire()
+	re.NoError(err)
 	if len(r1.TTL) == 0 {
 		re.Equal(r1, r2)
 	}
 
 	r2.StartAt = r1.StartAt
-	r2.checkAndAdjustExpire()
+	err = r2.checkAndAdjustExpire()
+	re.NoError(err)
 
 	re.Equal(r1, r2)
 }
@@ -406,11 +410,12 @@ func TestLabelerRuleTTL(t *testing.T) {
 func checkRuleInMemoryAndStorage(re *require.Assertions, labeler *RegionLabeler, ruleID string, exist bool) {
 	re.Equal(exist, labeler.labelRules[ruleID] != nil)
 	existInStorage := false
-	labeler.storage.LoadRegionRules(func(k, _ string) {
+	err := labeler.storage.LoadRegionRules(func(k, _ string) {
 		if k == ruleID {
 			existInStorage = true
 		}
 	})
+	re.NoError(err)
 	re.Equal(exist, existInStorage)
 }
 

@@ -58,7 +58,8 @@ func TestPrometheusHistogramBackend(t *testing.T) {
 	defer ts.Close()
 
 	backend := NewPrometheusHistogramBackend(serviceAuditHistogramTest, true)
-	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:2379/test?test=test", http.NoBody)
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:2379/test?test=test", http.NoBody)
+	re.NoError(err)
 	info := requestutil.GetRequestInfo(req)
 	info.ServiceLabel = "test"
 	info.CallerID = "user1"

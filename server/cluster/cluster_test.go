@@ -307,7 +307,8 @@ func TestSetOfflineStore(t *testing.T) {
 	// test clean up tombstone store
 	toCleanStore := cluster.GetStore(1).Clone().GetMeta()
 	toCleanStore.LastHeartbeat = time.Now().Add(-40 * 24 * time.Hour).UnixNano()
-	cluster.PutMetaStore(toCleanStore)
+	err = cluster.PutMetaStore(toCleanStore)
+	re.NoError(err)
 	cluster.checkStores()
 	re.Nil(cluster.GetStore(1))
 }
@@ -516,7 +517,8 @@ func TestRemovingProcess(t *testing.T) {
 	re.Len(regionInStore1, 20)
 	cluster.progressManager = progress.NewManager(cluster.GetCoordinator().GetCheckerController(),
 		nodeStateCheckJobInterval)
-	cluster.RemoveStore(1, false)
+	err = cluster.RemoveStore(1, false)
+	re.NoError(err)
 	cluster.UpdateAllStoreStatus()
 	cluster.checkStores()
 	storeID := uint64(1)
@@ -1000,7 +1002,8 @@ func TestRegionFlowChanged(t *testing.T) {
 		for _, r := range regions {
 			mctx := core.ContextTODO()
 			mctx.Context = ctx
-			cluster.processRegionHeartbeat(mctx, r)
+			err = cluster.processRegionHeartbeat(mctx, r)
+			re.NoError(err)
 		}
 	}
 	regions = core.SplitRegions(regions)
@@ -1036,7 +1039,8 @@ func TestRegionSizeChanged(t *testing.T) {
 		core.SetApproximateKeys(curMaxMergeKeys-1),
 		core.SetSource(core.Heartbeat),
 	)
-	cluster.processRegionHeartbeat(core.ContextTODO(), region)
+	err = cluster.processRegionHeartbeat(core.ContextTODO(), region)
+	re.NoError(err)
 	regionID := region.GetID()
 	re.True(cluster.regionStats.IsRegionStatsType(regionID, statistics.UndersizedRegion))
 	// Test ApproximateSize and ApproximateKeys change.
@@ -1046,16 +1050,19 @@ func TestRegionSizeChanged(t *testing.T) {
 		core.SetApproximateKeys(curMaxMergeKeys+1),
 		core.SetSource(core.Heartbeat),
 	)
-	cluster.processRegionHeartbeat(core.ContextTODO(), region)
+	err = cluster.processRegionHeartbeat(core.ContextTODO(), region)
+	re.NoError(err)
 	re.False(cluster.regionStats.IsRegionStatsType(regionID, statistics.UndersizedRegion))
 	// Test MaxMergeRegionSize and MaxMergeRegionKeys change.
 	cluster.opt.SetMaxMergeRegionSize(uint64(curMaxMergeSize + 2))
 	cluster.opt.SetMaxMergeRegionKeys(uint64(curMaxMergeKeys + 2))
-	cluster.processRegionHeartbeat(core.ContextTODO(), region)
+	err = cluster.processRegionHeartbeat(core.ContextTODO(), region)
+	re.NoError(err)
 	re.True(cluster.regionStats.IsRegionStatsType(regionID, statistics.UndersizedRegion))
 	cluster.opt.SetMaxMergeRegionSize(uint64(curMaxMergeSize))
 	cluster.opt.SetMaxMergeRegionKeys(uint64(curMaxMergeKeys))
-	cluster.processRegionHeartbeat(core.ContextTODO(), region)
+	err = cluster.processRegionHeartbeat(core.ContextTODO(), region)
+	re.NoError(err)
 	re.False(cluster.regionStats.IsRegionStatsType(regionID, statistics.UndersizedRegion))
 }
 
@@ -1080,7 +1087,8 @@ func TestConcurrentReportBucket(t *testing.T) {
 	re.NoError(failpoint.Enable("github.com/tikv/pd/server/cluster/concurrentBucketHeartbeat", "return(true)"))
 	go func() {
 		defer wg.Done()
-		cluster.processReportBuckets(bucket1)
+		err := cluster.processReportBuckets(bucket1)
+		re.NoError(err)
 	}()
 	time.Sleep(100 * time.Millisecond)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/server/cluster/concurrentBucketHeartbeat"))
@@ -1118,7 +1126,8 @@ func TestConcurrentRegionHeartbeat(t *testing.T) {
 	re.NoError(failpoint.Enable("github.com/tikv/pd/server/cluster/concurrentRegionHeartbeat", "return(true)"))
 	go func() {
 		defer wg.Done()
-		cluster.processRegionHeartbeat(core.ContextTODO(), source)
+		err := cluster.processRegionHeartbeat(core.ContextTODO(), source)
+		re.NoError(err)
 	}()
 	time.Sleep(100 * time.Millisecond)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/server/cluster/concurrentRegionHeartbeat"))
@@ -1731,30 +1740,34 @@ func TestCalculateStoreSize1(t *testing.T) {
 		re.NoError(cluster.PutMetaStore(s.GetMeta()))
 	}
 
-	cluster.ruleManager.SetRule(
+	err = cluster.ruleManager.SetRule(
 		&placement.Rule{GroupID: placement.DefaultGroupID, ID: "zone1", StartKey: []byte(""), EndKey: []byte(""), Role: placement.Voter, Count: 2,
 			LabelConstraints: []placement.LabelConstraint{
 				{Key: "zone", Op: "in", Values: []string{"zone1"}},
 			},
 			LocationLabels: []string{"rack", "host"}},
 	)
+	re.NoError(err)
 
-	cluster.ruleManager.SetRule(
+	err = cluster.ruleManager.SetRule(
 		&placement.Rule{GroupID: placement.DefaultGroupID, ID: "zone2", StartKey: []byte(""), EndKey: []byte(""), Role: placement.Voter, Count: 2,
 			LabelConstraints: []placement.LabelConstraint{
 				{Key: "zone", Op: "in", Values: []string{"zone2"}},
 			},
 			LocationLabels: []string{"rack", "host"}},
 	)
+	re.NoError(err)
 
-	cluster.ruleManager.SetRule(
+	err = cluster.ruleManager.SetRule(
 		&placement.Rule{GroupID: placement.DefaultGroupID, ID: "zone3", StartKey: []byte(""), EndKey: []byte(""), Role: placement.Follower, Count: 1,
 			LabelConstraints: []placement.LabelConstraint{
 				{Key: "zone", Op: "in", Values: []string{"zone3"}},
 			},
 			LocationLabels: []string{"rack", "host"}},
 	)
-	cluster.ruleManager.DeleteRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	re.NoError(err)
+	err = cluster.ruleManager.DeleteRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	re.NoError(err)
 
 	regions := newTestRegions(100, 10, 5)
 	for _, region := range regions {
@@ -1815,30 +1828,34 @@ func TestCalculateStoreSize2(t *testing.T) {
 		re.NoError(cluster.PutMetaStore(s.GetMeta()))
 	}
 
-	cluster.ruleManager.SetRule(
+	err = cluster.ruleManager.SetRule(
 		&placement.Rule{GroupID: placement.DefaultGroupID, ID: "dc1", StartKey: []byte(""), EndKey: []byte(""), Role: placement.Voter, Count: 2,
 			LabelConstraints: []placement.LabelConstraint{
 				{Key: "dc", Op: "in", Values: []string{"dc1"}},
 			},
 			LocationLabels: []string{"dc", "logic", "rack", "host"}},
 	)
+	re.NoError(err)
 
-	cluster.ruleManager.SetRule(
+	err = cluster.ruleManager.SetRule(
 		&placement.Rule{GroupID: placement.DefaultGroupID, ID: "logic3", StartKey: []byte(""), EndKey: []byte(""), Role: placement.Voter, Count: 1,
 			LabelConstraints: []placement.LabelConstraint{
 				{Key: "logic", Op: "in", Values: []string{"logic3"}},
 			},
 			LocationLabels: []string{"dc", "logic", "rack", "host"}},
 	)
+	re.NoError(err)
 
-	cluster.ruleManager.SetRule(
+	err = cluster.ruleManager.SetRule(
 		&placement.Rule{GroupID: placement.DefaultGroupID, ID: "logic4", StartKey: []byte(""), EndKey: []byte(""), Role: placement.Learner, Count: 1,
 			LabelConstraints: []placement.LabelConstraint{
 				{Key: "logic", Op: "in", Values: []string{"logic4"}},
 			},
 			LocationLabels: []string{"dc", "logic", "rack", "host"}},
 	)
-	cluster.ruleManager.DeleteRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	re.NoError(err)
+	err = cluster.ruleManager.DeleteRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	re.NoError(err)
 
 	regions := newTestRegions(100, 10, 5)
 	for _, region := range regions {
@@ -2067,7 +2084,7 @@ func TestUpdateAndDeleteLabel(t *testing.T) {
 	}
 	re.Empty(cluster.GetStore(1).GetLabels())
 	// Update label.
-	cluster.UpdateStoreLabels(
+	err = cluster.UpdateStoreLabels(
 		1,
 		[]*metapb.StoreLabel{
 			{Key: "zone", Value: "zone1"},
@@ -2075,6 +2092,7 @@ func TestUpdateAndDeleteLabel(t *testing.T) {
 		},
 		false,
 	)
+	re.NoError(err)
 	re.Equal(
 		[]*metapb.StoreLabel{
 			{Key: "zone", Value: "zone1"},
@@ -2083,19 +2101,21 @@ func TestUpdateAndDeleteLabel(t *testing.T) {
 		cluster.GetStore(1).GetLabels(),
 	)
 	// Update label again.
-	cluster.UpdateStoreLabels(
+	err = cluster.UpdateStoreLabels(
 		1,
 		[]*metapb.StoreLabel{
 			{Key: "mode", Value: "readonly"},
 		},
 		false,
 	)
+	re.NoError(err)
 	// Update label with empty value.
-	cluster.UpdateStoreLabels(
+	err = cluster.UpdateStoreLabels(
 		1,
 		[]*metapb.StoreLabel{},
 		false,
 	)
+	re.NoError(err)
 	re.Equal(
 		[]*metapb.StoreLabel{
 			{Key: "zone", Value: "zone1"},
@@ -2125,11 +2145,12 @@ func TestUpdateAndDeleteLabel(t *testing.T) {
 		cluster.GetStore(1).GetLabels(),
 	)
 	// Update label without force.
-	cluster.UpdateStoreLabels(
+	err = cluster.UpdateStoreLabels(
 		1,
 		[]*metapb.StoreLabel{},
 		false,
 	)
+	re.Error(err)
 	re.Equal(
 		[]*metapb.StoreLabel{
 			{Key: "zone", Value: "zone1"},
@@ -2138,18 +2159,20 @@ func TestUpdateAndDeleteLabel(t *testing.T) {
 		cluster.GetStore(1).GetLabels(),
 	)
 	// Update label with force.
-	cluster.UpdateStoreLabels(
+	err = cluster.UpdateStoreLabels(
 		1,
 		[]*metapb.StoreLabel{},
 		true,
 	)
+	re.NoError(err)
 	re.Empty(cluster.GetStore(1).GetLabels())
 	// Update label first and then reboot the store.
-	cluster.UpdateStoreLabels(
+	err = cluster.UpdateStoreLabels(
 		1,
 		[]*metapb.StoreLabel{{Key: "mode", Value: "readonly"}},
 		false,
 	)
+	re.NoError(err)
 	re.Equal([]*metapb.StoreLabel{{Key: "mode", Value: "readonly"}}, cluster.GetStore(1).GetLabels())
 	// Mock the store doesn't have any label configured.
 	newStore := typeutil.DeepClone(cluster.GetStore(1).GetMeta(), core.StoreFactory)
@@ -2198,7 +2221,10 @@ func newTestRaftCluster(
 		storage:        s,
 		storeStateLock: syncutil.NewLockGroup(syncutil.WithRemoveEntryOnUnlock(true)),
 	}
-	rc.InitCluster(id, opt, nil, nil)
+	err := rc.InitCluster(id, opt, nil, nil)
+	if err != nil {
+		panic(err)
+	}
 	rc.ruleManager = placement.NewRuleManager(ctx, storage.NewStorageWithMemoryBackend(), rc, opt)
 	if opt.IsPlacementRulesEnabled() {
 		err := rc.ruleManager.Initialize(opt.GetMaxReplicas(), opt.GetLocationLabels(), opt.GetIsolationLevel(), false)
@@ -2375,8 +2401,14 @@ func (c *testCluster) addRegionStore(storeID uint64, regionCount int, regionSize
 		core.SetLastHeartbeatTS(time.Now()),
 	)
 
-	c.SetStoreLimit(storeID, storelimit.AddPeer, 60)
-	c.SetStoreLimit(storeID, storelimit.RemovePeer, 60)
+	err := c.SetStoreLimit(storeID, storelimit.AddPeer, 60)
+	if err != nil {
+		return err
+	}
+	err = c.SetStoreLimit(storeID, storelimit.RemovePeer, 60)
+	if err != nil {
+		return err
+	}
 	c.Lock()
 	defer c.Unlock()
 	return c.setStore(newStore)
@@ -2414,8 +2446,14 @@ func (c *testCluster) addLeaderStore(storeID uint64, leaderCount int) error {
 		core.SetLastHeartbeatTS(time.Now()),
 	)
 
-	c.SetStoreLimit(storeID, storelimit.AddPeer, 60)
-	c.SetStoreLimit(storeID, storelimit.RemovePeer, 60)
+	err := c.SetStoreLimit(storeID, storelimit.AddPeer, 60)
+	if err != nil {
+		return err
+	}
+	err = c.SetStoreLimit(storeID, storelimit.RemovePeer, 60)
+	if err != nil {
+		return err
+	}
 	c.Lock()
 	defer c.Unlock()
 	return c.setStore(newStore)
@@ -2721,12 +2759,13 @@ func TestCheckRegionWithScheduleDeny(t *testing.T) {
 	re.NotNil(region)
 	// test with label schedule=deny
 	labelerManager := tc.GetRegionLabeler()
-	labelerManager.SetLabelRule(&labeler.LabelRule{
+	err := labelerManager.SetLabelRule(&labeler.LabelRule{
 		ID:       "schedulelabel",
 		Labels:   []labeler.RegionLabel{{Key: "schedule", Value: "deny"}},
 		RuleType: labeler.KeyRange,
 		Data:     []any{map[string]any{"start_key": "", "end_key": ""}},
 	})
+	re.NoError(err)
 
 	// should allow to do rule checker
 	re.True(labelerManager.ScheduleDisabled(region))
@@ -2740,7 +2779,8 @@ func TestCheckRegionWithScheduleDeny(t *testing.T) {
 	re.True(labelerManager.ScheduleDisabled(region))
 	checkRegionAndOperator(re, tc, co, 2, 0)
 	// delete label rule, should allow to do merge
-	labelerManager.DeleteLabelRule("schedulelabel")
+	err = labelerManager.DeleteLabelRule("schedulelabel")
+	re.NoError(err)
 	re.False(labelerManager.ScheduleDisabled(region))
 	checkRegionAndOperator(re, tc, co, 2, 2)
 }
@@ -2915,12 +2955,14 @@ func TestCheckCache(t *testing.T) {
 
 	// case 2: operator cannot be created due to store limit restriction
 	oc.RemoveOperator(oc.GetOperator(1))
-	tc.SetStoreLimit(1, storelimit.AddPeer, 0)
+	err := tc.SetStoreLimit(1, storelimit.AddPeer, 0)
+	re.NoError(err)
 	checker.PatrolRegions()
 	re.Len(checker.GetPendingProcessedRegions(), 1)
 
 	// cancel the store limit restriction
-	tc.SetStoreLimit(1, storelimit.AddPeer, 10)
+	err = tc.SetStoreLimit(1, storelimit.AddPeer, 10)
+	re.NoError(err)
 	time.Sleep(time.Second)
 	checker.PatrolRegions()
 	re.Len(oc.GetOperators(), 1)
@@ -3484,7 +3526,8 @@ func TestPauseScheduler(t *testing.T) {
 	controller := co.GetSchedulersController()
 	_, err := controller.IsSchedulerAllowed("test")
 	re.Error(err)
-	controller.PauseOrResumeScheduler(types.BalanceLeaderScheduler.String(), 60)
+	err = controller.PauseOrResumeScheduler(types.BalanceLeaderScheduler.String(), 60)
+	re.NoError(err)
 	paused, _ := controller.IsSchedulerPaused(types.BalanceLeaderScheduler.String())
 	re.True(paused)
 	pausedAt, err := controller.GetPausedSchedulerDelayAt(types.BalanceLeaderScheduler.String())
@@ -3593,7 +3636,8 @@ func TestStoreOverloaded(t *testing.T) {
 	re.NoError(tc.addRegionStore(1, 10))
 	re.NoError(tc.addLeaderRegion(1, 2, 3, 4))
 	region := tc.GetRegion(1).Clone(core.SetApproximateSize(60))
-	tc.putRegion(region)
+	err = tc.putRegion(region)
+	re.NoError(err)
 	start := time.Now()
 	{
 		ops, _ := lb.Schedule(tc, false /* dryRun */)
@@ -3648,9 +3692,11 @@ func TestStoreOverloadedWithReplace(t *testing.T) {
 	re.NoError(tc.addLeaderRegion(1, 2, 3, 4))
 	re.NoError(tc.addLeaderRegion(2, 1, 3, 4))
 	region := tc.GetRegion(1).Clone(core.SetApproximateSize(60))
-	tc.putRegion(region)
+	err = tc.putRegion(region)
+	re.NoError(err)
 	region = tc.GetRegion(2).Clone(core.SetApproximateSize(60))
-	tc.putRegion(region)
+	err = tc.putRegion(region)
+	re.NoError(err)
 	op1 := operator.NewTestOperator(1, tc.GetRegion(1).GetRegionEpoch(), operator.OpRegion, operator.AddPeer{ToStore: 1, PeerID: 1})
 	re.True(oc.AddOperator(op1))
 	op2 := operator.NewTestOperator(1, tc.GetRegion(1).GetRegionEpoch(), operator.OpRegion, operator.AddPeer{ToStore: 2, PeerID: 2})
@@ -3675,14 +3721,20 @@ func TestDownStoreLimit(t *testing.T) {
 	oc := co.GetOperatorController()
 	rc := co.GetCheckerController().GetRuleChecker()
 
-	tc.addRegionStore(1, 100)
-	tc.addRegionStore(2, 100)
-	tc.addRegionStore(3, 100)
-	tc.addLeaderRegion(1, 1, 2, 3)
+	err := tc.addRegionStore(1, 100)
+	re.NoError(err)
+	err = tc.addRegionStore(2, 100)
+	re.NoError(err)
+	err = tc.addRegionStore(3, 100)
+	re.NoError(err)
+	err = tc.addLeaderRegion(1, 1, 2, 3)
+	re.NoError(err)
 
 	region := tc.GetRegion(1)
-	tc.setStoreDown(1)
-	tc.SetStoreLimit(1, storelimit.RemovePeer, 1)
+	err = tc.setStoreDown(1)
+	re.NoError(err)
+	err = tc.SetStoreLimit(1, storelimit.RemovePeer, 1)
+	re.NoError(err)
 
 	region = region.Clone(core.WithDownPeers([]*pdpb.PeerStats{
 		{
@@ -3690,9 +3742,11 @@ func TestDownStoreLimit(t *testing.T) {
 			DownSeconds: 24 * 60 * 60,
 		},
 	}), core.SetApproximateSize(1))
-	tc.putRegion(region)
+	err = tc.putRegion(region)
+	re.NoError(err)
 	for i := uint64(1); i < 20; i++ {
-		tc.addRegionStore(i+3, 100)
+		err = tc.addRegionStore(i+3, 100)
+		re.NoError(err)
 		op := rc.Check(region)
 		re.NotNil(op)
 		re.True(oc.AddOperator(op))
@@ -3702,7 +3756,8 @@ func TestDownStoreLimit(t *testing.T) {
 	region = region.Clone(core.SetApproximateSize(100))
 	tc.putRegion(region)
 	for i := uint64(20); i < 25; i++ {
-		tc.addRegionStore(i+3, 100)
+		err = tc.addRegionStore(i+3, 100)
+		re.NoError(err)
 		op := rc.Check(region)
 		re.NotNil(op)
 		re.True(oc.AddOperator(op))
@@ -3871,7 +3926,8 @@ func TestConcurrentStoreStats(t *testing.T) {
 			DeployPath:    getTestDeployPath(i),
 			NodeState:     metapb.NodeState_Preparing,
 		}
-		cluster.PutMetaStore(store)
+		err = cluster.PutMetaStore(store)
+		re.NoError(err)
 		// avoid store is buried
 		req := &pdpb.StoreHeartbeatRequest{}
 		resp := &pdpb.StoreHeartbeatResponse{}
@@ -4018,6 +4074,7 @@ func BenchmarkHandleStatsAsync(b *testing.B) {
 }
 
 func BenchmarkHandleRegionHeartbeat(b *testing.B) {
+	re := require.New(b)
 	// Setup: create a new instance of Cluster
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -4075,6 +4132,7 @@ func BenchmarkHandleRegionHeartbeat(b *testing.B) {
 	// Run HandleRegionHeartbeat b.N times
 	for i := range b.N {
 		region := core.RegionFromHeartbeat(requests[i], flowRoundDivisor)
-		c.HandleRegionHeartbeat(region)
+		err := c.HandleRegionHeartbeat(region)
+		re.NoError(err)
 	}
 }

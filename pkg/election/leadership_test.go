@@ -162,7 +162,8 @@ func TestExitWatch(t *testing.T) {
 		// close the original leader
 		server.Server.HardStop()
 		// delete the leader key with the new client
-		client2.Delete(context.Background(), leaderKey)
+		_, err = client2.Delete(context.Background(), leaderKey)
+		re.NoError(err)
 		return func() {
 			etcd2.Close()
 			client2.Close()
