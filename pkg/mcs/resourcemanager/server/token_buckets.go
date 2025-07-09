@@ -15,6 +15,7 @@
 package server
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -124,7 +125,7 @@ func (gts *GroupTokenBucketState) Clone() *GroupTokenBucketState {
 	}
 }
 
-func (gts *GroupTokenBucketState) resetLoan() {
+func (gts *GroupTokenBucketState) resetLoan(groupName string) {
 	gts.settingChanged = false
 	gts.Tokens = 0
 	gts.clientConsumptionTokensSum = 0
@@ -132,8 +133,9 @@ func (gts *GroupTokenBucketState) resetLoan() {
 	if l := len(gts.tokenSlots); l > 0 {
 		evenRatio = 1 / float64(l)
 	}
-
+	checkAndLogNaN(evenRatio, groupName, "evenRatio", "in resetLoan")
 	evenTokens := gts.Tokens * evenRatio
+	checkAndLogNaN(evenTokens, groupName, "evenTokens", "in resetLoan")
 	for _, slot := range gts.tokenSlots {
 		slot.requireTokensSum = 0
 		slot.tokenCapacity = evenTokens
@@ -142,6 +144,7 @@ func (gts *GroupTokenBucketState) resetLoan() {
 }
 
 func (gts *GroupTokenBucketState) balanceSlotTokens(
+	groupName string,
 	clientUniqueID uint64,
 	settings *rmpb.TokenLimitSettings,
 	requiredToken, elapseTokens float64) {
@@ -181,10 +184,13 @@ func (gts *GroupTokenBucketState) balanceSlotTokens(
 		return
 	}
 	evenRatio := 1 / float64(len(gts.tokenSlots))
+	checkAndLogNaN(evenRatio, groupName, "evenRatio", "in balanceSlotTokens")
 	if settings.GetBurstLimit() <= 0 {
 		for _, slot := range gts.tokenSlots {
+			fillRateVal := float64(settings.GetFillRate()) * evenRatio
+			checkAndLogNaN(fillRateVal, groupName, "slot.settings.FillRate", "in balanceSlotTokens, unlimited burst")
 			slot.settings = &rmpb.TokenLimitSettings{
-				FillRate:   uint64(float64(settings.GetFillRate()) * evenRatio),
+				FillRate:   uint64(fillRateVal),
 				BurstLimit: settings.GetBurstLimit(),
 			}
 		}
@@ -196,6 +202,7 @@ func (gts *GroupTokenBucketState) balanceSlotTokens(
 			// Need to make each slot even.
 			slot.tokenCapacity = evenRatio * gts.Tokens
 			slot.lastTokenCapacity = evenRatio * gts.Tokens
+			checkAndLogNaN(slot.tokenCapacity, groupName, "slot.tokenCapacity", "in balanceSlotTokens, even distribution")
 			slot.requireTokensSum = 0
 			gts.clientConsumptionTokensSum = 0
 
@@ -203,6 +210,9 @@ func (gts *GroupTokenBucketState) balanceSlotTokens(
 				fillRate   = float64(settings.GetFillRate()) * evenRatio
 				burstLimit = float64(settings.GetBurstLimit()) * evenRatio
 			)
+
+			checkAndLogNaN(fillRate, groupName, "fillRate", "in balanceSlotTokens, even distribution")
+			checkAndLogNaN(burstLimit, groupName, "burstLimit", "in balanceSlotTokens, even distribution")
 
 			slot.settings = &rmpb.TokenLimitSettings{
 				FillRate:   uint64(fillRate),
@@ -218,12 +228,18 @@ func (gts *GroupTokenBucketState) balanceSlotTokens(
 			// Sum is:
 			// 		(N - (a+b+...+n)/N +1) * 1/N => (N - 1 + 1) * 1/N => 1
 			ratio := (1 - slot.requireTokensSum/gts.clientConsumptionTokensSum + evenRatio) * evenRatio
-
+			checkAndLogNaN(gts.clientConsumptionTokensSum, groupName, "gts.clientConsumptionTokensSum", "in balanceSlotTokens, dynamic ratio")
+			checkAndLogNaN(slot.requireTokensSum/gts.clientConsumptionTokensSum, groupName, "slot.requireTokensSum/gts.clientConsumptionTokensSum", "in balanceSlotTokens, dynamic ratio")
+			checkAndLogNaN(ratio, groupName, "ratio", "in balanceSlotTokens, dynamic ratio")
 			var (
 				fillRate    = float64(settings.GetFillRate()) * ratio
 				burstLimit  = float64(settings.GetBurstLimit()) * ratio
 				assignToken = elapseTokens * ratio
 			)
+
+			checkAndLogNaN(fillRate, groupName, "fillRate", "in balanceSlotTokens, dynamic ratio")
+			checkAndLogNaN(burstLimit, groupName, "burstLimit", "in balanceSlotTokens, dynamic ratio")
+			checkAndLogNaN(assignToken, groupName, "assignToken", "in balanceSlotTokens, dynamic ratio")
 
 			// Need to reserve burst limit to next balance.
 			if burstLimit > 0 && slot.tokenCapacity > burstLimit {
@@ -231,10 +247,15 @@ func (gts *GroupTokenBucketState) balanceSlotTokens(
 				gts.lastBurstTokens += reservedTokens
 				gts.Tokens -= reservedTokens
 				assignToken -= reservedTokens
+				checkAndLogNaN(reservedTokens, groupName, "reservedTokens", "in balanceSlotTokens, dynamic ratio")
+				checkAndLogNaN(gts.lastBurstTokens, groupName, "gts.lastBurstTokens", "in balanceSlotTokens, dynamic ratio")
+				checkAndLogNaN(gts.Tokens, groupName, "gts.Tokens", "in balanceSlotTokens, dynamic ratio")
+				checkAndLogNaN(assignToken, groupName, "assignToken_after_reserve", "in balanceSlotTokens, dynamic ratio")
 			}
 
 			slot.tokenCapacity += assignToken
 			slot.lastTokenCapacity += assignToken
+			checkAndLogNaN(slot.tokenCapacity, groupName, "slot.tokenCapacity", "in balanceSlotTokens, after assign")
 			slot.settings = &rmpb.TokenLimitSettings{
 				FillRate:   uint64(fillRate),
 				BurstLimit: int64(burstLimit),
@@ -307,51 +328,54 @@ func (gtb *GroupTokenBucket) init(now time.Time, clientID uint64) {
 }
 
 // updateTokens updates the tokens and settings.
-func (gtb *GroupTokenBucket) updateTokens(now time.Time, burstLimit int64, clientUniqueID uint64, consumptionToken float64) {
+func (gtb *GroupTokenBucket) updateTokens(groupName string, now time.Time, burstLimit int64, clientUniqueID uint64, consumptionToken float64) {
 	var elapseTokens float64
 	if !gtb.Initialized {
 		gtb.init(now, clientUniqueID)
 	} else if burst := float64(burstLimit); burst > 0 {
 		if delta := now.Sub(*gtb.LastUpdate); delta > 0 {
 			elapseTokens = float64(gtb.Settings.GetFillRate())*delta.Seconds() + gtb.lastBurstTokens
+			checkAndLogNaN(elapseTokens, groupName, "elapseTokens", "in updateTokens")
 			gtb.lastBurstTokens = 0
 			gtb.Tokens += elapseTokens
 		}
 		if gtb.Tokens > burst {
 			elapseTokens -= gtb.Tokens - burst
 			gtb.Tokens = burst
+			checkAndLogNaN(elapseTokens, groupName, "elapseTokens_after_burst_limit", "in updateTokens")
 		}
 	}
 	gtb.LastUpdate = &now
 	// Reloan when setting changed
 	if gtb.settingChanged && gtb.Tokens <= 0 {
 		elapseTokens = 0
-		gtb.resetLoan()
+		gtb.resetLoan(groupName)
 	}
 	// Balance each slots.
-	gtb.balanceSlotTokens(clientUniqueID, gtb.Settings, consumptionToken, elapseTokens)
+	gtb.balanceSlotTokens(groupName, clientUniqueID, gtb.Settings, consumptionToken, elapseTokens)
 }
 
 // request requests tokens from the corresponding slot.
-func (gtb *GroupTokenBucket) request(now time.Time,
+func (gtb *GroupTokenBucket) request(name string, now time.Time,
 	neededTokens float64,
 	targetPeriodMs, clientUniqueID uint64,
 ) (*rmpb.TokenBucket, int64) {
 	burstLimit := gtb.Settings.GetBurstLimit()
-	gtb.updateTokens(now, burstLimit, clientUniqueID, neededTokens)
+	gtb.updateTokens(name, now, burstLimit, clientUniqueID, neededTokens)
 	slot, ok := gtb.tokenSlots[clientUniqueID]
 	if !ok {
 		return &rmpb.TokenBucket{Settings: &rmpb.TokenLimitSettings{BurstLimit: burstLimit}}, 0
 	}
-	res, trickleDuration := slot.assignSlotTokens(neededTokens, targetPeriodMs)
+	res, trickleDuration := slot.assignSlotTokens(name, neededTokens, targetPeriodMs)
 	// Update bucket to record all tokens.
 	gtb.Tokens -= slot.lastTokenCapacity - slot.tokenCapacity
+	checkAndLogNaN(gtb.Tokens, name, "gtb.Tokens", "in request, after assign")
 	slot.lastTokenCapacity = slot.tokenCapacity
 
 	return res, trickleDuration
 }
 
-func (ts *TokenSlot) assignSlotTokens(neededTokens float64, targetPeriodMs uint64) (*rmpb.TokenBucket, int64) {
+func (ts *TokenSlot) assignSlotTokens(groupName string, neededTokens float64, targetPeriodMs uint64) (*rmpb.TokenBucket, int64) {
 	var res rmpb.TokenBucket
 	burstLimit := ts.settings.GetBurstLimit()
 	res.Settings = &rmpb.TokenLimitSettings{BurstLimit: burstLimit}
@@ -364,11 +388,14 @@ func (ts *TokenSlot) assignSlotTokens(neededTokens float64, targetPeriodMs uint6
 	if neededTokens <= 0 {
 		return &res, 0
 	}
+	checkAndLogNaN(ts.tokenCapacity, groupName, "ts.tokenCapacity", "start of assignSlotTokens")
 	// If the current tokens can directly meet the requirement, returns the need token.
 	if ts.tokenCapacity >= neededTokens {
 		ts.tokenCapacity -= neededTokens
 		// granted the total request tokens
 		res.Tokens = neededTokens
+		checkAndLogNaN(ts.tokenCapacity, groupName, "ts.tokenCapacity", "in assignSlotTokens, sufficient tokens")
+		checkAndLogNaN(res.Tokens, groupName, "res.Tokens", "in assignSlotTokens, sufficient tokens")
 		return &res, 0
 	}
 
@@ -380,14 +407,17 @@ func (ts *TokenSlot) assignSlotTokens(neededTokens float64, targetPeriodMs uint6
 		neededTokens -= grantedTokens
 		ts.tokenCapacity = 0
 		hasRemaining = true
+		checkAndLogNaN(grantedTokens, groupName, "grantedTokens", "in assignSlotTokens, after allocating remaining")
+		checkAndLogNaN(neededTokens, groupName, "neededTokens", "in assignSlotTokens, after allocating remaining")
 	}
 
 	var (
 		targetPeriodTime    = time.Duration(targetPeriodMs) * time.Millisecond
 		targetPeriodTimeSec = targetPeriodTime.Seconds()
 		trickleTime         = 0.
-		fillRate            = ts.settings.GetFillRate()
+		fillRate            = float64(ts.settings.GetFillRate())
 	)
+	checkAndLogNaN(fillRate, groupName, "fillRate", "in assignSlotTokens, start of loan calculation")
 
 	loanCoefficient := defaultLoanCoefficient
 	// When BurstLimit less or equal FillRate, the server does not accumulate a significant number of tokens.
@@ -411,43 +441,59 @@ func (ts *TokenSlot) assignSlotTokens(neededTokens float64, targetPeriodMs uint6
 	//         loan      ***    k*period_token    (k+k-1)*period_token    ***      (k+k+1...+1)*period_token
 	p := make([]float64, loanCoefficient)
 	p[0] = float64(loanCoefficient) * float64(fillRate) * targetPeriodTimeSec
+	checkAndLogNaN(p[0], groupName, "p[0]", "in assignSlotTokens, loan calculation")
 	for i := 1; i < loanCoefficient; i++ {
 		p[i] = float64(loanCoefficient-i)*float64(fillRate)*targetPeriodTimeSec + p[i-1]
+		checkAndLogNaN(p[i], groupName, fmt.Sprintf("p[0],%d", i), "in assignSlotTokens, loan calculation")
 	}
 	for i := 0; i < loanCoefficient && neededTokens > 0 && trickleTime < targetPeriodTimeSec; i++ {
 		loan := -ts.tokenCapacity
+		checkAndLogNaN(loan, groupName, fmt.Sprintf("loan,%d", i), "in assignSlotTokens, loan loop")
 		if loan >= p[i] {
 			continue
 		}
 		roundReserveTokens := p[i] - loan
 		fillRate := float64(loanCoefficient-i) * float64(fillRate)
+		checkAndLogNaN(roundReserveTokens, groupName, fmt.Sprintf("roundReserveTokens,%d", i), "in assignSlotTokens, loan loop")
+		checkAndLogNaN(fillRate, groupName, fmt.Sprintf("fillRate,%d", i), "in assignSlotTokens, loan loop")
 		if roundReserveTokens > neededTokens {
 			ts.tokenCapacity -= neededTokens
 			grantedTokens += neededTokens
 			trickleTime += grantedTokens / fillRate
+			checkAndLogNaN(trickleTime, groupName, "trickleTime", "in assignSlotTokens, loan loop, roundReserve>needed")
 			neededTokens = 0
 		} else {
 			roundReserveTime := roundReserveTokens / fillRate
+			checkAndLogNaN(roundReserveTime, groupName, "roundReserveTime", "in assignSlotTokens, loan loop, roundReserve<=needed")
 			if roundReserveTime+trickleTime >= targetPeriodTimeSec {
 				roundTokens := (targetPeriodTimeSec - trickleTime) * fillRate
 				neededTokens -= roundTokens
 				ts.tokenCapacity -= roundTokens
 				grantedTokens += roundTokens
 				trickleTime = targetPeriodTimeSec
+				checkAndLogNaN(roundTokens, groupName, "roundTokens", "in assignSlotTokens, loan loop, time exceeded")
 			} else {
 				grantedTokens += roundReserveTokens
 				neededTokens -= roundReserveTokens
 				ts.tokenCapacity -= roundReserveTokens
 				trickleTime += roundReserveTime
 			}
+			checkAndLogNaN(ts.tokenCapacity, groupName, fmt.Sprintf("ts.tokenCapacity,%d", i), "in assignSlotTokens, end of loan loop")
+			checkAndLogNaN(grantedTokens, groupName, fmt.Sprintf("neededTokensy,%d", i), "in assignSlotTokens, end of loan loop")
+			checkAndLogNaN(neededTokens, groupName, fmt.Sprintf("grantedTokens,%d", i), "in assignSlotTokens, end of loan loop")
+			checkAndLogNaN(trickleTime, groupName, fmt.Sprintf("trickleTime,%d", i), "in assignSlotTokens, end of loan loop")
 		}
 	}
 	if neededTokens > 0 && grantedTokens < defaultReserveRatio*float64(fillRate)*targetPeriodTimeSec {
 		reservedTokens := math.Min(neededTokens+grantedTokens, defaultReserveRatio*float64(fillRate)*targetPeriodTimeSec)
 		ts.tokenCapacity -= reservedTokens - grantedTokens
 		grantedTokens = reservedTokens
+		checkAndLogNaN(reservedTokens, groupName, "reservedTokens", "in assignSlotTokens, final reservation")
+		checkAndLogNaN(ts.tokenCapacity, groupName, "ts.tokenCapacity", "in assignSlotTokens, final reservation")
+		checkAndLogNaN(grantedTokens, groupName, "grantedTokens", "in assignSlotTokens, final reservation")
 	}
 	res.Tokens = grantedTokens
+	checkAndLogNaN(res.Tokens, groupName, "res.Tokens", "final value before return")
 
 	var trickleDuration time.Duration
 	// Can't directly treat targetPeriodTime as trickleTime when there is a token remaining.
@@ -457,5 +503,16 @@ func (ts *TokenSlot) assignSlotTokens(neededTokens float64, targetPeriodMs uint6
 	} else {
 		trickleDuration = targetPeriodTime
 	}
+	checkAndLogNaN(float64(trickleDuration.Milliseconds()), groupName, "trickleDuration", "final value before return")
 	return &res, trickleDuration.Milliseconds()
+}
+
+func checkAndLogNaN(value float64, groupName string, varName string, contextMsg string) {
+	if math.IsNaN(value) {
+		log.Warn("[RC_NaN_CHECK] Detected NaN value during token calculation",
+			zap.String("group", groupName),
+			zap.String("variable", varName),
+			zap.String("context", contextMsg),
+		)
+	}
 }

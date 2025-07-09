@@ -166,7 +166,7 @@ func (rg *ResourceGroup) RequestRU(
 	if rg.RUSettings == nil || rg.RUSettings.RU.Settings == nil {
 		return nil
 	}
-	tb, trickleTimeMs := rg.RUSettings.RU.request(now, neededTokens, targetPeriodMs, clientUniqueID)
+	tb, trickleTimeMs := rg.RUSettings.RU.request(rg.Name, now, neededTokens, targetPeriodMs, clientUniqueID)
 	return &rmpb.GrantedRUTokenBucket{GrantedTokens: tb, TrickleTimeMs: trickleTimeMs}
 }
 
