@@ -27,9 +27,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/log"
 
 	pd "github.com/tikv/pd/client"
 	clierrs "github.com/tikv/pd/client/errs"
@@ -289,6 +291,9 @@ func (suite *tsoKeyspaceGroupManagerTestSuite) TestTSOKeyspaceGroupSplit() {
 	)
 	testutil.Eventually(re, func() bool {
 		ts, err = suite.requestTSO(re, 222, oldID)
+		if err != nil {
+			log.Error("TestTSOKeyspaceGroupSplit", zap.Error(err))
+		}
 		return err == nil && tsoutil.CompareTimestamp(&ts, &pdpb.Timestamp{}) > 0
 	})
 	ts.Physical += time.Hour.Milliseconds()
