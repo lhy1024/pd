@@ -16,8 +16,10 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,7 +85,16 @@ var zapLogOnce sync.Once
 
 // NewTestServer creates a new TestServer.
 func NewTestServer(ctx context.Context, cfg *config.Config, services []string) (*TestServer, error) {
-	//  disable the heartbeat async runner in test
+	// use temp dir to ensure test isolation.
+	if cfg.DataDir == "" || strings.HasPrefix(cfg.DataDir, "default.") {
+		dirPattern := fmt.Sprintf("pd-server-test-%s-", cfg.Name)
+		tempDir, err := os.MkdirTemp("", dirPattern)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create safeguard temp data dir for test server")
+		}
+		cfg.DataDir = tempDir
+	}
+	// disable the heartbeat async runner in test
 	cfg.Schedule.EnableHeartbeatConcurrentRunner = false
 	err := logutil.SetupLogger(&cfg.Log, &cfg.Logger, &cfg.LogProps, cfg.Security.RedactInfoLog)
 	if err != nil {
@@ -512,6 +523,11 @@ func createTestCluster(ctx context.Context, initialServerCount int, services []s
 		if err != nil {
 			return nil, err
 		}
+		tempDataDir, err := os.MkdirTemp("", "pd-test-")
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create temp data dir")
+		}
+		serverConf.DataDir = tempDataDir
 		s, err := NewTestServer(ctx, serverConf, services)
 		if err != nil {
 			return nil, err
