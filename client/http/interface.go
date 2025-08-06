@@ -111,7 +111,9 @@ type Client interface {
 	/* Microservice interfaces */
 	GetMicroserviceMembers(context.Context, string) ([]MicroserviceMember, error)
 	GetMicroservicePrimary(context.Context, string) (string, error)
+	GetOperatorsByRegion(context.Context, uint64) (string, error)
 	CreateOperators(context.Context, map[string]any) error
+	SplitRegions(context.Context, map[string]any) error
 	DeleteOperators(context.Context) error
 
 	/* Keyspace interface */
@@ -1078,6 +1080,30 @@ func (c *client) CreateOperators(ctx context.Context, input map[string]any) erro
 	return c.request(ctx, newRequestInfo().
 		WithName(createOperators).
 		WithURI(operators).
+		WithMethod(http.MethodPost).
+		WithBody(inputJSON))
+}
+
+// GetOperatorsByRegion gets the operators by region ID.
+func (c *client) GetOperatorsByRegion(ctx context.Context, regionID uint64) (string, error) {
+	var res string
+	err := c.request(ctx, newRequestInfo().
+		WithName(getOperators).
+		WithURI(operators+fmt.Sprintf("/%d", regionID)).
+		WithMethod(http.MethodGet).
+		WithResp(&res))
+	return res, err
+}
+
+// SplitRegions splits the regions by the given input.
+func (c *client) SplitRegions(ctx context.Context, input map[string]any) error {
+	inputJSON, err := json.Marshal(input)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	return c.request(ctx, newRequestInfo().
+		WithName(splitRegionsName).
+		WithURI(splitRegions).
 		WithMethod(http.MethodPost).
 		WithBody(inputJSON))
 }
