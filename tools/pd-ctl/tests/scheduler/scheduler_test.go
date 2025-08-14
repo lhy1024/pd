@@ -777,6 +777,12 @@ func (suite *schedulerTestSuite) checkSchedulerDiagnostic(cluster *pdTests.TestC
 	re.Contains(echo, "Success!")
 	echo = tests.MustExec(re, cmd, []string{"-u", pdAddr, "config", "set", "region-schedule-limit", "0"}, nil)
 	re.Contains(echo, "Success!")
+	testutil.Eventually(re, func() bool {
+		var scheduleConfig map[string]interface{}
+		tests.MustExec(re, cmd, []string{"-u", pdAddr, "config", "show", "schedule"}, &scheduleConfig)
+		limit, ok := scheduleConfig["region-schedule-limit"].(float64)
+		return ok && limit == 0
+	})
 	checkSchedulerDescribeCommand("balance-region-scheduler", "pending", "balance-region-scheduler reach limit")
 
 	// scheduler delete command
