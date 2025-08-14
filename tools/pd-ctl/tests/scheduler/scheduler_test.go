@@ -770,7 +770,7 @@ func (suite *schedulerTestSuite) checkSchedulerDiagnostic(cluster *pdTests.TestC
 			mightExec(re, cmd, []string{"-u", pdAddr, "scheduler", "describe", schedulerName}, &result)
 			fmt.Println("TestSchedulerDiagnostic", result)
 			return len(result) != 0 && expectedStatus == result["status"] && expectedSummary == result["summary"]
-		}, testutil.WithTickInterval(50*time.Millisecond))
+		}, testutil.WithWaitFor(30*time.Second), testutil.WithTickInterval(50*time.Millisecond))
 	}
 
 	echo := tests.MustExec(re, cmd, []string{"-u", pdAddr, "config", "set", "enable-diagnostic", "true"}, nil)
