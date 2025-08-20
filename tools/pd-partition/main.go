@@ -1,17 +1,3 @@
-// Copyright 2025 TiKV Project Authors.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package main
 
 import (
@@ -41,7 +27,7 @@ var (
 	caPath    = flag.String("cacert", "", "path of file that contains list of trusted SSL CAs")
 	certPath  = flag.String("cert", "", "path of file that contains X509 certificate in PEM format")
 	keyPath   = flag.String("key", "", "path of file that contains X509 key in PEM format")
-	tableName = flag.String("table", "", "Partitioned table to process (required)")
+	tableName = flag.String("table", "", "Table to process (partitioned or non-partitioned, required)")
 	dbName    = flag.String("db", "test", "Database name")
 )
 
@@ -58,10 +44,20 @@ type partitionSummary struct {
 	regionCount int
 }
 
+func tableExists(ctx context.Context, db *sql.DB, dbName, tableName string) (bool, error) {
+	query := `SELECT COUNT(1) FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`
+	var count int
+	err := db.QueryRowContext(ctx, query, dbName, tableName).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func logPartitionSummary(ctx context.Context, db *sql.DB, dbName, tableName string) {
 	query := `
         SELECT
-            IFNULL(PARTITION_NAME, 'Global Index / Others') AS partition_name,
+            IFNULL(PARTITION_NAME, 'NON_PARTITIONED') AS partition_name,
             COUNT(DISTINCT REGION_ID) AS region_count
         FROM
             information_schema.TIKV_REGION_STATUS
@@ -226,17 +222,17 @@ func mergePartitionWorker(ctx context.Context, wg *sync.WaitGroup, db *sql.DB, p
 		// check regions
 		var pairs []mergePair
 		sort.Sort(byStartKeys(*resp))
-		for i := 0; i < int(resp.Count)-1; i += 2 {
-			if resp.Regions[i].EndKey != resp.Regions[i+1].StartKey {
+		for i := 1; i < int(resp.Count); i += 2 {
+			if resp.Regions[i-1].EndKey != resp.Regions[i].StartKey {
 				log.Error("found a gap between regions, cannot proceed with merging", append(logFields,
-					zap.Int64("region1_id", resp.Regions[i].ID),
-					zap.String("region1_end_key", resp.Regions[i].EndKey),
-					zap.Int64("region2_id", resp.Regions[i+1].ID),
-					zap.String("region2_start_key", resp.Regions[i+1].StartKey))...)
+					zap.Int64("region1_id", resp.Regions[i-1].ID),
+					zap.String("region1_end_key", resp.Regions[i-1].EndKey),
+					zap.Int64("region2_id", resp.Regions[i].ID),
+					zap.String("region2_start_key", resp.Regions[i].StartKey))...)
 				continue
 			}
 			pairs = append(pairs, mergePair{
-				SourceID: resp.Regions[i+1].ID,
+				SourceID: resp.Regions[i-1].ID,
 				TargetID: resp.Regions[i].ID,
 			})
 		}
@@ -275,7 +271,7 @@ func executeMergeRound(ctx context.Context, pairs []mergePair, logFields []zap.F
 				successCount++
 			}
 		}
-		if successCount == len(pairs) {
+		if successCount >= len(pairs) {
 			return
 		}
 		select {
@@ -336,6 +332,29 @@ func getPartitions(ctx context.Context, db *sql.DB, dbName, tableName string) (m
 	return partitions, nil
 }
 
+func isPartitionedTable(ctx context.Context, db *sql.DB, dbName, tableName string) (bool, error) {
+	query := `SELECT COUNT(1) FROM information_schema.PARTITIONS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND PARTITION_NAME IS NOT NULL`
+	var count int
+	err := db.QueryRowContext(ctx, query, dbName, tableName).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func getTableInfo(ctx context.Context, db *sql.DB, dbName, tableName string) (tableID int64, regionCount int, err error) {
+	query := `
+		SELECT t.TIDB_TABLE_ID, COUNT(DISTINCT rs.REGION_ID)
+		FROM information_schema.TABLES t
+		LEFT JOIN information_schema.TIKV_REGION_STATUS rs
+			ON t.TABLE_SCHEMA = rs.DB_NAME AND t.TABLE_NAME = rs.TABLE_NAME
+		WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?
+		GROUP BY t.TIDB_TABLE_ID
+	`
+	err = db.QueryRowContext(ctx, query, dbName, tableName).Scan(&tableID, &regionCount)
+	return
+}
+
 func main() {
 	// parse command line arguments
 	flag.Parse()
@@ -356,23 +375,51 @@ func main() {
 	if err := db.PingContext(ctx); err != nil {
 		log.Fatal("failed to connect to database", zap.Error(err))
 	}
-	logPartitionSummary(ctx, db, *dbName, *tableName)
-	start := time.Now()
-	// check partitions
-	partitions, err := getPartitions(ctx, db, *dbName, *tableName)
+
+	exists, err := tableExists(ctx, db, *dbName, *tableName)
 	if err != nil {
-		log.Fatal("error getting partitions to process", zap.Error(err))
+		log.Fatal("failed to check if table exists", zap.Error(err))
 	}
-	if len(partitions) == 0 {
-		log.Info("no partitions to process")
+	if !exists {
+		log.Info("table does not exist", zap.String("db", *dbName), zap.String("table", *tableName))
 		return
 	}
+
+	logPartitionSummary(ctx, db, *dbName, *tableName)
+	start := time.Now()
+	isPartitioned, err := isPartitionedTable(ctx, db, *dbName, *tableName)
+	if err != nil {
+		log.Fatal("failed to check if table is partitioned", zap.Error(err))
+	}
 	var wg sync.WaitGroup
-	for id, name := range partitions {
+	if isPartitioned {
+		log.Info("table is partitioned")
+		partitions, err := getPartitions(ctx, db, *dbName, *tableName)
+		if err != nil {
+			log.Fatal("error getting partitions to process", zap.Error(err))
+		}
+		if len(partitions) == 0 {
+			log.Info("no partitions to process")
+			return
+		}
+		for id, name := range partitions {
+			wg.Add(1)
+			go mergePartitionWorker(ctx, &wg, db, *pdAddr, *dbName, *tableName, name, id)
+		}
+	} else {
+		log.Info("table is not partitioned")
+		tableID, regionCount, err := getTableInfo(ctx, db, *dbName, *tableName)
+		if err != nil {
+			log.Fatal("failed to get table info", zap.Error(err))
+		}
+		if regionCount <= 1 {
+			log.Info("no more regions to process")
+			return
+		}
 		wg.Add(1)
-		go mergePartitionWorker(ctx, &wg, db, *pdAddr, *dbName, *tableName, name, id)
+		go mergePartitionWorker(ctx, &wg, db, *pdAddr, *dbName, *tableName, *tableName, tableID)
 	}
 	wg.Wait()
-	log.Info("partition merge complete", zap.Int("partitions", len(partitions)), zap.Duration("elapsed", time.Since(start)))
+	log.Info("merge complete", zap.Duration("elapsed", time.Since(start)))
 	logPartitionSummary(ctx, db, *dbName, *tableName)
 }
