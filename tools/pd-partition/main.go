@@ -245,6 +245,7 @@ func executeMergeRound(ctx context.Context, pairs []mergePair, logFields []zap.F
 	if len(pairs) == 0 {
 		return
 	}
+	operatorRegions := make([]int64, 0, len(pairs))
 	for _, pair := range pairs {
 		input := map[string]any{
 			"name":             "merge-region",
@@ -254,6 +255,8 @@ func executeMergeRound(ctx context.Context, pairs []mergePair, logFields []zap.F
 		if err := client.CreateOperators(ctx, input); err != nil {
 			log.Error("failed to submit merge operator, skipping pair", append(logFields,
 				zap.Any("pair", pair), zap.Error(err))...)
+		} else {
+			operatorRegions = append(operatorRegions, pair.TargetID)
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -262,8 +265,8 @@ func executeMergeRound(ctx context.Context, pairs []mergePair, logFields []zap.F
 	defer ticker.Stop()
 	for {
 		successCount := 0
-		for _, pair := range pairs {
-			resp, err := client.GetOperatorsByRegion(ctx, uint64(pair.TargetID))
+		for _, region := range operatorRegions {
+			resp, err := client.GetOperatorsByRegion(ctx, uint64(region))
 			if err != nil {
 				continue
 			}
@@ -271,7 +274,7 @@ func executeMergeRound(ctx context.Context, pairs []mergePair, logFields []zap.F
 				successCount++
 			}
 		}
-		if successCount >= len(pairs) {
+		if successCount >= len(operatorRegions) {
 			return
 		}
 		select {
