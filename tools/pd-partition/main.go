@@ -349,7 +349,9 @@ func mergePartitionWorker(ctx context.Context, wg *sync.WaitGroup, db *sql.DB, d
 			}
 			pairs = append(pairs, mergePair{SourceID: sourceRegion.ID, TargetID: targetRegion.ID})
 		}
-
+		if len(pairs) == 0 {
+			return
+		}
 		executeMergeRound(ctx, pairs, logFields)
 	}
 }
