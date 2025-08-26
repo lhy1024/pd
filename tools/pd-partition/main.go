@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -65,6 +66,56 @@ type tableResult struct {
 	err        error
 }
 
+// parseSizeToMB converts a size string (e.g., "144MiB", "10GiB") to megabytes.
+func parseSizeToMB(sizeStr string) (int64, error) {
+	sizeStr = strings.ToUpper(strings.TrimSpace(sizeStr))
+	var multiplier float64
+	var unit string
+
+	if strings.HasSuffix(sizeStr, "GIB") {
+		multiplier = 1024
+		unit = "GIB"
+	} else if strings.HasSuffix(sizeStr, "MIB") {
+		multiplier = 1
+		unit = "MIB"
+	} else if strings.HasSuffix(sizeStr, "KIB") {
+		multiplier = 1.0 / 1024.0
+		unit = "KIB"
+	} else if strings.HasSuffix(sizeStr, "B") {
+		multiplier = 1.0 / (1024.0 * 1024.0)
+		unit = "B"
+	} else {
+		multiplier = 1
+	}
+
+	numStr := strings.TrimSuffix(sizeStr, unit)
+	size, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size number: %s", numStr)
+	}
+
+	return int64(size * multiplier), nil
+}
+
+// getSplitSizeMB fetches the region-split-size from TiKV config and returns it in MB.
+func getSplitSizeMB(ctx context.Context, db *sql.DB) (int64, error) {
+	var configValue string
+	query := `SHOW CONFIG WHERE Type='tikv' AND Name LIKE '%region-split-size'`
+	err := db.QueryRowContext(ctx, query).Scan(new(string), new(string), new(string), &configValue)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, fmt.Errorf("could not find TiKV config for 'region-split-size'. Please check TiDB version and privileges")
+		}
+		return 0, err
+	}
+
+	splitSizeMB, err := parseSizeToMB(configValue)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse region-split-size '%s': %w", configValue, err)
+	}
+	return splitSizeMB, nil
+}
+
 func tableExists(ctx context.Context, db *sql.DB, dbName, tableName string) (bool, error) {
 	query := `SELECT COUNT(1) FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`
 	var count int
@@ -114,18 +165,12 @@ func printUnifiedSummary(results []tableResult) {
 		return
 	}
 
-	// Sort results by table name for consistent output
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].tableName < results[j].tableName
 	})
 
 	maxWidths := map[string]int{
-		"table":   5,
-		"part":    9,
-		"before":  14,
-		"after":   13,
-		"elapsed": 12,
-		"status":  8,
+		"table": 5, "part": 9, "before": 14, "after": 13, "elapsed": 12, "status": 8,
 	}
 
 	for _, r := range results {
@@ -154,14 +199,9 @@ func printUnifiedSummary(results []tableResult) {
 
 	var errors []tableResult
 	for _, r := range results {
-		if r.err != nil {
-			// Don't treat cancellation or timeout as a standalone error row, show status in-line.
-			if r.err == context.Canceled || r.err == context.DeadlineExceeded {
-				// Handled below
-			} else {
-				errors = append(errors, r)
-				continue
-			}
+		if r.err != nil && r.err != context.Canceled && r.err != context.DeadlineExceeded {
+			errors = append(errors, r)
+			continue
 		}
 
 		status := "Success"
@@ -206,9 +246,7 @@ func newPDHttpClient() pdHttp.Client {
 	)
 	if *caPath != "" || *certPath != "" || *keyPath != "" {
 		tlsInfo := transport.TLSInfo{
-			CertFile:      *certPath,
-			KeyFile:       *keyPath,
-			TrustedCAFile: *caPath,
+			CertFile: *certPath, KeyFile: *keyPath, TrustedCAFile: *caPath,
 		}
 		tlsConfig, err = tlsInfo.ClientConfig()
 		if err != nil {
@@ -226,7 +264,6 @@ const (
 	httpsSchemePrefix = "https://"
 )
 
-// ModifyURLScheme modifies the scheme of the URL based on the TLS config.
 func ModifyURLScheme(url string, tlsCfg *tls.Config) string {
 	if tlsCfg == nil {
 		if strings.HasPrefix(url, httpsSchemePrefix) {
@@ -244,7 +281,6 @@ func ModifyURLScheme(url string, tlsCfg *tls.Config) string {
 	return url
 }
 
-// TrimHTTPPrefix trims the HTTP/HTTPS prefix from the string.
 func TrimHTTPPrefix(str string) string {
 	str = strings.TrimPrefix(str, httpSchemePrefix)
 	str = strings.TrimPrefix(str, httpsSchemePrefix)
@@ -263,29 +299,20 @@ func getRegionsInRange(ctx context.Context, startKeyHex, endKeyHex string) (*pdH
 	return client.GetRegionsByKeyRange(ctx, pdHttp.NewKeyRange(startKey, endKey), -1)
 }
 
-func mergePartitionWorker(ctx context.Context, wg *sync.WaitGroup, db *sql.DB, pdAddr, dbName, tableName, partitionName string, partitionID int64) {
+func mergePartitionWorker(ctx context.Context, wg *sync.WaitGroup, db *sql.DB, dbName, tableName, partitionName string, partitionID int64, splitSizeMB int64) {
 	defer wg.Done()
 	logFields := []zap.Field{
-		zap.String("db", dbName),
-		zap.String("table", tableName),
-		zap.String("partition", partitionName),
-		zap.Int64("partition_id", partitionID),
+		zap.String("db", dbName), zap.String("table", tableName), zap.String("partition", partitionName), zap.Int64("partition_id", partitionID),
 	}
 
-	// Prepare start and end keys for the partition
 	startKeyHex := constructTableBoundaryKey(partitionID)
 	endKeyHex := constructTableBoundaryKey(partitionID + 1)
 
-	payload := map[string]any{
-		"split_keys": []string{startKeyHex, endKeyHex},
-	}
+	payload := map[string]any{"split_keys": []string{startKeyHex, endKeyHex}}
 	if err := client.SplitRegions(ctx, payload); err != nil {
-		log.Warn("boundary split request failed", append(logFields,
-			zap.Strings("split-keys", []string{startKeyHex, endKeyHex}),
-			zap.Error(err))...)
+		log.Warn("boundary split request failed", append(logFields, zap.Strings("split-keys", []string{startKeyHex, endKeyHex}), zap.Error(err))...)
 	}
 
-	// Merge in rounds
 	ticker := time.NewTicker(time.Second * 1)
 	defer ticker.Stop()
 	for {
@@ -303,22 +330,24 @@ func mergePartitionWorker(ctx context.Context, wg *sync.WaitGroup, db *sql.DB, p
 			return
 		}
 
-		// check regions
 		var pairs []mergePair
 		sort.Sort(byStartKeys(*resp))
 		for i := 1; i < int(resp.Count); i += 2 {
-			if resp.Regions[i-1].EndKey != resp.Regions[i].StartKey {
+			sourceRegion := resp.Regions[i-1]
+			targetRegion := resp.Regions[i]
+
+			if sourceRegion.EndKey != targetRegion.StartKey {
 				log.Error("found a gap between regions, cannot proceed with merging", append(logFields,
-					zap.Int64("region1_id", resp.Regions[i-1].ID),
-					zap.String("region1_end_key", resp.Regions[i-1].EndKey),
-					zap.Int64("region2_id", resp.Regions[i].ID),
-					zap.String("region2_start_key", resp.Regions[i].StartKey))...)
+					zap.Int64("region1_id", sourceRegion.ID), zap.String("region1_end_key", sourceRegion.EndKey),
+					zap.Int64("region2_id", targetRegion.ID), zap.String("region2_start_key", targetRegion.StartKey))...)
 				continue
 			}
-			pairs = append(pairs, mergePair{
-				SourceID: resp.Regions[i-1].ID,
-				TargetID: resp.Regions[i].ID,
-			})
+
+			combinedSize := sourceRegion.ApproximateSize + targetRegion.ApproximateSize
+			if splitSizeMB > 0 && combinedSize >= splitSizeMB {
+				continue
+			}
+			pairs = append(pairs, mergePair{SourceID: sourceRegion.ID, TargetID: targetRegion.ID})
 		}
 
 		executeMergeRound(ctx, pairs, logFields)
@@ -337,8 +366,10 @@ func executeMergeRound(ctx context.Context, pairs []mergePair, logFields []zap.F
 			"target_region_id": pair.TargetID,
 		}
 		if err := client.CreateOperators(ctx, input); err != nil {
-			log.Error("failed to submit merge operator, skipping pair", append(logFields,
-				zap.Any("pair", pair), zap.Error(err))...)
+			if !strings.Contains(err.Error(), "ErrRegionAbnormalPeer") {
+				log.Error("failed to submit merge operator, skipping pair", append(logFields,
+					zap.Any("pair", pair), zap.Error(err))...)
+			}
 		} else {
 			operatorRegions = append(operatorRegions, pair.TargetID)
 		}
@@ -372,25 +403,14 @@ func executeMergeRound(ctx context.Context, pairs []mergePair, logFields []zap.F
 
 type byStartKeys pdHttp.RegionsInfo
 
-func (a byStartKeys) Len() int {
-	return int(a.Count)
-}
-
-func (a byStartKeys) Less(i, j int) bool {
-	return a.Regions[i].StartKey < a.Regions[j].StartKey
-}
-
-func (a byStartKeys) Swap(i, j int) {
-	a.Regions[i], a.Regions[j] = a.Regions[j], a.Regions[i]
-}
+func (a byStartKeys) Len() int           { return int(a.Count) }
+func (a byStartKeys) Less(i, j int) bool { return a.Regions[i].StartKey < a.Regions[j].StartKey }
+func (a byStartKeys) Swap(i, j int)      { a.Regions[i], a.Regions[j] = a.Regions[j], a.Regions[i] }
 
 func getPartitions(ctx context.Context, db *sql.DB, dbName, tableName string) (map[int64]string, error) {
 	query := `
-        SELECT
-            p.PARTITION_NAME,
-            p.TIDB_PARTITION_ID
-        FROM
-            information_schema.PARTITIONS p
+        SELECT p.PARTITION_NAME, p.TIDB_PARTITION_ID
+        FROM information_schema.PARTITIONS p
         JOIN (
             SELECT PARTITION_NAME
             FROM information_schema.TIKV_REGION_STATUS
@@ -398,8 +418,7 @@ func getPartitions(ctx context.Context, db *sql.DB, dbName, tableName string) (m
             GROUP BY PARTITION_NAME
             HAVING COUNT(DISTINCT REGION_ID) > 1
         ) AS regions_to_merge ON p.PARTITION_NAME = regions_to_merge.PARTITION_NAME
-        WHERE
-            p.TABLE_SCHEMA = ? AND p.TABLE_NAME = ?
+        WHERE p.TABLE_SCHEMA = ? AND p.TABLE_NAME = ?
     `
 	rows, err := db.QueryContext(ctx, query, dbName, tableName, dbName, tableName)
 	if err != nil {
@@ -454,16 +473,13 @@ func getAllTables(ctx context.Context, db *sql.DB, dbName string) ([]string, err
 	return tables, nil
 }
 
-func processTable(ctx context.Context, db *sql.DB, dbName, tableName string) tableResult {
-	// Create a new context with a timeout for this specific table.
-	// It's derived from the main context, so Ctrl+C will still work.
+func processTable(ctx context.Context, db *sql.DB, dbName, tableName string, splitSizeMB int64) tableResult {
 	tableCtx, cancel := context.WithTimeout(ctx, *tableTimeout)
 	defer cancel()
 
 	start := time.Now()
 	res := tableResult{tableName: tableName}
 
-	// Check for global cancellation (Ctrl+C) at the beginning.
 	if ctx.Err() != nil {
 		res.err = ctx.Err()
 		res.skipped = true
@@ -510,7 +526,7 @@ func processTable(ctx context.Context, db *sql.DB, dbName, tableName string) tab
 		} else {
 			for id, name := range partitionsToMerge {
 				wg.Add(1)
-				go mergePartitionWorker(tableCtx, &wg, db, *pdAddr, dbName, tableName, name, id)
+				go mergePartitionWorker(tableCtx, &wg, db, dbName, tableName, name, id, splitSizeMB)
 			}
 		}
 	} else {
@@ -524,26 +540,21 @@ func processTable(ctx context.Context, db *sql.DB, dbName, tableName string) tab
 				return res
 			}
 			wg.Add(1)
-			go mergePartitionWorker(tableCtx, &wg, db, *pdAddr, dbName, tableName, tableName, tableID)
+			go mergePartitionWorker(tableCtx, &wg, db, dbName, tableName, tableName, tableID, splitSizeMB)
 		}
 	}
 	wg.Wait()
 	res.elapsed = time.Since(start)
 
-	// Check if the timeout for this table was exceeded.
 	if tableCtx.Err() == context.DeadlineExceeded {
 		log.Error("table processing timed out", zap.String("table", tableName), zap.Duration("timeout", *tableTimeout))
 		res.err = context.DeadlineExceeded
 	} else if tableCtx.Err() != nil {
-		// This could be from the parent context (Ctrl+C).
 		res.err = tableCtx.Err()
 	}
 
-	// Always try to get the 'after' summary to show partial progress, even on timeout.
-	// Use a new background context to prevent this query from failing due to the tableCtx timeout.
 	afterSummary, err := getPartitionSummary(context.Background(), db, dbName, tableName)
 	if err != nil {
-		// Log this as a warning, but don't overwrite the primary error (like timeout).
 		log.Warn("failed to get 'after' summary", zap.String("table", tableName), zap.Error(err))
 	}
 
@@ -557,9 +568,7 @@ func processTable(ctx context.Context, db *sql.DB, dbName, tableName string) tab
 			afterCount = s.regionCount
 		}
 		res.partitions = append(res.partitions, partitionResult{
-			partitionName: s.name,
-			beforeCount:   s.regionCount,
-			afterCount:    afterCount,
+			partitionName: s.name, beforeCount: s.regionCount, afterCount: afterCount,
 		})
 	}
 
@@ -601,6 +610,11 @@ func main() {
 		log.Fatal("failed to connect to database", zap.Error(err))
 	}
 
+	splitSizeMB, err := getSplitSizeMB(ctx, db)
+	if err != nil {
+		log.Fatal("could not retrieve TiKV split size configuration", zap.Error(err))
+	}
+
 	var results []tableResult
 	overallStart := time.Now()
 
@@ -622,7 +636,7 @@ func main() {
 			wg.Add(1)
 			go func(t string) {
 				defer wg.Done()
-				resultsChan <- processTable(ctx, db, *dbName, t)
+				resultsChan <- processTable(ctx, db, *dbName, t, splitSizeMB)
 			}(tbl)
 		}
 
@@ -634,7 +648,7 @@ func main() {
 		}
 
 	} else {
-		results = append(results, processTable(ctx, db, *dbName, *tableName))
+		results = append(results, processTable(ctx, db, *dbName, *tableName, splitSizeMB))
 	}
 
 	log.Info("all processing tasks are complete", zap.Duration("total elapsed", time.Since(overallStart)))
