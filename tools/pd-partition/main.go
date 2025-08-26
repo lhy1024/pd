@@ -48,13 +48,15 @@ type mergePair struct {
 type partitionInfo struct {
 	name        string
 	regionCount int
+	avgSizeMB   float64
 }
 
 // partitionResult holds the combined before/after state for a single partition.
 type partitionResult struct {
-	partitionName string
-	beforeCount   int
-	afterCount    int
+	partitionName  string
+	beforeCount    int
+	afterCount     int
+	avgSizeMBAfter float64
 }
 
 // tableResult holds the result for an entire table's processing.
@@ -130,7 +132,8 @@ func getPartitionSummary(ctx context.Context, db *sql.DB, dbName, tableName stri
 	query := `
         SELECT
             IFNULL(PARTITION_NAME, 'NON_PARTITIONED') AS partition_name,
-            COUNT(DISTINCT REGION_ID) AS region_count
+            COUNT(DISTINCT REGION_ID) AS region_count,
+            IFNULL(AVG(APPROXIMATE_SIZE), 0) AS avg_size_mb
         FROM
             information_schema.TIKV_REGION_STATUS
         WHERE
@@ -150,7 +153,7 @@ func getPartitionSummary(ctx context.Context, db *sql.DB, dbName, tableName stri
 	var results []partitionInfo
 	for rows.Next() {
 		var summary partitionInfo
-		if err := rows.Scan(&summary.name, &summary.regionCount); err != nil {
+		if err := rows.Scan(&summary.name, &summary.regionCount, &summary.avgSizeMB); err != nil {
 			log.Error("failed to scan partition summary row", zap.Error(err))
 			continue
 		}
@@ -170,7 +173,7 @@ func printUnifiedSummary(results []tableResult) {
 	})
 
 	maxWidths := map[string]int{
-		"table": 5, "part": 9, "before": 14, "after": 13, "elapsed": 12, "status": 8,
+		"table": 5, "part": 9, "before": 14, "after": 13, "avg_size_after": 18, "elapsed": 12, "status": 12,
 	}
 
 	for _, r := range results {
@@ -184,17 +187,17 @@ func printUnifiedSummary(results []tableResult) {
 		}
 	}
 
-	headerFmt := fmt.Sprintf("| %%-%ds | %%-%ds | %%-%ds | %%-%ds | %%-%ds | %%-%ds |\n",
-		maxWidths["table"], maxWidths["part"], maxWidths["before"], maxWidths["after"], maxWidths["elapsed"], maxWidths["status"])
-	rowFmt := fmt.Sprintf("| %%-%ds | %%-%ds | %%-%dd | %%-%dd | %%-%ds | %%-%ds |\n",
-		maxWidths["table"], maxWidths["part"], maxWidths["before"], maxWidths["after"], maxWidths["elapsed"], maxWidths["status"])
-	separator := fmt.Sprintf("+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+\n",
+	headerFmt := fmt.Sprintf("| %%-%ds | %%-%ds | %%-%ds | %%-%ds | %%-%ds | %%-%ds | %%-%ds |\n",
+		maxWidths["table"], maxWidths["part"], maxWidths["before"], maxWidths["after"], maxWidths["avg_size_after"], maxWidths["elapsed"], maxWidths["status"])
+	rowFmt := fmt.Sprintf("| %%-%ds | %%-%ds | %%-%dd | %%-%dd | %%-%ds | %%-%ds | %%-%ds |\n",
+		maxWidths["table"], maxWidths["part"], maxWidths["before"], maxWidths["after"], maxWidths["avg_size_after"], maxWidths["elapsed"], maxWidths["status"])
+	separator := fmt.Sprintf("+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+\n",
 		strings.Repeat("-", maxWidths["table"]), strings.Repeat("-", maxWidths["part"]), strings.Repeat("-", maxWidths["before"]),
-		strings.Repeat("-", maxWidths["after"]), strings.Repeat("-", maxWidths["elapsed"]), strings.Repeat("-", maxWidths["status"]))
+		strings.Repeat("-", maxWidths["after"]), strings.Repeat("-", maxWidths["avg_size_after"]), strings.Repeat("-", maxWidths["elapsed"]), strings.Repeat("-", maxWidths["status"]))
 
 	fmt.Print("\n--- Overall Merge Summary ---\n")
 	fmt.Print(separator)
-	fmt.Printf(headerFmt, "Table", "Partition", "Regions Before", "Regions After", "Elapsed (s)", "Status")
+	fmt.Printf(headerFmt, "Table", "Partition", "Regions Before", "Regions After", "Avg Size After(MB)", "Elapsed (s)", "Status")
 	fmt.Print(separator)
 
 	var errors []tableResult
@@ -231,7 +234,8 @@ func printUnifiedSummary(results []tableResult) {
 			if i > 0 {
 				tableName = ""
 			}
-			fmt.Printf(rowFmt, tableName, p.partitionName, p.beforeCount, p.afterCount, elapsedStr, status)
+			avgSizeStr := fmt.Sprintf("%.1f", p.avgSizeMBAfter)
+			fmt.Printf(rowFmt, tableName, p.partitionName, p.beforeCount, p.afterCount, avgSizeStr, elapsedStr, status)
 		}
 	}
 	fmt.Print(separator)
@@ -571,17 +575,21 @@ func processTable(ctx context.Context, db *sql.DB, dbName, tableName string, spl
 		log.Warn("failed to get 'after' summary", zap.String("table", tableName), zap.Error(err))
 	}
 
-	afterMap := make(map[string]int, len(afterSummary))
+	afterMap := make(map[string]partitionInfo)
 	for _, s := range afterSummary {
-		afterMap[s.name] = s.regionCount
+		afterMap[s.name] = s
 	}
 	for _, s := range beforeSummary {
-		afterCount, ok := afterMap[s.name]
+		afterP, ok := afterMap[s.name]
 		if !ok {
-			afterCount = s.regionCount
+			afterP = s
 		}
+
 		res.partitions = append(res.partitions, partitionResult{
-			partitionName: s.name, beforeCount: s.regionCount, afterCount: afterCount,
+			partitionName:  s.name,
+			beforeCount:    s.regionCount,
+			afterCount:     afterP.regionCount,
+			avgSizeMBAfter: afterP.avgSizeMB,
 		})
 	}
 
