@@ -27,8 +27,9 @@ var (
 	caPath    = flag.String("cacert", "", "path of file that contains list of trusted SSL CAs")
 	certPath  = flag.String("cert", "", "path of file that contains X509 certificate in PEM format")
 	keyPath   = flag.String("key", "", "path of file that contains X509 key in PEM format")
-	tableName = flag.String("table", "", "Table to process (partitioned or non-partitioned, required)")
+	tableName = flag.String("table", "", "Table to process (partitioned or non-partitioned)")
 	dbName    = flag.String("db", "test", "Database name")
+	allTables = flag.Bool("all-tables", false, "Process all tables in the specified database")
 )
 
 // client is a pd HTTP client
@@ -70,7 +71,7 @@ func logPartitionSummary(ctx context.Context, db *sql.DB, dbName, tableName stri
     `
 	rows, err := db.QueryContext(ctx, query, dbName, tableName)
 	if err != nil {
-		log.Error("failed to query partition summary", zap.String("table", tableName), zap.Error(err))
+		log.Error("failed to query partition summary", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
 		return
 	}
 	defer rows.Close()
@@ -86,7 +87,7 @@ func logPartitionSummary(ctx context.Context, db *sql.DB, dbName, tableName stri
 	}
 
 	if len(results) == 0 {
-		log.Info("no physical layout information found for table", zap.String("table", tableName))
+		log.Info("no physical layout information found for table", zap.String("db", dbName), zap.String("table", tableName))
 		return
 	}
 
@@ -183,6 +184,7 @@ func getRegionsInRange(ctx context.Context, startKeyHex, endKeyHex string) (*pdH
 func mergePartitionWorker(ctx context.Context, wg *sync.WaitGroup, db *sql.DB, pdAddr, dbName, tableName, partitionName string, partitionID int64) {
 	defer wg.Done()
 	logFields := []zap.Field{
+		zap.String("db", dbName),
 		zap.String("table", tableName),
 		zap.String("partition", partitionName),
 		zap.Int64("partition_id", partitionID),
@@ -358,11 +360,33 @@ func getTableInfo(ctx context.Context, db *sql.DB, dbName, tableName string) (ta
 	return
 }
 
+func getAllTables(ctx context.Context, db *sql.DB, dbName string) ([]string, error) {
+	query := `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?`
+	rows, err := db.QueryContext(ctx, query, dbName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all tables: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return nil, err
+		}
+		tables = append(tables, tableName)
+	}
+	return tables, nil
+}
+
 func main() {
 	// parse command line arguments
 	flag.Parse()
-	if *tableName == "" {
-		log.Fatal("required flag not provided: -table")
+	if *allTables && *tableName != "" {
+		log.Fatal("cannot specify both -table and -all-tables flags")
+	}
+	if !*allTables && *tableName == "" {
+		log.Fatal("a required flag is not provided: use -table or -all-tables")
 	}
 
 	// initialize clients
@@ -379,50 +403,70 @@ func main() {
 		log.Fatal("failed to connect to database", zap.Error(err))
 	}
 
-	exists, err := tableExists(ctx, db, *dbName, *tableName)
+	if *allTables {
+		tables, err := getAllTables(ctx, db, *dbName)
+		if err != nil {
+			log.Fatal("failed to get list of all tables", zap.Error(err))
+		}
+		log.Info("starting to process all tables in database", zap.String("db", *dbName), zap.Int("count", len(tables)))
+		for _, table := range tables {
+			processTable(ctx, db, *dbName, table)
+		}
+		log.Info("all tables processed")
+	} else {
+		processTable(ctx, db, *dbName, *tableName)
+	}
+}
+
+func processTable(ctx context.Context, db *sql.DB, dbName, tableName string) {
+	exists, err := tableExists(ctx, db, dbName, tableName)
 	if err != nil {
-		log.Fatal("failed to check if table exists", zap.Error(err))
+		log.Error("failed to check if table exists", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
+		return
 	}
 	if !exists {
-		log.Info("table does not exist", zap.String("db", *dbName), zap.String("table", *tableName))
+		log.Info("table does not exist, skipping", zap.String("db", dbName), zap.String("table", tableName))
 		return
 	}
 
-	logPartitionSummary(ctx, db, *dbName, *tableName)
+	logPartitionSummary(ctx, db, dbName, tableName)
 	start := time.Now()
-	isPartitioned, err := isPartitionedTable(ctx, db, *dbName, *tableName)
+	isPartitioned, err := isPartitionedTable(ctx, db, dbName, tableName)
 	if err != nil {
-		log.Fatal("failed to check if table is partitioned", zap.Error(err))
+		log.Error("failed to check if table is partitioned", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
+		return
 	}
 	var wg sync.WaitGroup
 	if isPartitioned {
-		log.Info("table is partitioned")
-		partitions, err := getPartitions(ctx, db, *dbName, *tableName)
+		log.Info("table is partitioned", zap.String("db", dbName), zap.String("table", tableName))
+		partitions, err := getPartitions(ctx, db, dbName, tableName)
 		if err != nil {
-			log.Fatal("error getting partitions to process", zap.Error(err))
+			log.Error("error getting partitions to process", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
+			return
 		}
 		if len(partitions) == 0 {
-			log.Info("no partitions to process")
+			log.Info("no partitions with multiple regions to process", zap.String("db", dbName), zap.String("table", tableName))
 			return
 		}
 		for id, name := range partitions {
 			wg.Add(1)
-			go mergePartitionWorker(ctx, &wg, db, *pdAddr, *dbName, *tableName, name, id)
+			go mergePartitionWorker(ctx, &wg, db, *pdAddr, dbName, tableName, name, id)
 		}
 	} else {
-		log.Info("table is not partitioned")
-		tableID, regionCount, err := getTableInfo(ctx, db, *dbName, *tableName)
+		log.Info("table is not partitioned", zap.String("db", dbName), zap.String("table", tableName))
+		tableID, regionCount, err := getTableInfo(ctx, db, dbName, tableName)
 		if err != nil {
-			log.Fatal("failed to get table info", zap.Error(err))
+			log.Error("failed to get table info", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
+			return
 		}
 		if regionCount <= 1 {
-			log.Info("no more regions to process")
+			log.Info("no more regions to process for this table", zap.String("db", dbName), zap.String("table", tableName))
 			return
 		}
 		wg.Add(1)
-		go mergePartitionWorker(ctx, &wg, db, *pdAddr, *dbName, *tableName, *tableName, tableID)
+		go mergePartitionWorker(ctx, &wg, db, *pdAddr, dbName, tableName, tableName, tableID)
 	}
 	wg.Wait()
-	log.Info("merge complete", zap.Duration("elapsed", time.Since(start)))
-	logPartitionSummary(ctx, db, *dbName, *tableName)
+	log.Info("merge complete for table", zap.String("db", dbName), zap.String("table", tableName), zap.Duration("elapsed", time.Since(start)))
+	logPartitionSummary(ctx, db, dbName, tableName)
 }
