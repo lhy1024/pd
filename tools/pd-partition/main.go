@@ -8,9 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -22,14 +24,15 @@ import (
 )
 
 var (
-	pdAddr    = flag.String("pd", "127.0.0.1:2379", "pd address")
-	dsn       = flag.String("dsn", "root:@tcp(127.0.0.1:4000)/test?parseTime=true", "Database Source Name")
-	caPath    = flag.String("cacert", "", "path of file that contains list of trusted SSL CAs")
-	certPath  = flag.String("cert", "", "path of file that contains X509 certificate in PEM format")
-	keyPath   = flag.String("key", "", "path of file that contains X509 key in PEM format")
-	tableName = flag.String("table", "", "Table to process (partitioned or non-partitioned)")
-	dbName    = flag.String("db", "test", "Database name")
-	allTables = flag.Bool("all-tables", false, "Process all tables in the specified database")
+	pdAddr       = flag.String("pd", "127.0.0.1:2379", "pd address")
+	dsn          = flag.String("dsn", "root:@tcp(127.0.0.1:4000)/test?parseTime=true", "Database Source Name")
+	caPath       = flag.String("cacert", "", "path of file that contains list of trusted SSL CAs")
+	certPath     = flag.String("cert", "", "path of file that contains X509 certificate in PEM format")
+	keyPath      = flag.String("key", "", "path of file that contains X509 key in PEM format")
+	tableName    = flag.String("table", "", "Table to process (partitioned or non-partitioned)")
+	dbName       = flag.String("db", "test", "Database name")
+	allTables    = flag.Bool("all-tables", false, "Process all tables in the specified database")
+	tableTimeout = flag.Duration("timeout-per-table", 10*time.Minute, "Timeout for processing a single table (e.g., 15m, 1h)")
 )
 
 // client is a pd HTTP client
@@ -40,9 +43,26 @@ type mergePair struct {
 	TargetID int64
 }
 
-type partitionSummary struct {
+// partitionInfo holds the raw data from the database for a partition.
+type partitionInfo struct {
 	name        string
 	regionCount int
+}
+
+// partitionResult holds the combined before/after state for a single partition.
+type partitionResult struct {
+	partitionName string
+	beforeCount   int
+	afterCount    int
+}
+
+// tableResult holds the result for an entire table's processing.
+type tableResult struct {
+	tableName  string
+	partitions []partitionResult
+	elapsed    time.Duration
+	skipped    bool
+	err        error
 }
 
 func tableExists(ctx context.Context, db *sql.DB, dbName, tableName string) (bool, error) {
@@ -55,7 +75,7 @@ func tableExists(ctx context.Context, db *sql.DB, dbName, tableName string) (boo
 	return count > 0, nil
 }
 
-func logPartitionSummary(ctx context.Context, db *sql.DB, dbName, tableName string) {
+func getPartitionSummary(ctx context.Context, db *sql.DB, dbName, tableName string) ([]partitionInfo, error) {
 	query := `
         SELECT
             IFNULL(PARTITION_NAME, 'NON_PARTITIONED') AS partition_name,
@@ -72,42 +92,105 @@ func logPartitionSummary(ctx context.Context, db *sql.DB, dbName, tableName stri
 	rows, err := db.QueryContext(ctx, query, dbName, tableName)
 	if err != nil {
 		log.Error("failed to query partition summary", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
-	var results []partitionSummary
+	var results []partitionInfo
 	for rows.Next() {
-		var summary partitionSummary
+		var summary partitionInfo
 		if err := rows.Scan(&summary.name, &summary.regionCount); err != nil {
 			log.Error("failed to scan partition summary row", zap.Error(err))
 			continue
 		}
 		results = append(results, summary)
 	}
+	return results, nil
+}
 
+func printUnifiedSummary(results []tableResult) {
 	if len(results) == 0 {
-		log.Info("no physical layout information found for table", zap.String("db", dbName), zap.String("table", tableName))
+		log.Info("No tables were processed.")
 		return
 	}
 
-	maxWidths := map[string]int{"partition_name": 15, "region_count": 12}
+	// Sort results by table name for consistent output
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].tableName < results[j].tableName
+	})
+
+	maxWidths := map[string]int{
+		"table":   5,
+		"part":    9,
+		"before":  14,
+		"after":   13,
+		"elapsed": 12,
+		"status":  8,
+	}
+
 	for _, r := range results {
-		if len(r.name) > maxWidths["partition_name"] {
-			maxWidths["partition_name"] = len(r.name)
+		if len(r.tableName) > maxWidths["table"] {
+			maxWidths["table"] = len(r.tableName)
+		}
+		for _, p := range r.partitions {
+			if len(p.partitionName) > maxWidths["part"] {
+				maxWidths["part"] = len(p.partitionName)
+			}
 		}
 	}
-	format := fmt.Sprintf("| %%-%ds | %%-%ds |\n", maxWidths["partition_name"], maxWidths["region_count"])
-	separator := fmt.Sprintf("+-%s-+-%s-+\n", strings.Repeat("-", maxWidths["partition_name"]), strings.Repeat("-", maxWidths["region_count"]))
 
-	fmt.Printf("\nPhysical Layout Summary for Table: %s.%s\n", dbName, tableName)
+	headerFmt := fmt.Sprintf("| %%-%ds | %%-%ds | %%-%ds | %%-%ds | %%-%ds | %%-%ds |\n",
+		maxWidths["table"], maxWidths["part"], maxWidths["before"], maxWidths["after"], maxWidths["elapsed"], maxWidths["status"])
+	rowFmt := fmt.Sprintf("| %%-%ds | %%-%ds | %%-%dd | %%-%dd | %%-%ds | %%-%ds |\n",
+		maxWidths["table"], maxWidths["part"], maxWidths["before"], maxWidths["after"], maxWidths["elapsed"], maxWidths["status"])
+	separator := fmt.Sprintf("+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+\n",
+		strings.Repeat("-", maxWidths["table"]), strings.Repeat("-", maxWidths["part"]), strings.Repeat("-", maxWidths["before"]),
+		strings.Repeat("-", maxWidths["after"]), strings.Repeat("-", maxWidths["elapsed"]), strings.Repeat("-", maxWidths["status"]))
+
+	fmt.Print("\n--- Overall Merge Summary ---\n")
 	fmt.Print(separator)
-	fmt.Printf(format, "partition_name", "region_count")
+	fmt.Printf(headerFmt, "Table", "Partition", "Regions Before", "Regions After", "Elapsed (s)", "Status")
 	fmt.Print(separator)
+
+	var errors []tableResult
 	for _, r := range results {
-		fmt.Printf(format, r.name, fmt.Sprintf("%d", r.regionCount))
+		if r.err != nil {
+			// Don't treat cancellation or timeout as a standalone error row, show status in-line.
+			if r.err == context.Canceled || r.err == context.DeadlineExceeded {
+				// Handled below
+			} else {
+				errors = append(errors, r)
+				continue
+			}
+		}
+
+		status := "Success"
+		if r.skipped {
+			status = "Skipped"
+		}
+		if r.err == context.DeadlineExceeded {
+			status = "Timeout"
+		} else if r.err == context.Canceled {
+			status = "Canceled"
+		}
+
+		elapsedStr := fmt.Sprintf("%.2f", r.elapsed.Seconds())
+		for i, p := range r.partitions {
+			tableName := r.tableName
+			if i > 0 {
+				tableName = ""
+			}
+			fmt.Printf(rowFmt, tableName, p.partitionName, p.beforeCount, p.afterCount, elapsedStr, status)
+		}
 	}
 	fmt.Print(separator)
+
+	if len(errors) > 0 {
+		fmt.Print("\n--- Other Errors ---\n")
+		for _, r := range errors {
+			log.Error("failed to process table", zap.String("table", r.tableName), zap.Error(r.err))
+		}
+	}
 }
 
 func constructTableBoundaryKey(tableID int64) string {
@@ -129,8 +212,7 @@ func newPDHttpClient() pdHttp.Client {
 		}
 		tlsConfig, err = tlsInfo.ClientConfig()
 		if err != nil {
-			log.Error("failed to create TLS config", zap.Error(err))
-			os.Exit(1)
+			log.Fatal("failed to create TLS config", zap.Error(err))
 		}
 	}
 	url := ModifyURLScheme(*pdAddr, tlsConfig)
@@ -347,16 +429,9 @@ func isPartitionedTable(ctx context.Context, db *sql.DB, dbName, tableName strin
 	return count > 0, nil
 }
 
-func getTableInfo(ctx context.Context, db *sql.DB, dbName, tableName string) (tableID int64, regionCount int, err error) {
-	query := `
-		SELECT t.TIDB_TABLE_ID, COUNT(DISTINCT rs.REGION_ID)
-		FROM information_schema.TABLES t
-		LEFT JOIN information_schema.TIKV_REGION_STATUS rs
-			ON t.TABLE_SCHEMA = rs.DB_NAME AND t.TABLE_NAME = rs.TABLE_NAME
-		WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?
-		GROUP BY t.TIDB_TABLE_ID
-	`
-	err = db.QueryRowContext(ctx, query, dbName, tableName).Scan(&tableID, &regionCount)
+func getTableInfo(ctx context.Context, db *sql.DB, dbName, tableName string) (tableID int64, err error) {
+	query := `SELECT TIDB_TABLE_ID FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`
+	err = db.QueryRowContext(ctx, query, dbName, tableName).Scan(&tableID)
 	return
 }
 
@@ -379,8 +454,119 @@ func getAllTables(ctx context.Context, db *sql.DB, dbName string) ([]string, err
 	return tables, nil
 }
 
+func processTable(ctx context.Context, db *sql.DB, dbName, tableName string) tableResult {
+	// Create a new context with a timeout for this specific table.
+	// It's derived from the main context, so Ctrl+C will still work.
+	tableCtx, cancel := context.WithTimeout(ctx, *tableTimeout)
+	defer cancel()
+
+	start := time.Now()
+	res := tableResult{tableName: tableName}
+
+	// Check for global cancellation (Ctrl+C) at the beginning.
+	if ctx.Err() != nil {
+		res.err = ctx.Err()
+		res.skipped = true
+		return res
+	}
+
+	exists, err := tableExists(tableCtx, db, dbName, tableName)
+	if err != nil {
+		res.err = fmt.Errorf("failed to check if table exists: %w", err)
+		return res
+	}
+	if !exists {
+		res.err = fmt.Errorf("table does not exist")
+		return res
+	}
+
+	beforeSummary, err := getPartitionSummary(tableCtx, db, dbName, tableName)
+	if err != nil {
+		res.err = fmt.Errorf("failed to get 'before' summary: %w", err)
+		return res
+	}
+	if len(beforeSummary) == 0 {
+		res.skipped = true
+		res.elapsed = time.Since(start)
+		res.partitions = []partitionResult{{partitionName: "N/A", beforeCount: 0, afterCount: 0}}
+		return res
+	}
+
+	isPartitioned, err := isPartitionedTable(tableCtx, db, dbName, tableName)
+	if err != nil {
+		res.err = fmt.Errorf("failed to check if table is partitioned: %w", err)
+		return res
+	}
+	var wg sync.WaitGroup
+	if isPartitioned {
+		log.Info("table is partitioned", zap.String("db", dbName), zap.String("table", tableName))
+		partitionsToMerge, err := getPartitions(tableCtx, db, dbName, tableName)
+		if err != nil {
+			res.err = fmt.Errorf("error getting partitions to process: %w", err)
+			return res
+		}
+		if len(partitionsToMerge) == 0 {
+			res.skipped = true
+		} else {
+			for id, name := range partitionsToMerge {
+				wg.Add(1)
+				go mergePartitionWorker(tableCtx, &wg, db, *pdAddr, dbName, tableName, name, id)
+			}
+		}
+	} else {
+		log.Info("table is not partitioned", zap.String("db", dbName), zap.String("table", tableName))
+		if beforeSummary[0].regionCount <= 1 {
+			res.skipped = true
+		} else {
+			tableID, err := getTableInfo(tableCtx, db, dbName, tableName)
+			if err != nil {
+				res.err = fmt.Errorf("failed to get table info: %w", err)
+				return res
+			}
+			wg.Add(1)
+			go mergePartitionWorker(tableCtx, &wg, db, *pdAddr, dbName, tableName, tableName, tableID)
+		}
+	}
+	wg.Wait()
+	res.elapsed = time.Since(start)
+
+	// Check if the timeout for this table was exceeded.
+	if tableCtx.Err() == context.DeadlineExceeded {
+		log.Error("table processing timed out", zap.String("table", tableName), zap.Duration("timeout", *tableTimeout))
+		res.err = context.DeadlineExceeded
+	} else if tableCtx.Err() != nil {
+		// This could be from the parent context (Ctrl+C).
+		res.err = tableCtx.Err()
+	}
+
+	// Always try to get the 'after' summary to show partial progress, even on timeout.
+	// Use a new background context to prevent this query from failing due to the tableCtx timeout.
+	afterSummary, err := getPartitionSummary(context.Background(), db, dbName, tableName)
+	if err != nil {
+		// Log this as a warning, but don't overwrite the primary error (like timeout).
+		log.Warn("failed to get 'after' summary", zap.String("table", tableName), zap.Error(err))
+	}
+
+	afterMap := make(map[string]int, len(afterSummary))
+	for _, s := range afterSummary {
+		afterMap[s.name] = s.regionCount
+	}
+	for _, s := range beforeSummary {
+		afterCount, ok := afterMap[s.name]
+		if !ok {
+			afterCount = s.regionCount
+		}
+		res.partitions = append(res.partitions, partitionResult{
+			partitionName: s.name,
+			beforeCount:   s.regionCount,
+			afterCount:    afterCount,
+		})
+	}
+
+	return res
+}
+
 func main() {
-	// parse command line arguments
 	flag.Parse()
 	if *allTables && *tableName != "" {
 		log.Fatal("cannot specify both -table and -all-tables flags")
@@ -389,10 +575,18 @@ func main() {
 		log.Fatal("a required flag is not provided: use -table or -all-tables")
 	}
 
-	// initialize clients
 	client = newPDHttpClient()
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		log.Warn("cancellation signal received, stopping workers gracefully...")
+		cancel()
+	}()
 
 	db, err := sql.Open("mysql", *dsn)
 	if err != nil {
@@ -400,73 +594,49 @@ func main() {
 	}
 	defer db.Close()
 	if err := db.PingContext(ctx); err != nil {
+		if ctx.Err() != nil {
+			log.Warn("database ping cancelled.")
+			return
+		}
 		log.Fatal("failed to connect to database", zap.Error(err))
 	}
+
+	var results []tableResult
+	overallStart := time.Now()
 
 	if *allTables {
 		tables, err := getAllTables(ctx, db, *dbName)
 		if err != nil {
+			if ctx.Err() != nil {
+				log.Warn("getting table list was cancelled.")
+				return
+			}
 			log.Fatal("failed to get list of all tables", zap.Error(err))
 		}
 		log.Info("starting to process all tables in database", zap.String("db", *dbName), zap.Int("count", len(tables)))
-		for _, table := range tables {
-			processTable(ctx, db, *dbName, table)
-		}
-		log.Info("all tables processed")
-	} else {
-		processTable(ctx, db, *dbName, *tableName)
-	}
-}
 
-func processTable(ctx context.Context, db *sql.DB, dbName, tableName string) {
-	exists, err := tableExists(ctx, db, dbName, tableName)
-	if err != nil {
-		log.Error("failed to check if table exists", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
-		return
-	}
-	if !exists {
-		log.Info("table does not exist, skipping", zap.String("db", dbName), zap.String("table", tableName))
-		return
-	}
+		var wg sync.WaitGroup
+		resultsChan := make(chan tableResult, len(tables))
 
-	logPartitionSummary(ctx, db, dbName, tableName)
-	start := time.Now()
-	isPartitioned, err := isPartitionedTable(ctx, db, dbName, tableName)
-	if err != nil {
-		log.Error("failed to check if table is partitioned", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
-		return
-	}
-	var wg sync.WaitGroup
-	if isPartitioned {
-		log.Info("table is partitioned", zap.String("db", dbName), zap.String("table", tableName))
-		partitions, err := getPartitions(ctx, db, dbName, tableName)
-		if err != nil {
-			log.Error("error getting partitions to process", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
-			return
-		}
-		if len(partitions) == 0 {
-			log.Info("no partitions with multiple regions to process", zap.String("db", dbName), zap.String("table", tableName))
-			return
-		}
-		for id, name := range partitions {
+		for _, tbl := range tables {
 			wg.Add(1)
-			go mergePartitionWorker(ctx, &wg, db, *pdAddr, dbName, tableName, name, id)
+			go func(t string) {
+				defer wg.Done()
+				resultsChan <- processTable(ctx, db, *dbName, t)
+			}(tbl)
 		}
+
+		wg.Wait()
+		close(resultsChan)
+
+		for res := range resultsChan {
+			results = append(results, res)
+		}
+
 	} else {
-		log.Info("table is not partitioned", zap.String("db", dbName), zap.String("table", tableName))
-		tableID, regionCount, err := getTableInfo(ctx, db, dbName, tableName)
-		if err != nil {
-			log.Error("failed to get table info", zap.String("db", dbName), zap.String("table", tableName), zap.Error(err))
-			return
-		}
-		if regionCount <= 1 {
-			log.Info("no more regions to process for this table", zap.String("db", dbName), zap.String("table", tableName))
-			return
-		}
-		wg.Add(1)
-		go mergePartitionWorker(ctx, &wg, db, *pdAddr, dbName, tableName, tableName, tableID)
+		results = append(results, processTable(ctx, db, *dbName, *tableName))
 	}
-	wg.Wait()
-	log.Info("merge complete for table", zap.String("db", dbName), zap.String("table", tableName), zap.Duration("elapsed", time.Since(start)))
-	logPartitionSummary(ctx, db, dbName, tableName)
+
+	log.Info("all processing tasks are complete", zap.Duration("total elapsed", time.Since(overallStart)))
+	printUnifiedSummary(results)
 }
