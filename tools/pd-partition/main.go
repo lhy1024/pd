@@ -199,19 +199,30 @@ func printUnifiedSummary(results []tableResult) {
 
 	var errors []tableResult
 	for _, r := range results {
-		if r.err != nil && r.err != context.Canceled && r.err != context.DeadlineExceeded {
-			errors = append(errors, r)
-			continue
-		}
+		var status string
 
-		status := "Success"
-		if r.skipped {
-			status = "Skipped"
-		}
 		if r.err == context.DeadlineExceeded {
 			status = "Timeout"
 		} else if r.err == context.Canceled {
 			status = "Canceled"
+		} else if r.err != nil {
+			errors = append(errors, r)
+			continue
+		} else if r.skipped {
+			status = "Skipped"
+		} else {
+			var regionsChanged bool
+			for _, p := range r.partitions {
+				if p.beforeCount != p.afterCount {
+					regionsChanged = true
+					break
+				}
+			}
+			if regionsChanged {
+				status = "Success"
+			} else {
+				status = "No Action"
+			}
 		}
 
 		elapsedStr := fmt.Sprintf("%.2f", r.elapsed.Seconds())
