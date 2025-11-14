@@ -49,9 +49,6 @@ type Group struct {
 	// VoterStoreIDs indicates which stores Voters should be on.
 	VoterStoreIDs []uint64 `json:"voter_store_ids"`
 	// TODO: LearnerStoreIDs
-
-	// ForceLeader indicates whether to force the leader to be on the LeaderStoreID.
-	ForceLeader bool `json:"force_leader"`
 }
 
 // Clone returns a deep copy of the Group.
@@ -75,8 +72,8 @@ type GroupState struct {
 	LeaderStoreID uint64 `json:"leader_store_id"`
 	// VoterStoreIDs indicates which stores Voters should be on.
 	VoterStoreIDs []uint64 `json:"voter_store_ids"`
-	// RangeCount indicates how many key ranges are associated with this group.
-	RangeCount int `json:"range_count"`
+	// LabelCount indicates how many key ranges are associated with this group.
+	LabelCount int `json:"label_count"`
 	// RegionCount indicates how many Regions are currently in the affinity state.
 	RegionCount int `json:"region_count"`
 	// RegionVotersReadyCount indicates how many Regions have all Voter peers in the correct stores.

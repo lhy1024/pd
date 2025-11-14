@@ -19,6 +19,7 @@ import (
 	"regexp"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/pingcap/errors"
 
 	"github.com/tikv/pd/pkg/errs"
@@ -33,7 +34,6 @@ func RegisterAffinity(r *gin.RouterGroup) {
 	router := r.Group("affinity-groups")
 	router.Use(middlewares.BootstrapChecker())
 	router.POST("", CreateAffinityGroups)
-	router.PUT("/:group_name", UpdateAffinityGroup)
 	router.DELETE("/:group_name", DeleteAffinityGroup)
 	router.GET("", GetAllAffinityGroups)
 	router.GET("/:group_name", GetAffinityGroup)
@@ -55,22 +55,15 @@ type CreateAffinityGroupsRequest struct {
 
 // CreateAffinityGroupOutput defines the output for a single group in the creation response.
 type CreateAffinityGroupOutput struct {
-	Voters      []uint64 `json:"voters"`
-	Leader      uint64   `json:"leader"`
-	RangeCount  int      `json:"range_count"`
-	RegionCount int      `json:"region_count"`
+	VoterStoreIDs []uint64 `json:"voter_store_ids"`
+	LeaderStoreID uint64   `json:"leader_store_id"`
+	LabelCount    int      `json:"label_count"`
+	RegionCount   int      `json:"region_count"`
 }
 
 // CreateAffinityGroupsResponse defines the success response for the POST request.
 type CreateAffinityGroupsResponse struct {
 	AffinityGroups map[string]CreateAffinityGroupOutput `json:"affinity_groups"`
-}
-
-// UpdateAffinityGroupRequest defines the body for the PUT request.
-type UpdateAffinityGroupRequest struct {
-	Leader      uint64   `json:"leader"`
-	Voters      []uint64 `json:"voters"`
-	ForceLeader bool     `json:"force_leader,omitempty"`
 }
 
 // GetAllAffinityGroupsResponse defines the response for listing all groups.
@@ -136,6 +129,9 @@ func CreateAffinityGroups(c *gin.Context) {
 		return
 	}
 
+	// label the regions affected by the new affinity groups
+	// TODO: use server label manager or a internal manager
+
 	// Convert internal manager output to API output.
 	resp := CreateAffinityGroupsResponse{
 		AffinityGroups: make(map[string]CreateAffinityGroupOutput, len(req.AffinityGroups)),
@@ -146,61 +142,13 @@ func CreateAffinityGroups(c *gin.Context) {
 			state = &affinity.GroupState{}
 		}
 		resp.AffinityGroups[group.ID] = CreateAffinityGroupOutput{
-			Voters:      group.VoterStoreIDs,
-			Leader:      group.LeaderStoreID,
-			RangeCount:  state.RangeCount,
-			RegionCount: state.RegionCount,
+			VoterStoreIDs: group.VoterStoreIDs,
+			LeaderStoreID: group.LeaderStoreID,
+			LabelCount:    state.LabelCount,
+			RegionCount:   state.RegionCount,
 		}
 	}
 	c.IndentedJSON(http.StatusOK, resp)
-}
-
-// UpdateAffinityGroup manually updates an affinity group's voter/leader settings.
-// @Tags     affinity-groups
-// @Summary  Manually update an affinity group's voter and leader settings (internal use).
-// @Param    group_name  path  string                    true  "The name of the affinity group"
-// @Param    body        body  UpdateAffinityGroupRequest  true  "The new voter and leader settings"
-// @Produce  json
-// @Success  200  {string}  string  "Affinity group updated successfully."
-// @Failure  400  {string}  string  "The input is invalid."
-// @Failure  404  {string}  string  "Affinity group not found."
-// @Failure  500  {string}  string  "PD server failed to proceed the request."
-// @Router   /affinity-groups/{group_name} [put]
-func UpdateAffinityGroup(c *gin.Context) {
-	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
-	manager, err := svr.GetAffinityManager()
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	groupName := c.Param("group_name")
-	req := &UpdateAffinityGroupRequest{}
-	err = c.BindJSON(req)
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause())
-		return
-	}
-
-	// Get a clone of the persisted group
-	group := manager.GetAffinityGroup(groupName)
-	if group == nil {
-		c.AbortWithStatusJSON(http.StatusNotFound, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupName))
-		return
-	}
-
-	// Update fields based on the request
-	group.LeaderStoreID = req.Leader
-	group.VoterStoreIDs = req.Voters
-	group.ForceLeader = req.ForceLeader
-
-	// Save the updated group back to storage and update in-memory cache
-	err = manager.SaveAffinityGroup(group)
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
-		return
-	}
-	c.JSON(http.StatusOK, "Affinity group updated successfully.")
 }
 
 // DeleteAffinityGroup deletes a specific affinity group by name.
