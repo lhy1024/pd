@@ -2172,9 +2172,6 @@ func (s *Server) GetAffinityManager() (*affinity.Manager, error) {
 	if rc == nil {
 		return nil, errs.ErrNotBootstrapped.GenWithStackByArgs()
 	}
-	if !rc.GetOpts().IsAffinitySchedulingEnabled() {
-		return nil, errs.ErrAffinityDisabled
-	}
 	manager := rc.GetAffinityManager()
 	if manager == nil {
 		return nil, errs.ErrAffinityDisabled

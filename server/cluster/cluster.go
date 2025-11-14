@@ -385,11 +385,9 @@ func (c *RaftCluster) Start(s Server, bootstrap bool) (err error) {
 		return err
 	}
 
-	if c.opt.IsAffinitySchedulingEnabled() {
-		err := c.affinityManager.Initialize()
-		if err != nil {
-			return err
-		}
+	err = c.affinityManager.Initialize()
+	if err != nil {
+		return err
 	}
 
 	if !c.IsServiceIndependent(constant.SchedulingServiceName) {
