@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -137,13 +138,14 @@ func (m *Manager) Initialize() error {
 				zap.String("key", k),
 				zap.Error(errs.ErrLoadRule.Wrap(err)))
 		}
-		m.groups[group.ID] = &GroupInfo{Group: *group}
+		m.groups[group.ID] = &GroupInfo{Group: *group, Effect: true}
 	})
 	if err != nil {
 		return err
 	}
 
 	m.initialized = true
+	m.startHealthCheckLoop()
 	log.Info("affinity manager initialized", zap.Int("group-count", len(m.groups)))
 	return nil
 }
@@ -270,7 +272,7 @@ func (m *Manager) SaveAffinityGroup(group *Group) error {
 		// TODO: Do we need to overwrite runtime info?
 		info.Group = *group
 	} else {
-		m.groups[group.ID] = &GroupInfo{Group: *group}
+		m.groups[group.ID] = &GroupInfo{Group: *group, Effect: true}
 	}
 
 	log.Info("affinity group added/updated", zap.String("group", group.String()))
@@ -307,7 +309,7 @@ func (m *Manager) SaveAffinityGroups(groups []*Group) error {
 			// TODO: Do we need to overwrite runtime info?
 			info.Group = *group
 		} else {
-			m.groups[group.ID] = &GroupInfo{Group: *group}
+			m.groups[group.ID] = &GroupInfo{Group: *group, Effect: true}
 		}
 
 		log.Info("affinity group added/updated", zap.String("group", group.String()))
@@ -347,4 +349,111 @@ func (m *Manager) DeleteAffinityGroup(id string) error {
 
 	log.Info("affinity group deleted", zap.String("group-id", id))
 	return nil
+}
+
+const (
+	// defaultHealthCheckInterval is the default interval for checking store health.
+	defaultHealthCheckInterval = 10 * time.Second
+)
+
+// startHealthCheckLoop starts a goroutine to periodically check store health and invalidate groups with unhealthy stores.
+func (m *Manager) startHealthCheckLoop() {
+	ticker := time.NewTicker(defaultHealthCheckInterval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.ctx.Done():
+				log.Info("affinity manager health check loop stopped")
+				return
+			case <-ticker.C:
+				m.checkStoreHealth()
+			}
+		}
+	}()
+	log.Info("affinity manager health check loop started", zap.Duration("interval", defaultHealthCheckInterval))
+}
+
+// checkStoreHealth checks the health status of stores and invalidates groups with unhealthy stores.
+func (m *Manager) checkStoreHealth() {
+	m.Lock()
+	defer m.Unlock()
+
+	if !m.initialized {
+		return
+	}
+
+	for groupID, groupInfo := range m.groups {
+		// Check if any store in the group is unhealthy
+		unhealthyStores := m.getUnhealthyStores(groupInfo)
+
+		if len(unhealthyStores) > 0 {
+			// If the group was previously in effect and now has unhealthy stores, invalidate it
+			if groupInfo.Effect {
+				groupInfo.Effect = false
+				log.Warn("affinity group invalidated due to unhealthy stores",
+					zap.String("group-id", groupID),
+					zap.Uint64s("unhealthy-stores", unhealthyStores))
+			}
+		} else {
+			// If all stores are healthy and the group was previously invalidated, restore it
+			if !groupInfo.Effect {
+				groupInfo.Effect = true
+				log.Info("affinity group restored to effect state",
+					zap.String("group-id", groupID))
+			}
+		}
+	}
+}
+
+// getUnhealthyStores returns the list of unhealthy store IDs in the group.
+func (m *Manager) getUnhealthyStores(groupInfo *GroupInfo) []uint64 {
+	var unhealthyStores []uint64
+	unhealthyStoreSet := make(map[uint64]struct{})
+
+	isStoreUnhealthy := func(storeID uint64) bool {
+		store := m.storeSetInformer.GetStore(storeID)
+		if store == nil {
+			return true
+		}
+		// Check if store is removed or physically destroyed
+		if store.IsRemoved() || store.IsPhysicallyDestroyed() {
+			return true
+		}
+		// Check if store is removing
+		if store.IsRemoving() {
+			return true
+		}
+		// Use IsUnhealthy (10min) to avoid frequent state flapping
+		// IsUnhealthy: DownTime > 10min (storeUnhealthyDuration)
+		// IsDisconnected: DownTime > 20s (storeDisconnectDuration) - too sensitive
+		if store.IsUnhealthy() {
+			return true
+		}
+		// Note: We intentionally do NOT check:
+		// - IsDisconnected(): Too sensitive (20s), would cause frequent flapping
+		// - IsSlow(): Performance issue, not availability issue
+		// - IsLowSpace(): Not mentioned in design doc, needs separate consideration
+		// TODO: maybe IsLowSpace() should also be considered in the future
+		return false
+	}
+
+	// Check leader store
+	if isStoreUnhealthy(groupInfo.LeaderStoreID) {
+		unhealthyStoreSet[groupInfo.LeaderStoreID] = struct{}{}
+	}
+
+	// Check voter stores
+	for _, voterStoreID := range groupInfo.VoterStoreIDs {
+		if isStoreUnhealthy(voterStoreID) {
+			unhealthyStoreSet[voterStoreID] = struct{}{}
+		}
+	}
+
+	// Convert set to slice
+	for storeID := range unhealthyStoreSet {
+		unhealthyStores = append(unhealthyStores, storeID)
+	}
+
+	return unhealthyStores
 }
