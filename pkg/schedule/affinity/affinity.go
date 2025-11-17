@@ -198,7 +198,7 @@ func (m *Manager) GetAffinityGroup(id string) *Group {
 	m.RLock()
 	defer m.RUnlock()
 	if info, ok := m.groups[id]; ok {
-		return info.Clone() // Return a clone to prevent concurrent modification
+		return info.Clone() // Return a clone of Group to prevent concurrent modification
 	}
 	return nil
 }
@@ -209,7 +209,7 @@ func (m *Manager) GetAllAffinityGroups() []*Group {
 	defer m.RUnlock()
 	groups := make([]*Group, 0, len(m.groups))
 	for _, info := range m.groups {
-		groups = append(groups, info.Clone())
+		groups = append(groups, info.Clone()) // Clone Group, not GroupInfo
 	}
 	// Sort by ID for deterministic output
 	sort.Slice(groups, func(i, j int) bool {
@@ -224,6 +224,63 @@ func (m *Manager) IsGroupExist(id string) bool {
 	defer m.RUnlock()
 	_, ok := m.groups[id]
 	return ok
+}
+
+// GetGroups returns the internal groups map.
+// Used for testing only.
+func (m *Manager) GetGroups() map[string]*GroupInfo {
+	m.RLock()
+	defer m.RUnlock()
+	return m.groups
+}
+
+// SetRegionGroup sets the affinity group for a region.
+// Used for testing only.
+func (m *Manager) SetRegionGroup(regionID uint64, groupID string) {
+	m.Lock()
+	defer m.Unlock()
+	if groupID == "" {
+		delete(m.regions, regionID)
+		return
+	}
+
+	groupInfo, ok := m.groups[groupID]
+	if !ok {
+		return
+	}
+
+	m.regions[regionID] = groupInfo
+	if groupInfo.regions != nil {
+		groupInfo.regions[regionID] = struct{}{}
+	}
+}
+
+// GetRegionAffinityGroup returns the affinity group info for a region.
+// Returns nil if the region doesn't belong to any affinity group.
+// NOTE: Returns a lightweight copy with only essential fields to avoid concurrent issues
+// and minimize overhead. The regions and labels maps are not copied.
+func (m *Manager) GetRegionAffinityGroup(regionID uint64) *GroupInfo {
+	m.RLock()
+	defer m.RUnlock()
+
+	groupInfo := m.regions[regionID]
+	if groupInfo == nil {
+		return nil
+	}
+
+	// Return a lightweight copy with only essential fields
+	// This is more efficient than full Clone() and sufficient for checker usage
+	return &GroupInfo{
+		Group: Group{
+			ID:              groupInfo.ID,
+			CreateTimestamp: groupInfo.CreateTimestamp,
+			LeaderStoreID:   groupInfo.LeaderStoreID,
+			VoterStoreIDs:   append([]uint64(nil), groupInfo.VoterStoreIDs...), // Copy slice
+		},
+		Effect:              groupInfo.Effect,
+		AffinityRegionCount: groupInfo.AffinityRegionCount,
+		// regions and labels maps are intentionally not copied for performance
+	}
 }
 
 // AllocAffinityGroup alloc store IDs for a new affinity group based on the current cluster state.
@@ -310,11 +367,19 @@ func (m *Manager) SaveAffinityGroups(groups []*Group) error {
 		if ok {
 			info.Group = *group
 		} else {
-			m.groups[group.ID] = &GroupInfo{Group: *group, Effect: true}
+			m.groups[group.ID] = &GroupInfo{
+				Group:   *group,
+				Effect:  true,
+				regions: make(map[uint64]struct{}),
+				labels:  make(map[string]*labeler.LabelRule),
+			}
 		}
 
 		log.Info("affinity group added/updated", zap.String("group", group.String()))
 	}
+
+	// TODO: Update regions map by scanning regions with affinity_group label
+	// This should be done asynchronously to avoid blocking
 	return nil
 }
 
@@ -357,9 +422,29 @@ const (
 	defaultHealthCheckInterval = 10 * time.Second
 )
 
+var (
+	// healthCheckIntervalForTest can be set in tests to speed up health checks.
+	// Default is 0, which means use defaultHealthCheckInterval.
+	healthCheckIntervalForTest time.Duration
+)
+
+// getHealthCheckInterval returns the health check interval, which can be overridden for testing.
+func getHealthCheckInterval() time.Duration {
+	if healthCheckIntervalForTest > 0 {
+		return healthCheckIntervalForTest
+	}
+	return defaultHealthCheckInterval
+}
+
+// SetHealthCheckIntervalForTest sets the health check interval for testing. Only use this in tests.
+func SetHealthCheckIntervalForTest(interval time.Duration) {
+	healthCheckIntervalForTest = interval
+}
+
 // startHealthCheckLoop starts a goroutine to periodically check store health and invalidate groups with unhealthy stores.
 func (m *Manager) startHealthCheckLoop() {
-	ticker := time.NewTicker(defaultHealthCheckInterval)
+	interval := getHealthCheckInterval()
+	ticker := time.NewTicker(interval)
 	go func() {
 		defer ticker.Stop()
 		for {
@@ -372,7 +457,7 @@ func (m *Manager) startHealthCheckLoop() {
 			}
 		}
 	}()
-	log.Info("affinity manager health check loop started", zap.Duration("interval", defaultHealthCheckInterval))
+	log.Info("affinity manager health check loop started", zap.Duration("interval", interval))
 }
 
 // checkStoreHealth checks the health status of stores and invalidates groups with unhealthy stores.
