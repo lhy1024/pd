@@ -24,6 +24,7 @@ import (
 
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/schedule/affinity"
+	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/server"
 	"github.com/tikv/pd/server/apiv2/middlewares"
@@ -124,13 +125,46 @@ func CreateAffinityGroups(c *gin.Context) {
 
 	// Only when all groups are successfully created, we proceed to persist them
 	// and update the in-memory state.
+	// Design: Save affinity groups first, then add labels
+	// Rationale: If labeling fails, we can retry with saved config;
+	//           If config save fails after labeling, orphaned labels exist
 	if err := manager.SaveAffinityGroups(groups); err != nil {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// label the regions affected by the new affinity groups
-	// TODO: use server label manager or a internal manager
+	// Label the regions affected by the new affinity groups
+	rc := svr.GetRaftCluster()
+	if rc == nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, errs.ErrNotBootstrapped.GenWithStackByArgs().Error())
+		return
+	}
+	regionLabeler := rc.GetRegionLabeler()
+	if regionLabeler != nil {
+		for name, input := range req.AffinityGroups {
+			// Convert KeyRange to labeler format
+			var keyRanges []any
+			for _, kr := range input.Ranges {
+				keyRanges = append(keyRanges, map[string]any{
+					"start_key": kr.StartKey,
+					"end_key":   kr.EndKey,
+				})
+			}
+
+			// Create label rule: affinity_group: {group_name}
+			rule := &labeler.LabelRule{
+				ID:       "affinity_group/" + name,
+				Labels:   []labeler.RegionLabel{{Key: "affinity_group", Value: name}},
+				RuleType: labeler.KeyRange,
+				Data:     keyRanges,
+			}
+
+			if err := regionLabeler.SetLabelRule(rule); err != nil {
+				c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
 
 	// Convert internal manager output to API output.
 	resp := CreateAffinityGroupsResponse{
