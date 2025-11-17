@@ -226,6 +226,13 @@ func (m *Manager) IsGroupExist(id string) bool {
 	return ok
 }
 
+// GetLabelRuleID returns the label rule ID for an affinity group.
+// This ensures consistent naming between label creation and deletion.
+// Format: "affinity_group/{group_id}"
+func GetLabelRuleID(groupID string) string {
+	return "affinity_group/" + groupID
+}
+
 // GetGroups returns the internal groups map.
 // Used for testing only.
 func (m *Manager) GetGroups() map[string]*GroupInfo {
@@ -265,6 +272,10 @@ func (m *Manager) GetRegionAffinityGroup(regionID uint64) *GroupInfo {
 
 	groupInfo := m.regions[regionID]
 	if groupInfo == nil {
+		return nil
+	}
+
+	if _, exists := m.groups[groupInfo.ID]; !exists {
 		return nil
 	}
 
@@ -379,7 +390,6 @@ func (m *Manager) SaveAffinityGroups(groups []*Group) error {
 	}
 
 	// TODO: Update regions map by scanning regions with affinity_group label
-	// This should be done asynchronously to avoid blocking
 	return nil
 }
 
@@ -389,8 +399,9 @@ func (m *Manager) DeleteAffinityGroup(id string) error {
 	m.Lock()
 	defer m.Unlock()
 
-	// Check existence first
-	if _, ok := m.groups[id]; !ok {
+	// Check existence first and save reference for cleanup
+	info, ok := m.groups[id]
+	if !ok {
 		return errs.ErrAffinityGroupNotFound.GenWithStackByArgs(id)
 	}
 
@@ -401,19 +412,34 @@ func (m *Manager) DeleteAffinityGroup(id string) error {
 		return err
 	}
 
-	// Update in-memory cache
-	delete(m.groups, id)
+	// Clean up regions map
+	// Remove all region entries that reference this group
+	var regionsToDelete []uint64
+	for regionID, groupInfo := range m.regions {
+		if groupInfo.ID == id {
+			regionsToDelete = append(regionsToDelete, regionID)
+		}
+	}
+	for _, regionID := range regionsToDelete {
+		delete(m.regions, regionID)
+	}
 
-	// TODO: Need to handle the labels?
-	// TODO: Need to handle the regions map?
-	// When a group is deleted, what happens to the regions associated with it?
-	for regionID, info := range m.regions {
-		if info.ID == id {
-			delete(m.regions, regionID)
+	// Clean up labels (if label rules are stored in GroupInfo)
+	if info.labels != nil {
+		for labelID := range info.labels {
+			log.Debug("label rule reference found in group info",
+				zap.String("group-id", id),
+				zap.String("label-id", labelID))
+			// Labels are managed by regionLabeler, not directly deleted here
 		}
 	}
 
-	log.Info("affinity group deleted", zap.String("group-id", id))
+	// Delete from in-memory cache
+	delete(m.groups, id)
+
+	log.Info("affinity group deleted",
+		zap.String("group-id", id),
+		zap.Int("cleaned-regions", len(regionsToDelete)))
 	return nil
 }
 
