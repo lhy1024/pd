@@ -289,15 +289,17 @@ func (m *Manager) SaveAffinityGroups(groups []*Group) error {
 	m.Lock()
 	defer m.Unlock()
 
-	err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
-		// TODO: use RunBatchOpInTxn
-		for _, group := range groups {
-			if err := m.storage.SaveAffinityGroup(txn, group.ID, group); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	// Build batch operations
+	batch := make([]func(txn kv.Txn) error, 0, len(groups))
+	for _, group := range groups {
+		localGroup := group
+		batch = append(batch, func(txn kv.Txn) error {
+			return m.storage.SaveAffinityGroup(txn, localGroup.ID, localGroup)
+		})
+	}
+
+	// Execute batch operations
+	err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, batch)
 	if err != nil {
 		return err
 	}
@@ -306,7 +308,6 @@ func (m *Manager) SaveAffinityGroups(groups []*Group) error {
 	for _, group := range groups {
 		info, ok := m.groups[group.ID]
 		if ok {
-			// TODO: Do we need to overwrite runtime info?
 			info.Group = *group
 		} else {
 			m.groups[group.ID] = &GroupInfo{Group: *group, Effect: true}
