@@ -35,7 +35,10 @@ func RegisterAffinity(r *gin.RouterGroup) {
 	router := r.Group("affinity-groups")
 	router.Use(middlewares.BootstrapChecker())
 	router.POST("", CreateAffinityGroups)
+	router.PATCH("", BatchModifyAffinityGroups)
+	router.PUT("/:group_id", UpdateAffinityGroupPeers)
 	router.DELETE("/:group_id", DeleteAffinityGroup)
+	router.POST("/batch-delete", BatchDeleteAffinityGroups)
 	router.GET("", GetAllAffinityGroups)
 	router.GET("/:group_id", GetAffinityGroup)
 }
@@ -57,6 +60,33 @@ type CreateAffinityGroupsRequest struct {
 // AffinityGroupsResponse defines the success response for the POST request.
 type AffinityGroupsResponse struct {
 	AffinityGroups map[string]*affinity.GroupState `json:"affinity_groups"`
+}
+
+// BatchDeleteAffinityGroupsRequest defines the body for batch delete request.
+type BatchDeleteAffinityGroupsRequest struct {
+	IDs   []string `json:"ids"`
+	Force bool     `json:"force,omitempty"`
+}
+
+// GroupRangesModification defines add or remove operations for a specific group.
+type GroupRangesModification struct {
+	ID     string             `json:"id"`
+	Ranges []keyutil.KeyRange `json:"ranges"`
+}
+
+// BatchModifyAffinityGroupsRequest defines the body for batch modify request.
+type BatchModifyAffinityGroupsRequest struct {
+	Add    []GroupRangesModification `json:"add,omitempty"`
+	Remove []GroupRangesModification `json:"remove,omitempty"`
+}
+
+// UpdateAffinityGroupPeersRequest defines the body for updating peer distribution of an affinity group.
+type UpdateAffinityGroupPeersRequest struct {
+	LeaderStoreID uint64   `json:"leader_store_id"`
+	VoterStoreIDs []uint64 `json:"voter_store_ids"`
+	// TODO: allow client to pass affinityVer for optimistic concurrency control.
+	// Leave it optional for now to keep the API simple.
+	AffinityVer uint64 `json:"affinity_ver,omitempty"`
 }
 
 // --- Handlers ---
@@ -162,6 +192,199 @@ func CreateAffinityGroups(c *gin.Context) {
 
 // TODO: add more tests for CreateAffinityGroups and DeleteAffinityGroup
 // after AllocAffinityGroup is ready.
+
+// BatchDeleteAffinityGroups deletes multiple affinity groups in batch.
+// @Tags     affinity-groups
+// @Summary  Delete multiple affinity groups in batch.
+// @Param    body  body  BatchDeleteAffinityGroupsRequest  true  "Batch delete request with group ids and force flag"
+// @Produce  json
+// @Success  200  {object}  map[string]any  "Delete result with success and error lists"
+// @Failure  400  {string}  string  "The input is invalid."
+// @Failure  500  {string}  string  "PD server failed to proceed the request."
+// @Router   /affinity-groups/batch-delete [post]
+func BatchDeleteAffinityGroups(c *gin.Context) {
+	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
+	manager, err := svr.GetAffinityManager()
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	req := &BatchDeleteAffinityGroupsRequest{}
+	if err := c.BindJSON(req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause())
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, "no group ids provided")
+		return
+	}
+
+	if err := manager.BatchDeleteAffinityGroups(req.IDs, req.Force); err != nil {
+		if errs.ErrAffinityGroupNotFound.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+			return
+		}
+		if errs.ErrAffinityGroupContent.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, map[string]any{
+		"deleted": req.IDs,
+	})
+}
+
+// BatchModifyAffinityGroups batch modifies key ranges for multiple affinity groups.
+// @Tags     affinity-groups
+// @Summary  Batch modify key ranges for affinity groups. Remove operations are executed before add operations.
+// @Param    body  body  BatchModifyAffinityGroupsRequest  true  "Batch modify request with add and remove operations"
+// @Produce  json
+// @Success  200  {object}  AffinityGroupsResponse  "Updated affinity groups"
+// @Failure  400  {string}  string  "The input is invalid."
+// @Failure  500  {string}  string  "PD server failed to proceed the request."
+// @Router   /affinity-groups [patch]
+func BatchModifyAffinityGroups(c *gin.Context) {
+	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
+	manager, err := svr.GetAffinityManager()
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	req := &BatchModifyAffinityGroupsRequest{}
+	if err := c.BindJSON(req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause())
+		return
+	}
+
+	if len(req.Add) == 0 && len(req.Remove) == 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, "no add or remove operations provided")
+		return
+	}
+
+	// Validate all group ids exist and are valid
+	affectedGroups := make(map[string]bool)
+	for _, removeOp := range req.Remove {
+		if err := validateGroupID(removeOp.ID); err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid group id: "+removeOp.ID)
+			return
+		}
+		if !manager.IsGroupExist(removeOp.ID) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(removeOp.ID))
+			return
+		}
+		affectedGroups[removeOp.ID] = true
+	}
+
+	for _, addOp := range req.Add {
+		if err := validateGroupID(addOp.ID); err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid group id: "+addOp.ID)
+			return
+		}
+		if !manager.IsGroupExist(addOp.ID) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(addOp.ID))
+			return
+		}
+		affectedGroups[addOp.ID] = true
+	}
+
+	// Convert to RangeModification format
+	var addOps, removeOps []affinity.RangeModification
+	for _, addOp := range req.Add {
+		for _, kr := range addOp.Ranges {
+			addOps = append(addOps, affinity.RangeModification{
+				GroupID:  addOp.ID,
+				StartKey: kr.StartKey,
+				EndKey:   kr.EndKey,
+			})
+		}
+	}
+	for _, removeOp := range req.Remove {
+		for _, kr := range removeOp.Ranges {
+			removeOps = append(removeOps, affinity.RangeModification{
+				GroupID:  removeOp.ID,
+				StartKey: kr.StartKey,
+				EndKey:   kr.EndKey,
+			})
+		}
+	}
+
+	// Call manager to perform batch modify
+	if err := manager.BatchModifyGroupRanges(addOps, removeOps); err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Build response with all affected groups
+	resp := AffinityGroupsResponse{
+		AffinityGroups: make(map[string]*affinity.GroupState, len(affectedGroups)),
+	}
+
+	for groupID := range affectedGroups {
+		state := manager.GetAffinityGroupState(groupID)
+		if state != nil {
+			resp.AffinityGroups[groupID] = state
+		}
+	}
+
+	c.IndentedJSON(http.StatusOK, resp)
+}
+
+// UpdateAffinityGroupPeers updates leader and voter stores of an affinity group.
+// @Tags     affinity-groups
+// @Summary  Update leader and voter stores of an affinity group.
+// @Param    group_id  path  string                          true  "The group id of the affinity group"
+// @Param    body      body  UpdateAffinityGroupPeersRequest true  "New leader and voter store IDs"
+// @Produce  json
+// @Success  200  {object}  affinity.GroupState  "Updated affinity group state"
+// @Failure  400  {string}  string               "The input is invalid."
+// @Failure  404  {string}  string               "Affinity group not found."
+// @Failure  500  {string}  string               "PD server failed to proceed the request."
+// @Router   /affinity-groups/{group_id} [put]
+func UpdateAffinityGroupPeers(c *gin.Context) {
+	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
+	manager, err := svr.GetAffinityManager()
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	groupID := c.Param("group_id")
+	req := &UpdateAffinityGroupPeersRequest{}
+	if err := c.BindJSON(req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause())
+		return
+	}
+	if err := validateGroupID(groupID); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.LeaderStoreID == 0 || len(req.VoterStoreIDs) == 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupContent.GenWithStackByArgs("leader_store_id and voter_store_ids are required"))
+		return
+	}
+
+	state, err := manager.UpdateGroupPeers(groupID, req.LeaderStoreID, req.VoterStoreIDs, req.AffinityVer)
+	if err != nil {
+		if errs.ErrAffinityGroupNotFound.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+			return
+		}
+		if errs.ErrAffinityGroupContent.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.IndentedJSON(http.StatusOK, state)
+}
 
 // DeleteAffinityGroup deletes a specific affinity group by group id.
 // @Tags     affinity-groups
