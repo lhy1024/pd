@@ -817,7 +817,7 @@ func (m *Manager) BatchModifyGroupRanges(addOps, removeOps []RangeModification) 
 		}
 
 		// Apply remove operations
-		currentRanges = m.applyRemoveOps(currentRanges, ops.removes)
+		currentRanges = applyRemoveOps(currentRanges, ops.removes)
 
 		// Apply add operations and collect new ranges
 		for _, addOp := range ops.adds {
@@ -873,7 +873,7 @@ func (m *Manager) getCurrentRanges(groupID string) ([]keyRange, error) {
 
 // applyRemoveOps filters out ranges that match remove operations.
 // Optimized with a map for O(n+m) complexity instead of O(n*m).
-func (*Manager) applyRemoveOps(currentRanges []keyRange, removes []RangeModification) []keyRange {
+func applyRemoveOps(currentRanges []keyRange, removes []RangeModification) []keyRange {
 	if len(removes) == 0 {
 		return currentRanges
 	}
