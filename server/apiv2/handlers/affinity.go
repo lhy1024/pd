@@ -389,9 +389,11 @@ func UpdateAffinityGroupPeers(c *gin.Context) {
 // DeleteAffinityGroup deletes a specific affinity group by group id.
 // @Tags     affinity-groups
 // @Summary  Delete an affinity group by group id.
-// @Param    group_id  path  string  true  "The group id of the affinity group"
+// @Param    group_id  path   string  true   "The group id of the affinity group"
+// @Param    force     query  bool    false  "Force delete even if the group has key ranges"
 // @Produce  json
 // @Success  200  {string}  string  "Affinity group deleted successfully."
+// @Failure  400  {string}  string  "The input is invalid or group has ranges without force flag."
 // @Failure  404  {string}  string  "Affinity group not found."
 // @Failure  500  {string}  string  "PD server failed to proceed the request."
 // @Router   /affinity-groups/{group_id} [delete]
@@ -405,14 +407,21 @@ func DeleteAffinityGroup(c *gin.Context) {
 
 	groupID := c.Param("group_id")
 
+	// Read force parameter from query string, default to false
+	force := c.DefaultQuery("force", "false") == "true"
+
 	if !manager.IsGroupExist(groupID) {
 		c.AbortWithStatusJSON(http.StatusNotFound, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID))
 		return
 	}
 
 	// Delete the affinity group from manager
-	err = manager.DeleteAffinityGroup(groupID)
+	err = manager.DeleteAffinityGroup(groupID, force)
 	if err != nil {
+		if errs.ErrAffinityGroupContent.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+			return
+		}
 		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
 		return
 	}

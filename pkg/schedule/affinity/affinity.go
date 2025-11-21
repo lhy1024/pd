@@ -636,7 +636,7 @@ func (m *Manager) SaveAffinityGroups(groupsWithRanges []GroupWithRanges) error {
 	var allNewRanges []keyRange
 	for _, gwr := range groupsWithRanges {
 		if len(gwr.KeyRanges) > 0 {
-			ranges, err := parseKeyRangesFromData(gwr.KeyRanges, gwr.Group.ID)
+			ranges, err := parseKeyRangesFromAPIData(gwr.KeyRanges, gwr.Group.ID)
 			if err != nil {
 				return err
 			}
@@ -690,7 +690,7 @@ func (m *Manager) SaveAffinityGroups(groupsWithRanges []GroupWithRanges) error {
 		m.updateGroupLabelsLocked(gwr.Group.ID, labelRule)
 		// Update key ranges cache for this group
 		if len(gwr.KeyRanges) > 0 {
-			ranges, err := parseKeyRangesFromData(gwr.KeyRanges, gwr.Group.ID)
+			ranges, err := parseKeyRangesFromAPIData(gwr.KeyRanges, gwr.Group.ID)
 			if err == nil && len(ranges) > 0 {
 				m.keyRanges[gwr.Group.ID] = ranges
 			}
@@ -706,9 +706,18 @@ func (m *Manager) SaveAffinityGroups(groupsWithRanges []GroupWithRanges) error {
 }
 
 // DeleteAffinityGroup deletes an affinity group by ID and removes its label rule.
-func (m *Manager) DeleteAffinityGroup(id string) error {
+// If force is false and the group has key ranges, it returns an error.
+func (m *Manager) DeleteAffinityGroup(id string, force bool) error {
 	m.Lock()
 	defer m.Unlock()
+
+	// Check if group has key ranges when force is false
+	if !force {
+		if ranges, exists := m.keyRanges[id]; exists && len(ranges) > 0 {
+			return errs.ErrAffinityGroupContent.FastGenByArgs(
+				"affinity group has key ranges, use force=true to delete")
+		}
+	}
 
 	// Step 1: Delete from storage
 	err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
@@ -748,7 +757,8 @@ func (m *Manager) DeleteAffinityGroup(id string) error {
 	m.deleteGroupLocked(id)
 	log.Info("affinity group deleted",
 		zap.String("group-id", id),
-		zap.Int("cleaned-regions", len(regionsToDelete)))
+		zap.Int("cleaned-regions", len(regionsToDelete)),
+		zap.Bool("force", force))
 	return nil
 }
 
@@ -791,7 +801,7 @@ func (m *Manager) BatchModifyGroupRanges(addOps, removeOps []RangeModification) 
 		}
 
 		// Parse current ranges
-		dataSlice, ok := labelRule.Data.([]interface{})
+		dataSlice, ok := labelRule.Data.([]*labeler.KeyRangeRule)
 		if !ok {
 			// Debug: log the actual type
 			return errors.Errorf("invalid label rule data type for group %s, got type %T", groupID, labelRule.Data)
@@ -851,7 +861,7 @@ func (m *Manager) BatchModifyGroupRanges(addOps, removeOps []RangeModification) 
 		currentRanges := m.keyRanges[groupID]
 		if currentRanges == nil {
 			// If not in cache yet, parse from label rule
-			dataSlice, ok := labelRule.Data.([]interface{})
+			dataSlice, ok := labelRule.Data.([]*labeler.KeyRangeRule)
 			if !ok {
 				return errors.Errorf("invalid label rule data type for group %s", groupID)
 			}
@@ -912,7 +922,14 @@ func (m *Manager) BatchModifyGroupRanges(addOps, removeOps []RangeModification) 
 }
 
 // BatchDeleteAffinityGroups deletes multiple affinity groups in a single transaction.
-// If force is false and any group does not exist, it returns error and performs no deletion.
+// If force is false:
+//   - Returns error if any group does not exist
+//   - Returns error if any group has key ranges
+//
+// If force is true:
+//   - Skips non-existent groups
+//   - Deletes groups even if they have key ranges
+//
 // TODO: use smaller lock
 func (m *Manager) BatchDeleteAffinityGroups(ids []string, force bool) error {
 	m.Lock()
@@ -932,6 +949,13 @@ func (m *Manager) BatchDeleteAffinityGroups(ids []string, force bool) error {
 		seen[id] = struct{}{}
 
 		if _, ok := m.groups[id]; ok {
+			// Check if group has key ranges when force is false
+			if !force {
+				if ranges, exists := m.keyRanges[id]; exists && len(ranges) > 0 {
+					return errs.ErrAffinityGroupContent.FastGenByArgs(
+						"affinity group " + id + " has key ranges, use force=true to delete")
+				}
+			}
 			toDelete = append(toDelete, id)
 			continue
 		}
@@ -1178,9 +1202,28 @@ type keyRange struct {
 	groupID  string
 }
 
-// parseKeyRangesFromData parses key ranges from []any format (from API or label rule).
-// This is a common helper to avoid code duplication.
-func parseKeyRangesFromData(data []any, groupID string) ([]keyRange, error) {
+// parseKeyRangesFromData parses key ranges from []*labeler.KeyRangeRule format (from label rule).
+func parseKeyRangesFromData(data []*labeler.KeyRangeRule, groupID string) ([]keyRange, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	var ranges []keyRange
+	for _, item := range data {
+		if item == nil {
+			continue
+		}
+		ranges = append(ranges, keyRange{
+			startKey: decodeHexOrDefault(item.StartKeyHex, groupID, "start"),
+			endKey:   decodeHexOrDefault(item.EndKeyHex, groupID, "end"),
+			groupID:  groupID,
+		})
+	}
+	return ranges, nil
+}
+
+// parseKeyRangesFromAPIData parses key ranges from []any format (from API).
+func parseKeyRangesFromAPIData(data []any, groupID string) ([]keyRange, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
@@ -1192,32 +1235,33 @@ func parseKeyRangesFromData(data []any, groupID string) ([]keyRange, error) {
 			continue
 		}
 
-		startKeyStr, ok1 := rangeMap["start_key"].(string)
-		endKeyStr, ok2 := rangeMap["end_key"].(string)
-		if !ok1 || !ok2 {
-			continue
-		}
-
-		startKey, err := hex.DecodeString(startKeyStr)
-		if err != nil {
-			log.Warn("failed to decode start key", zap.String("group-id", groupID), zap.Error(err))
-			continue
-		}
-
-		endKey, err := hex.DecodeString(endKeyStr)
-		if err != nil {
-			log.Warn("failed to decode end key", zap.String("group-id", groupID), zap.Error(err))
-			continue
-		}
+		startKeyStr, _ := rangeMap["start_key"].(string)
+		endKeyStr, _ := rangeMap["end_key"].(string)
 
 		ranges = append(ranges, keyRange{
-			startKey: startKey,
-			endKey:   endKey,
+			startKey: decodeHexOrDefault(startKeyStr, groupID, "start"),
+			endKey:   decodeHexOrDefault(endKeyStr, groupID, "end"),
 			groupID:  groupID,
 		})
 	}
-
 	return ranges, nil
+}
+
+// decodeHexOrDefault decodes a hex string and logs a warning on error.
+func decodeHexOrDefault(hexStr, groupID, keyType string) []byte {
+	if hexStr == "" {
+		return nil
+	}
+	decoded, err := hex.DecodeString(hexStr)
+	if err != nil {
+		log.Warn("failed to decode key",
+			zap.String("group-id", groupID),
+			zap.String("key-type", keyType),
+			zap.String("hex", hexStr),
+			zap.Error(err))
+		return nil
+	}
+	return decoded
 }
 
 // extractKeyRangesFromLabelRule extracts key ranges from a label rule data.
@@ -1231,7 +1275,7 @@ func extractKeyRangesFromLabelRule(rule *labeler.LabelRule) ([]keyRange, error) 
 		return nil, nil
 	}
 
-	dataSlice, ok := rule.Data.([]any)
+	dataSlice, ok := rule.Data.([]*labeler.KeyRangeRule)
 	if !ok {
 		return nil, errs.ErrAffinityGroupContent.FastGenByArgs("invalid label rule data format")
 	}
