@@ -22,9 +22,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"go.uber.org/zap"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/core"
@@ -636,10 +636,7 @@ func (m *Manager) SaveAffinityGroups(groupsWithRanges []GroupWithRanges) error {
 	var allNewRanges []keyRange
 	for _, gwr := range groupsWithRanges {
 		if len(gwr.KeyRanges) > 0 {
-			ranges, err := parseKeyRangesFromAPIData(gwr.KeyRanges, gwr.Group.ID)
-			if err != nil {
-				return err
-			}
+			ranges := parseKeyRangesFromAPIData(gwr.KeyRanges, gwr.Group.ID)
 			allNewRanges = append(allNewRanges, ranges...)
 		}
 	}
@@ -690,8 +687,8 @@ func (m *Manager) SaveAffinityGroups(groupsWithRanges []GroupWithRanges) error {
 		m.updateGroupLabelsLocked(gwr.Group.ID, labelRule)
 		// Update key ranges cache for this group
 		if len(gwr.KeyRanges) > 0 {
-			ranges, err := parseKeyRangesFromAPIData(gwr.KeyRanges, gwr.Group.ID)
-			if err == nil && len(ranges) > 0 {
+			ranges := parseKeyRangesFromAPIData(gwr.KeyRanges, gwr.Group.ID)
+			if len(ranges) > 0 {
 				m.keyRanges[gwr.Group.ID] = ranges
 			}
 		} else {
@@ -859,22 +856,24 @@ func (m *Manager) getCurrentRanges(groupID string) ([]keyRange, error) {
 }
 
 // applyRemoveOps filters out ranges that match remove operations.
-func (m *Manager) applyRemoveOps(currentRanges []keyRange, removes []RangeModification) []keyRange {
+// Optimized with a map for O(n+m) complexity instead of O(n*m).
+func (*Manager) applyRemoveOps(currentRanges []keyRange, removes []RangeModification) []keyRange {
 	if len(removes) == 0 {
 		return currentRanges
 	}
 
+	// Build a set of ranges to remove for O(1) lookup
+	// Use hex encoding to avoid key collisions
+	removeSet := make(map[string]struct{}, len(removes))
+	for _, r := range removes {
+		key := hex.EncodeToString(r.StartKey) + "|" + hex.EncodeToString(r.EndKey)
+		removeSet[key] = struct{}{}
+	}
+
 	var filtered []keyRange
 	for _, current := range currentRanges {
-		shouldRemove := false
-		for _, removeOp := range removes {
-			if bytes.Equal(current.startKey, removeOp.StartKey) &&
-				bytes.Equal(current.endKey, removeOp.EndKey) {
-				shouldRemove = true
-				break
-			}
-		}
-		if !shouldRemove {
+		key := hex.EncodeToString(current.startKey) + "|" + hex.EncodeToString(current.endKey)
+		if _, found := removeSet[key]; !found {
 			filtered = append(filtered, current)
 		}
 	}
@@ -889,9 +888,9 @@ func (m *Manager) updateGroupRanges(groupID string, ranges []keyRange) error {
 	}
 
 	// Convert ranges to label rule data format
-	var newData []interface{}
+	var newData []any
 	for _, kr := range ranges {
-		newData = append(newData, map[string]interface{}{
+		newData = append(newData, map[string]any{
 			"start_key": hex.EncodeToString(kr.startKey),
 			"end_key":   hex.EncodeToString(kr.endKey),
 		})
@@ -1200,9 +1199,9 @@ func parseKeyRangesFromData(data []*labeler.KeyRangeRule, groupID string) ([]key
 }
 
 // parseKeyRangesFromAPIData parses key ranges from []any format (from API).
-func parseKeyRangesFromAPIData(data []any, groupID string) ([]keyRange, error) {
+func parseKeyRangesFromAPIData(data []any, groupID string) []keyRange {
 	if len(data) == 0 {
-		return nil, nil
+		return nil
 	}
 
 	var ranges []keyRange
@@ -1221,7 +1220,7 @@ func parseKeyRangesFromAPIData(data []any, groupID string) ([]keyRange, error) {
 			groupID:  groupID,
 		})
 	}
-	return ranges, nil
+	return ranges
 }
 
 // decodeHexOrDefault decodes a hex string and logs a warning on error.
