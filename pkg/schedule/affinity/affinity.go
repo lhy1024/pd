@@ -974,7 +974,7 @@ func (m *Manager) BatchDeleteAffinityGroups(ids []string, force bool) error {
 				log.Warn("failed to delete label rule for affinity group",
 					zap.String("group-id", id),
 					zap.Error(err))
-				return err
+				// TODO: Don't return error here - the group is already deleted from storage
 			}
 		}
 	}
@@ -1029,8 +1029,9 @@ func (m *Manager) UpdateGroupPeers(groupID string, leaderStoreID uint64, voterSt
 		return nil, err
 	}
 
-	// Apply to in-memory state. We pass 0 as affinityVer.
-	m.updateGroupEffectLocked(groupID, 0, leaderStoreID, voterStoreIDs)
+	// Apply to in-memory state.
+	// TODO: We pass current groupInfo to updateGroupEffectLocked
+	m.updateGroupEffectLocked(groupID, groupInfo.AffinityVer, leaderStoreID, voterStoreIDs)
 
 	return newGroupState(groupInfo), nil
 }
