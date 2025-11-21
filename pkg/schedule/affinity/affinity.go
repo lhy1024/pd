@@ -773,107 +773,41 @@ func (m *Manager) BatchModifyGroupRanges(addOps, removeOps []RangeModification) 
 	}
 
 	// Group operations by groupID
-	addsByGroup := make(map[string][]RangeModification)
-	removesByGroup := make(map[string][]RangeModification)
+	type groupOps struct {
+		adds    []RangeModification
+		removes []RangeModification
+	}
+	opsByGroup := make(map[string]*groupOps)
 
 	for _, op := range addOps {
-		addsByGroup[op.GroupID] = append(addsByGroup[op.GroupID], op)
+		if opsByGroup[op.GroupID] == nil {
+			opsByGroup[op.GroupID] = &groupOps{}
+		}
+		opsByGroup[op.GroupID].adds = append(opsByGroup[op.GroupID].adds, op)
 	}
 	for _, op := range removeOps {
-		removesByGroup[op.GroupID] = append(removesByGroup[op.GroupID], op)
-	}
-
-	// Get all affected groups
-	affectedGroups := make(map[string]bool)
-	for groupID := range addsByGroup {
-		affectedGroups[groupID] = true
-	}
-	for groupID := range removesByGroup {
-		affectedGroups[groupID] = true
-	}
-
-	// Step 1: Process remove operations first
-	for groupID, removes := range removesByGroup {
-		labelRuleID := GetLabelRuleID(groupID)
-		labelRule := m.regionLabeler.GetLabelRule(labelRuleID)
-		if labelRule == nil {
-			return errors.Errorf("label rule not found for group %s", groupID)
+		if opsByGroup[op.GroupID] == nil {
+			opsByGroup[op.GroupID] = &groupOps{}
 		}
+		opsByGroup[op.GroupID].removes = append(opsByGroup[op.GroupID].removes, op)
+	}
 
-		// Parse current ranges
-		dataSlice, ok := labelRule.Data.([]*labeler.KeyRangeRule)
-		if !ok {
-			// Debug: log the actual type
-			return errors.Errorf("invalid label rule data type for group %s, got type %T", groupID, labelRule.Data)
-		}
-		currentRanges, err := parseKeyRangesFromData(dataSlice, groupID)
+	// Process all groups: apply removes then adds, collect new ranges for validation
+	var allNewRanges []keyRange
+	updatedRanges := make(map[string][]keyRange)
+
+	for groupID, ops := range opsByGroup {
+		// Get current ranges for this group
+		currentRanges, err := m.getCurrentRanges(groupID)
 		if err != nil {
 			return err
 		}
 
-		// Remove specified ranges
-		var newRanges []keyRange
-		for _, current := range currentRanges {
-			shouldRemove := false
-			for _, removeOp := range removes {
-				if bytes.Equal(current.startKey, removeOp.StartKey) &&
-					bytes.Equal(current.endKey, removeOp.EndKey) {
-					shouldRemove = true
-					break
-				}
-			}
-			if !shouldRemove {
-				newRanges = append(newRanges, current)
-			}
-		}
+		// Apply remove operations
+		currentRanges = m.applyRemoveOps(currentRanges, ops.removes)
 
-		// Update label rule with new ranges
-		var newData []interface{}
-		for _, kr := range newRanges {
-			newData = append(newData, map[string]interface{}{
-				"start_key": hex.EncodeToString(kr.startKey),
-				"end_key":   hex.EncodeToString(kr.endKey),
-			})
-		}
-
-		labelRule.Data = newData
-		if err := m.regionLabeler.SetLabelRule(labelRule); err != nil {
-			return err
-		}
-
-		// Update in-memory cache
-		m.keyRanges[groupID] = newRanges
-	}
-
-	// Step 2: Process add operations
-	// First collect all new ranges for validation
-	var allNewRanges []keyRange
-	newRangesByGroup := make(map[string][]keyRange)
-
-	for groupID, adds := range addsByGroup {
-		labelRuleID := GetLabelRuleID(groupID)
-		labelRule := m.regionLabeler.GetLabelRule(labelRuleID)
-		if labelRule == nil {
-			return errors.Errorf("label rule not found for group %s", groupID)
-		}
-
-		// Parse current ranges (after removes have been applied)
-		currentRanges := m.keyRanges[groupID]
-		if currentRanges == nil {
-			// If not in cache yet, parse from label rule
-			dataSlice, ok := labelRule.Data.([]*labeler.KeyRangeRule)
-			if !ok {
-				return errors.Errorf("invalid label rule data type for group %s", groupID)
-			}
-			var err error
-			currentRanges, err = parseKeyRangesFromData(dataSlice, groupID)
-			if err != nil {
-				return err
-			}
-		}
-
-		// Add new ranges
-		for _, addOp := range adds {
+		// Apply add operations and collect new ranges
+		for _, addOp := range ops.adds {
 			newRange := keyRange{
 				startKey: addOp.StartKey,
 				endKey:   addOp.EndKey,
@@ -883,41 +817,93 @@ func (m *Manager) BatchModifyGroupRanges(addOps, removeOps []RangeModification) 
 			allNewRanges = append(allNewRanges, newRange)
 		}
 
-		newRangesByGroup[groupID] = currentRanges
+		updatedRanges[groupID] = currentRanges
 	}
 
-	// Validate no overlaps
+	// Validate no overlaps with newly added ranges
 	if len(allNewRanges) > 0 {
 		if err := m.validateNoKeyRangeOverlap(allNewRanges); err != nil {
 			return err
 		}
 	}
 
-	// Update label rules and cache
-	for groupID, ranges := range newRangesByGroup {
-		labelRuleID := GetLabelRuleID(groupID)
-		labelRule := m.regionLabeler.GetLabelRule(labelRuleID)
-		if labelRule == nil {
-			continue
-		}
-
-		var newData []interface{}
-		for _, kr := range ranges {
-			newData = append(newData, map[string]interface{}{
-				"start_key": hex.EncodeToString(kr.startKey),
-				"end_key":   hex.EncodeToString(kr.endKey),
-			})
-		}
-
-		labelRule.Data = newData
-		if err := m.regionLabeler.SetLabelRule(labelRule); err != nil {
+	// Update label rules and cache for all affected groups
+	for groupID, ranges := range updatedRanges {
+		if err := m.updateGroupRanges(groupID, ranges); err != nil {
 			return err
 		}
-
-		// Update in-memory cache
-		m.keyRanges[groupID] = ranges
 	}
 
+	return nil
+}
+
+// getCurrentRanges retrieves the current key ranges for a group.
+func (m *Manager) getCurrentRanges(groupID string) ([]keyRange, error) {
+	// Try cache first
+	if ranges := m.keyRanges[groupID]; ranges != nil {
+		return append([]keyRange(nil), ranges...), nil
+	}
+
+	// Parse from label rule
+	labelRule := m.regionLabeler.GetLabelRule(GetLabelRuleID(groupID))
+	if labelRule == nil {
+		return nil, errors.Errorf("label rule not found for group %s", groupID)
+	}
+
+	dataSlice, ok := labelRule.Data.([]*labeler.KeyRangeRule)
+	if !ok {
+		return nil, errors.Errorf("invalid label rule data type for group %s, got type %T", groupID, labelRule.Data)
+	}
+
+	return parseKeyRangesFromData(dataSlice, groupID)
+}
+
+// applyRemoveOps filters out ranges that match remove operations.
+func (m *Manager) applyRemoveOps(currentRanges []keyRange, removes []RangeModification) []keyRange {
+	if len(removes) == 0 {
+		return currentRanges
+	}
+
+	var filtered []keyRange
+	for _, current := range currentRanges {
+		shouldRemove := false
+		for _, removeOp := range removes {
+			if bytes.Equal(current.startKey, removeOp.StartKey) &&
+				bytes.Equal(current.endKey, removeOp.EndKey) {
+				shouldRemove = true
+				break
+			}
+		}
+		if !shouldRemove {
+			filtered = append(filtered, current)
+		}
+	}
+	return filtered
+}
+
+// updateGroupRanges updates the label rule and cache for a group's key ranges.
+func (m *Manager) updateGroupRanges(groupID string, ranges []keyRange) error {
+	labelRule := m.regionLabeler.GetLabelRule(GetLabelRuleID(groupID))
+	if labelRule == nil {
+		return errors.Errorf("label rule not found for group %s", groupID)
+	}
+
+	// Convert ranges to label rule data format
+	var newData []interface{}
+	for _, kr := range ranges {
+		newData = append(newData, map[string]interface{}{
+			"start_key": hex.EncodeToString(kr.startKey),
+			"end_key":   hex.EncodeToString(kr.endKey),
+		})
+	}
+
+	labelRule.Data = newData
+	if err := m.regionLabeler.SetLabelRule(labelRule); err != nil {
+		return err
+	}
+
+	// Update in-memory cache
+	m.keyRanges[groupID] = ranges
 	return nil
 }
 
@@ -981,7 +967,7 @@ func (m *Manager) BatchDeleteAffinityGroups(ids []string, force bool) error {
 		return err
 	}
 
-	// Step 2: delete label rules. If failure, try to rollback storage.
+	// Step 2: delete label rules.
 	if m.regionLabeler != nil {
 		for _, id := range toDelete {
 			if err := m.regionLabeler.DeleteLabelRule(GetLabelRuleID(id)); err != nil {
@@ -1012,8 +998,7 @@ func (m *Manager) BatchDeleteAffinityGroups(ids []string, force bool) error {
 }
 
 // UpdateGroupPeers updates the leader and voter stores of an affinity group and marks it effective.
-// affinityVer is optional for now. If non-zero, it must match the server-side version.
-func (m *Manager) UpdateGroupPeers(groupID string, leaderStoreID uint64, voterStoreIDs []uint64, affinityVer uint64) (*GroupState, error) {
+func (m *Manager) UpdateGroupPeers(groupID string, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
 	// Basic validation outside the lock to avoid blocking other operations
 	if err := m.AdjustGroup(&Group{
 		ID:            groupID,
@@ -1031,15 +1016,6 @@ func (m *Manager) UpdateGroupPeers(groupID string, leaderStoreID uint64, voterSt
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
 	}
 
-	// TODO: allow client to pass affinityVer for optimistic concurrency control.
-	version := groupInfo.AffinityVer
-	if affinityVer != 0 {
-		if affinityVer != groupInfo.AffinityVer {
-			return nil, errs.ErrAffinityGroupContent.FastGenByArgs("affinity version mismatch")
-		}
-		version = affinityVer
-	}
-
 	// Persist updated peer distribution
 	group := &Group{
 		ID:              groupInfo.ID,
@@ -1053,8 +1029,8 @@ func (m *Manager) UpdateGroupPeers(groupID string, leaderStoreID uint64, voterSt
 		return nil, err
 	}
 
-	// Apply to in-memory state. We pass the current affinity version to avoid accidental mismatch.
-	m.updateGroupEffectLocked(groupID, version, leaderStoreID, voterStoreIDs)
+	// Apply to in-memory state. We pass 0 as affinityVer.
+	m.updateGroupEffectLocked(groupID, 0, leaderStoreID, voterStoreIDs)
 
 	return newGroupState(groupInfo), nil
 }

@@ -84,9 +84,6 @@ type BatchModifyAffinityGroupsRequest struct {
 type UpdateAffinityGroupPeersRequest struct {
 	LeaderStoreID uint64   `json:"leader_store_id"`
 	VoterStoreIDs []uint64 `json:"voter_store_ids"`
-	// TODO: allow client to pass affinityVer for optimistic concurrency control.
-	// Leave it optional for now to keep the API simple.
-	AffinityVer uint64 `json:"affinity_ver,omitempty"`
 }
 
 // --- Handlers ---
@@ -267,51 +264,17 @@ func BatchModifyAffinityGroups(c *gin.Context) {
 		return
 	}
 
-	// Validate all group ids exist and are valid
+	// Validate and convert operations in one pass
 	affectedGroups := make(map[string]bool)
-	for _, removeOp := range req.Remove {
-		if err := validateGroupID(removeOp.ID); err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid group id: "+removeOp.ID)
-			return
-		}
-		if !manager.IsGroupExist(removeOp.ID) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(removeOp.ID))
-			return
-		}
-		affectedGroups[removeOp.ID] = true
+	addOps, err := convertAndValidateRangeOps(req.Add, manager, affectedGroups)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+		return
 	}
-
-	for _, addOp := range req.Add {
-		if err := validateGroupID(addOp.ID); err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, "invalid group id: "+addOp.ID)
-			return
-		}
-		if !manager.IsGroupExist(addOp.ID) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(addOp.ID))
-			return
-		}
-		affectedGroups[addOp.ID] = true
-	}
-
-	// Convert to RangeModification format
-	var addOps, removeOps []affinity.RangeModification
-	for _, addOp := range req.Add {
-		for _, kr := range addOp.Ranges {
-			addOps = append(addOps, affinity.RangeModification{
-				GroupID:  addOp.ID,
-				StartKey: kr.StartKey,
-				EndKey:   kr.EndKey,
-			})
-		}
-	}
-	for _, removeOp := range req.Remove {
-		for _, kr := range removeOp.Ranges {
-			removeOps = append(removeOps, affinity.RangeModification{
-				GroupID:  removeOp.ID,
-				StartKey: kr.StartKey,
-				EndKey:   kr.EndKey,
-			})
-		}
+	removeOps, err := convertAndValidateRangeOps(req.Remove, manager, affectedGroups)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Call manager to perform batch modify
@@ -369,7 +332,7 @@ func UpdateAffinityGroupPeers(c *gin.Context) {
 		return
 	}
 
-	state, err := manager.UpdateGroupPeers(groupID, req.LeaderStoreID, req.VoterStoreIDs, req.AffinityVer)
+	state, err := manager.UpdateGroupPeers(groupID, req.LeaderStoreID, req.VoterStoreIDs)
 	if err != nil {
 		if errs.ErrAffinityGroupNotFound.Equal(err) {
 			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
@@ -500,4 +463,29 @@ func validateGroupID(id string) error {
 		return errors.Errorf("illegal id %s, should contain only alphanumerical and underline", id)
 	}
 	return nil
+}
+
+// convertAndValidateRangeOps validates group operations and converts them to RangeModification format.
+// It updates affectedGroups with all groups encountered.
+func convertAndValidateRangeOps(ops []GroupRangesModification, manager *affinity.Manager, affectedGroups map[string]bool) ([]affinity.RangeModification, error) {
+	var result []affinity.RangeModification
+	for _, op := range ops {
+		if err := validateGroupID(op.ID); err != nil {
+			return nil, errors.Errorf("invalid group id: %s", op.ID)
+		}
+		if !manager.IsGroupExist(op.ID) {
+			return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(op.ID)
+		}
+		affectedGroups[op.ID] = true
+
+		// Convert ranges to RangeModification format
+		for _, kr := range op.Ranges {
+			result = append(result, affinity.RangeModification{
+				GroupID:  op.ID,
+				StartKey: kr.StartKey,
+				EndKey:   kr.EndKey,
+			})
+		}
+	}
+	return result, nil
 }
