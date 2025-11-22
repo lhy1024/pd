@@ -44,9 +44,24 @@ func RegisterAffinity(r *gin.RouterGroup) {
 
 // --- API Structures ---
 
+// AffinityKeyRange represents a key range in affinity group API requests.
+// It uses underscore naming for JSON fields to maintain consistency with other API structures.
+type AffinityKeyRange struct {
+	StartKey []byte `json:"start_key"`
+	EndKey   []byte `json:"end_key"`
+}
+
+// toKeyutilKeyRange converts AffinityKeyRange to keyutil.KeyRange.
+func (r AffinityKeyRange) toKeyutilKeyRange() keyutil.KeyRange {
+	return keyutil.KeyRange{
+		StartKey: r.StartKey,
+		EndKey:   r.EndKey,
+	}
+}
+
 // CreateAffinityGroupInput defines the input for a single group in the creation request.
 type CreateAffinityGroupInput struct {
-	Ranges []keyutil.KeyRange `json:"ranges"`
+	Ranges []AffinityKeyRange `json:"ranges"`
 }
 
 // CreateAffinityGroupsRequest defines the body for the POST request.
@@ -70,7 +85,7 @@ type BatchDeleteAffinityGroupsRequest struct {
 // GroupRangesModification defines add or remove operations for a specific group.
 type GroupRangesModification struct {
 	ID     string             `json:"id"`
-	Ranges []keyutil.KeyRange `json:"ranges"`
+	Ranges []AffinityKeyRange `json:"ranges"`
 }
 
 // BatchModifyAffinityGroupsRequest defines the body for batch modify request.
@@ -129,13 +144,10 @@ func CreateAffinityGroups(c *gin.Context) {
 			return
 		}
 
-		// Convert KeyRange to labeler format (hex-encoded strings)
+		// Convert AffinityKeyRange to keyutil.KeyRange
 		var keyRanges []keyutil.KeyRange
 		for _, kr := range input.Ranges {
-			keyRanges = append(keyRanges, keyutil.KeyRange{
-				StartKey: kr.StartKey,
-				EndKey:   kr.EndKey,
-			})
+			keyRanges = append(keyRanges, kr.toKeyutilKeyRange())
 		}
 
 		groupsWithRanges = append(groupsWithRanges, affinity.GroupWithRanges{
