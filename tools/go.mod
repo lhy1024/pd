@@ -18,6 +18,7 @@ require (
 	github.com/gin-contrib/pprof v1.4.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/go-echarts/go-echarts v1.0.0
+	github.com/go-sql-driver/mysql v1.7.0
 	github.com/influxdata/tdigest v0.0.1
 	github.com/json-iterator/go v1.1.12
 	github.com/mattn/go-shellwords v1.0.12
@@ -111,7 +112,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.20.0 // indirect
 	github.com/go-resty/resty/v2 v2.6.0 // indirect
-	github.com/go-sql-driver/mysql v1.7.0 // indirect
 	github.com/goccy/go-graphviz v0.1.3 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect

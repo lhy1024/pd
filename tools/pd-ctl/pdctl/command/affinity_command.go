@@ -157,6 +157,12 @@ func affinityCreateCommandFunc(cmd *cobra.Command, _ []string) {
 	}
 	resp, err := PDCli.CreateAffinityGroups(cmd.Context(), groups)
 	if err != nil {
+		if len(defs) > 0 && strings.Contains(strings.ToLower(err.Error()), "400 bad request") {
+			if state, getErr := PDCli.GetAffinityGroup(cmd.Context(), defs[0].id); getErr == nil && state != nil {
+				cmd.Printf("Affinity group %s already exists\n", defs[0].id)
+				return
+			}
+		}
 		cmd.Printf("Failed to create affinity groups: %v\n", err)
 		return
 	}
@@ -446,8 +452,10 @@ func collectGroupIDs(defs []affinityGroupDefinition) []string {
 	return ids
 }
 
-func tableKeyRange(id int64) ([]byte, []byte) {
-	return encodeTablePrefix(id), encodeTablePrefix(id + 1)
+func tableKeyRange(id int64) (start []byte, end []byte) {
+	start = encodeTablePrefix(id)
+	end = encodeTablePrefix(id + 1)
+	return
 }
 
 func encodeTablePrefix(id int64) []byte {
@@ -621,8 +629,28 @@ func fetchTablesByIDs(ctx context.Context, db *sql.DB, ids []int64) (map[int64]t
 	if len(ids) == 0 {
 		return res, nil
 	}
-	if err := queryTablesByIDs(ctx, db, ids, "TABLE_ID", res); err != nil {
-		return nil, err
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	var sb strings.Builder
+	sb.WriteString("SELECT TABLE_ID, TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_ID IN (")
+	sb.WriteString(placeholders)
+	sb.WriteString(")")
+	query := sb.String()
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var schema, name string
+		if err := rows.Scan(&id, &schema, &name); err != nil {
+			return nil, errors.WithStack(err)
+		}
+		res[id] = tableName{Schema: schema, Name: name}
 	}
 	return res, nil
 }
@@ -632,56 +660,28 @@ func fetchPartitionsByIDs(ctx context.Context, db *sql.DB, ids []int64) (map[int
 	if len(ids) == 0 {
 		return res, nil
 	}
-	if err := queryPartitionsByIDs(ctx, db, ids, "PARTITION_ID", "TABLE_ID", res); err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
-func queryTablesByIDs(ctx context.Context, db *sql.DB, ids []int64, col string, res map[int64]tableName) error {
-	placeholders := strings.Repeat("?,", len(ids))
-	placeholders = strings.TrimRight(placeholders, ",")
-	query := fmt.Sprintf(`SELECT %s, TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE %s IN (%s)`, col, col, placeholders)
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	var sb strings.Builder
+	sb.WriteString("SELECT PARTITION_ID, TABLE_ID, PARTITION_NAME FROM INFORMATION_SCHEMA.PARTITIONS WHERE PARTITION_ID IN (")
+	sb.WriteString(placeholders)
+	sb.WriteString(")")
+	query := sb.String()
 	args := make([]any, 0, len(ids))
 	for _, id := range ids {
 		args = append(args, id)
 	}
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var schema, name string
-		if err := rows.Scan(&id, &schema, &name); err != nil {
-			return errors.WithStack(err)
-		}
-		res[id] = tableName{Schema: schema, Name: name}
-	}
-	return nil
-}
-
-func queryPartitionsByIDs(ctx context.Context, db *sql.DB, ids []int64, partCol, tableCol string, res map[int64]partitionName) error {
-	placeholders := strings.Repeat("?,", len(ids))
-	placeholders = strings.TrimRight(placeholders, ",")
-	query := fmt.Sprintf(`SELECT %s, %s, PARTITION_NAME FROM INFORMATION_SCHEMA.PARTITIONS WHERE %s IN (%s)`, partCol, tableCol, partCol, placeholders)
-	args := make([]any, 0, len(ids))
-	for _, id := range ids {
-		args = append(args, id)
-	}
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var pid, tableID int64
 		var name string
 		if err := rows.Scan(&pid, &tableID, &name); err != nil {
-			return errors.WithStack(err)
+			return nil, errors.WithStack(err)
 		}
 		res[pid] = partitionName{TableID: tableID, Name: name}
 	}
-	return nil
+	return res, nil
 }
