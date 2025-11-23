@@ -67,7 +67,6 @@ type CreateAffinityGroupInput struct {
 // CreateAffinityGroupsRequest defines the body for the POST request.
 type CreateAffinityGroupsRequest struct {
 	AffinityGroups map[string]CreateAffinityGroupInput `json:"affinity_groups"`
-	DataLayout     string                              `json:"data_layout,omitempty"`
 	TableGroup     string                              `json:"table_group,omitempty"`
 }
 
@@ -123,7 +122,7 @@ func CreateAffinityGroups(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause())
 		return
 	}
-	// TODO: validate DataLayout and TableGroup if necessary
+	// TODO: validate TableGroup if necessary
 	if len(req.AffinityGroups) == 0 {
 		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupContent.GenWithStackByArgs("no affinity groups provided"))
 		return
