@@ -16,13 +16,15 @@ package command
 
 import (
 	"context"
-	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/spf13/cobra"
 
 	"github.com/pingcap/errors"
@@ -32,15 +34,46 @@ import (
 )
 
 const (
-	tidbTLSConfigName       = "pdctl-tidb"
 	tableGroupIDPattern     = "_tidb_c_t_%d"
 	partitionGroupIDPattern = "_tidb_p_t_%d_p%d"
+	httpRequestTimeout      = 30 * time.Second
 )
 
+// NOTE: The regex patterns below must match the format defined in the constants above:
+// - tableGroupRegexp must match tableGroupIDPattern format
+// - partitionGroupRegexp must match partitionGroupIDPattern format
 var (
 	partitionGroupRegexp = regexp.MustCompile(`^_tidb_p_t_(\d+)_p(\d+)$`)
 	tableGroupRegexp     = regexp.MustCompile(`^_tidb_c_t_(\d+)$`)
 )
+
+// ciStr represents a case-insensitive string (TiDB's CIStr type).
+type ciStr struct {
+	O string `json:"O"` // Original string
+	L string `json:"L"` // Lowercase string
+}
+
+// String returns the original string value.
+func (s ciStr) String() string {
+	return s.O
+}
+
+// tidbTableInfo represents the table schema from /schema/{db}/{table} API.
+type tidbTableInfo struct {
+	ID        int64              `json:"id"`
+	Name      ciStr              `json:"name"`
+	Partition *tidbPartitionInfo `json:"partition,omitempty"`
+}
+
+type tidbPartitionInfo struct {
+	Enable      bool                      `json:"enable"`
+	Definitions []tidbPartitionDefinition `json:"definitions"`
+}
+
+type tidbPartitionDefinition struct {
+	ID   int64 `json:"id"`
+	Name ciStr `json:"name"`
+}
 
 type partitionInfo struct {
 	ID   int64
@@ -74,9 +107,10 @@ func NewAffinityCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "affinity",
 		Short:             "affinity group commands based on TiDB metadata",
+		Long:              `Affinity group commands use TiDB HTTP API to fetch table/partition metadata.`,
 		PersistentPreRunE: requirePDClient,
 	}
-	cmd.PersistentFlags().String("dsn", "", "TiDB DSN used to fetch table/partition information")
+	cmd.PersistentFlags().String("tidb-http", "", "TiDB HTTP status address (e.g., http://127.0.0.1:10080)")
 	cmd.PersistentFlags().String("db", "", "database name of the target table")
 	cmd.PersistentFlags().String("table", "", "table name of the target table")
 	cmd.PersistentFlags().String("partition", "", "target partition name or ID when operating on a partitioned table")
@@ -136,33 +170,24 @@ func newAffinityListCommand() *cobra.Command {
 		Short: "list affinity groups with resolved table and partition names",
 		Run:   affinityListCommandFunc,
 	}
-	cmd.Flags().String("dsn", "", "TiDB DSN used to resolve table names")
+	cmd.Flags().String("tidb-http", "", "TiDB HTTP status address to resolve table names")
 	return cmd
 }
 
 func affinityCreateCommandFunc(cmd *cobra.Command, _ []string) {
-	info, partition, err := loadTableAffinityInfo(cmd)
+	defs, err := loadAffinityGroupDefinitions(cmd)
 	if err != nil {
 		cmd.Println(err)
 		return
 	}
-	defs, err := buildAffinityGroupDefinitions(info, partition)
-	if err != nil {
-		cmd.Println(err)
-		return
-	}
+
 	groups := make(map[string][]pd.AffinityGroupKeyRange, len(defs))
 	for _, def := range defs {
 		groups[def.id] = def.ranges
 	}
+
 	resp, err := PDCli.CreateAffinityGroups(cmd.Context(), groups)
 	if err != nil {
-		if len(defs) > 0 && strings.Contains(strings.ToLower(err.Error()), "400 bad request") {
-			if state, getErr := PDCli.GetAffinityGroup(cmd.Context(), defs[0].id); getErr == nil && state != nil {
-				cmd.Printf("Affinity group %s already exists\n", defs[0].id)
-				return
-			}
-		}
 		cmd.Printf("Failed to create affinity groups: %v\n", err)
 		return
 	}
@@ -170,22 +195,19 @@ func affinityCreateCommandFunc(cmd *cobra.Command, _ []string) {
 }
 
 func affinityGetCommandFunc(cmd *cobra.Command, _ []string) {
-	info, partition, err := loadTableAffinityInfo(cmd)
+	defs, err := loadAffinityGroupDefinitions(cmd)
 	if err != nil {
 		cmd.Println(err)
 		return
 	}
-	defs, err := buildAffinityGroupDefinitions(info, partition)
-	if err != nil {
-		cmd.Println(err)
-		return
-	}
+
 	result := make(map[string]*pd.AffinityGroupState, len(defs))
 	found := false
 	for _, def := range defs {
 		state, err := PDCli.GetAffinityGroup(cmd.Context(), def.id)
 		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "404") {
+			// Check for 404 Not Found status
+			if strings.Contains(err.Error(), "404 Not Found") {
 				continue
 			}
 			cmd.Printf("Failed to get affinity group %s: %v\n", def.id, err)
@@ -202,54 +224,48 @@ func affinityGetCommandFunc(cmd *cobra.Command, _ []string) {
 }
 
 func affinityDeleteCommandFunc(cmd *cobra.Command, _ []string) {
-	info, partition, err := loadTableAffinityInfo(cmd)
+	defs, err := loadAffinityGroupDefinitions(cmd)
 	if err != nil {
 		cmd.Println(err)
 		return
 	}
-	defs, err := buildAffinityGroupDefinitions(info, partition)
-	if err != nil {
-		cmd.Println(err)
-		return
-	}
+
 	force, _ := cmd.Flags().GetBool("force")
-	ids := collectGroupIDs(defs)
-	if len(ids) == 1 {
-		if err := PDCli.DeleteAffinityGroup(cmd.Context(), ids[0], force); err != nil {
-			cmd.Printf("Failed to delete affinity group %s: %v\n", ids[0], err)
-			return
-		}
-		cmd.Printf("Affinity group %s deleted\n", ids[0])
-		return
+	ids := make([]string, len(defs))
+	for i, def := range defs {
+		ids[i] = def.id
 	}
+
 	if err := PDCli.BatchDeleteAffinityGroups(cmd.Context(), ids, force); err != nil {
-		cmd.Printf("Failed to batch delete affinity groups: %v\n", err)
+		cmd.Printf("Failed to delete affinity groups: %v\n", err)
 		return
 	}
-	cmd.Printf("Affinity groups deleted: %s\n", strings.Join(ids, ","))
+	if len(ids) == 1 {
+		cmd.Printf("Affinity group %s deleted\n", ids[0])
+	} else {
+		cmd.Printf("Affinity groups deleted: %s\n", strings.Join(ids, ","))
+	}
 }
 
 func affinityUpdatePeersCommandFunc(cmd *cobra.Command, _ []string) {
-	info, partition, err := loadTableAffinityInfo(cmd)
+	defs, err := loadAffinityGroupDefinitions(cmd)
 	if err != nil {
 		cmd.Println(err)
 		return
 	}
-	defs, err := buildAffinityGroupDefinitions(info, partition)
-	if err != nil {
-		cmd.Println(err)
-		return
-	}
+
 	// TODO: support batch updating all partitions in one call when needed.
 	if len(defs) != 1 {
 		cmd.Println("Specify --partition to target a single affinity group in partitioned tables")
 		return
 	}
+
 	leader, _ := cmd.Flags().GetUint64("leader")
 	if leader == 0 {
 		cmd.Println("leader is required")
 		return
 	}
+
 	voterStr, _ := cmd.Flags().GetString("voters")
 	voters, err := parseUint64List(voterStr)
 	if err != nil {
@@ -260,6 +276,7 @@ func affinityUpdatePeersCommandFunc(cmd *cobra.Command, _ []string) {
 		cmd.Println("voters is required")
 		return
 	}
+
 	state, err := PDCli.UpdateAffinityGroupPeers(cmd.Context(), defs[0].id, leader, voters)
 	if err != nil {
 		cmd.Printf("Failed to update affinity group peers: %v\n", err)
@@ -268,125 +285,157 @@ func affinityUpdatePeersCommandFunc(cmd *cobra.Command, _ []string) {
 	jsonPrint(cmd, state)
 }
 
+// loadAffinityGroupDefinitions loads table info and builds affinity group definitions.
+func loadAffinityGroupDefinitions(cmd *cobra.Command) ([]affinityGroupDefinition, error) {
+	info, partition, err := loadTableAffinityInfo(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return buildAffinityGroupDefinitions(info, partition)
+}
+
 func loadTableAffinityInfo(cmd *cobra.Command) (tableAffinityInfo, string, error) {
 	dbName, _ := cmd.Flags().GetString("db")
 	tableName, _ := cmd.Flags().GetString("table")
-	dsn, _ := cmd.Flags().GetString("dsn")
+	tidbHTTP, _ := cmd.Flags().GetString("tidb-http")
 	partition, _ := cmd.Flags().GetString("partition")
 	if dbName == "" || tableName == "" {
 		return tableAffinityInfo{}, "", errors.New("db and table are required")
 	}
-	if dsn == "" {
-		return tableAffinityInfo{}, "", errors.New("dsn is required to fetch table metadata from TiDB")
-	}
-	info, err := fetchTableAffinityInfo(cmd.Context(), cmd, dsn, dbName, tableName)
+	info, err := fetchTableAffinityInfo(cmd.Context(), cmd, tidbHTTP, dbName, tableName)
 	if err != nil {
 		return tableAffinityInfo{}, "", err
 	}
 	return info, partition, nil
 }
 
-func fetchTableAffinityInfo(ctx context.Context, cmd *cobra.Command, dsn, dbName, tableName string) (tableAffinityInfo, error) {
-	cfg, err := buildTiDBConfig(cmd, dsn)
+func fetchTableAffinityInfo(ctx context.Context, cmd *cobra.Command, tidbHTTP, dbName, tableName string) (tableAffinityInfo, error) {
+	// Get HTTP client with TLS support
+	httpClient, err := createHTTPClient(cmd)
 	if err != nil {
 		return tableAffinityInfo{}, err
 	}
-	db, err := openTiDBWithConfig(cfg)
+
+	// Resolve TiDB HTTP address
+	httpAddr, err := resolveTiDBHTTPAddress(ctx, httpClient, tidbHTTP)
 	if err != nil {
-		return tableAffinityInfo{}, errors.WithStack(err)
+		return tableAffinityInfo{}, err
 	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	if err := db.PingContext(ctx); err != nil {
-		return tableAffinityInfo{}, errors.WithStack(err)
+
+	// Fetch table schema via HTTP API
+	tableInfo, err := fetchTableSchema(ctx, httpClient, httpAddr, dbName, tableName)
+	if err != nil {
+		return tableAffinityInfo{}, err
 	}
-	var tableID int64
-	query := `SELECT TIDB_TABLE_ID FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`
-	if err := db.QueryRowContext(ctx, query, dbName, tableName).Scan(&tableID); err != nil {
-		if errors.ErrorEqual(err, sql.ErrNoRows) {
-			return tableAffinityInfo{}, errors.Errorf("table %s.%s not found", dbName, tableName)
+
+	// Convert TiDB API response to our internal format
+	var partitions []partitionInfo
+	if tableInfo.Partition != nil && tableInfo.Partition.Enable {
+		for _, def := range tableInfo.Partition.Definitions {
+			partitions = append(partitions, partitionInfo{
+				ID:   def.ID,
+				Name: def.Name.String(),
+			})
 		}
-		return tableAffinityInfo{}, errors.WithStack(err)
 	}
-	partitions, err := fetchPartitionInfo(ctx, db, dbName, tableName)
-	if err != nil {
-		return tableAffinityInfo{}, err
-	}
+
 	return tableAffinityInfo{
 		DB:         dbName,
 		Table:      tableName,
-		TableID:    tableID,
+		TableID:    tableInfo.ID,
 		Partitions: partitions,
 	}, nil
 }
 
-func fetchPartitionInfo(ctx context.Context, db *sql.DB, dbName, tableName string) ([]partitionInfo, error) {
-	query := `SELECT PARTITION_NAME, TIDB_PARTITION_ID FROM INFORMATION_SCHEMA.PARTITIONS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND PARTITION_NAME IS NOT NULL ORDER BY TIDB_PARTITION_ID`
-	rows, err := db.QueryContext(ctx, query, dbName, tableName)
+// resolveTiDBHTTPAddress resolves the TiDB HTTP address from flag or auto-discovery.
+func resolveTiDBHTTPAddress(ctx context.Context, httpClient *http.Client, tidbHTTP string) (string, error) {
+	if tidbHTTP != "" {
+		return tidbHTTP, nil
+	}
+
+	// Auto-discover from default address
+	httpAddr, err := discoverTiDBHTTPAddress(ctx, httpClient)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return "", errors.New("failed to discover TiDB HTTP address. Please specify --tidb-http flag (e.g., --tidb-http=http://127.0.0.1:10080)")
 	}
-	defer rows.Close()
-	var partitions []partitionInfo
-	for rows.Next() {
-		var name string
-		var id int64
-		if err := rows.Scan(&name, &id); err != nil {
-			return nil, errors.WithStack(err)
-		}
-		partitions = append(partitions, partitionInfo{
-			ID:   id,
-			Name: name,
-		})
-	}
-	return partitions, nil
+	return httpAddr, nil
 }
 
-func ensureTiDBTLS(cmd *cobra.Command, cfg *mysql.Config) error {
+// createHTTPClient creates an HTTP client with optional TLS configuration.
+func createHTTPClient(cmd *cobra.Command) (*http.Client, error) {
 	tlsConfig, err := parseTLSConfig(cmd)
-	if err != nil || tlsConfig == nil {
-		return err
-	}
-	if err := mysql.RegisterTLSConfig(tidbTLSConfigName, tlsConfig); err != nil && !strings.Contains(err.Error(), "duplicate") {
-		return errors.WithStack(err)
-	}
-	cfg.Params["tls"] = tidbTLSConfigName
-	return nil
-}
-
-func buildTiDBConfig(cmd *cobra.Command, dsn string) (*mysql.Config, error) {
-	cfg, err := mysql.ParseDSN(dsn)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	if cfg.Params == nil {
-		cfg.Params = map[string]string{}
-	}
-	if _, ok := cfg.Params["tls"]; !ok {
-		if err := ensureTiDBTLS(cmd, cfg); err != nil {
-			return nil, err
-		}
-	}
-	return cfg, nil
-}
-
-func openTiDB(cmd *cobra.Command, dsn string) (*sql.DB, error) {
-	cfg, err := buildTiDBConfig(cmd, dsn)
 	if err != nil {
 		return nil, err
 	}
-	return openTiDBWithConfig(cfg)
+
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+
+	return &http.Client{
+		Timeout:   httpRequestTimeout,
+		Transport: transport,
+	}, nil
 }
 
-func openTiDBWithConfig(cfg *mysql.Config) (*sql.DB, error) {
-	db, err := sql.Open("mysql", cfg.FormatDSN())
+// doHTTPRequest performs an HTTP GET request and optionally decodes the JSON response.
+func doHTTPRequest(ctx context.Context, httpClient *http.Client, url string, result any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return errors.Wrapf(err, "failed to create request for %s", url)
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	return db, nil
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return errors.Wrapf(err, "failed to request %s", url)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return errors.Errorf("HTTP %d from %s: %s", resp.StatusCode, url, string(body))
+	}
+
+	// If result is nil, just verify the request succeeded
+	if result == nil {
+		return nil
+	}
+
+	// Decode JSON response
+	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		return errors.Wrapf(err, "failed to decode response from %s", url)
+	}
+
+	return nil
+}
+
+// discoverTiDBHTTPAddress attempts to discover a TiDB server address using the default address.
+func discoverTiDBHTTPAddress(ctx context.Context, httpClient *http.Client) (string, error) {
+	// Use default TiDB status port
+	addr := "http://127.0.0.1:10080"
+	url := fmt.Sprintf("%s/status", addr)
+
+	// Try /status endpoint to verify TiDB is accessible
+	if err := doHTTPRequest(ctx, httpClient, url, nil); err != nil {
+		return "", errors.Wrapf(err, "TiDB not accessible at %s", addr)
+	}
+
+	return addr, nil
+}
+
+// fetchTableSchema fetches table schema from TiDB HTTP API.
+func fetchTableSchema(ctx context.Context, httpClient *http.Client, httpAddr, dbName, tableName string) (*tidbTableInfo, error) {
+	url := fmt.Sprintf("%s/schema/%s/%s", httpAddr, dbName, tableName)
+
+	var tableInfo tidbTableInfo
+	if err := doHTTPRequest(ctx, httpClient, url, &tableInfo); err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return nil, errors.Errorf("table %s.%s not found", dbName, tableName)
+		}
+		return nil, err
+	}
+
+	return &tableInfo, nil
 }
 
 func buildAffinityGroupDefinitions(info tableAffinityInfo, partition string) ([]affinityGroupDefinition, error) {
@@ -394,12 +443,16 @@ func buildAffinityGroupDefinitions(info tableAffinityInfo, partition string) ([]
 		if partition != "" {
 			return nil, errors.New("--partition is only allowed for partitioned tables")
 		}
-		ranges := buildKeyRanges(info, info.Partitions)
+		start, end := tableKeyRange(info.TableID)
 		return []affinityGroupDefinition{{
-			id:     tableGroupID(info.TableID),
-			ranges: ranges,
+			id: tableGroupID(info.TableID),
+			ranges: []pd.AffinityGroupKeyRange{{
+				StartKey: start,
+				EndKey:   end,
+			}},
 		}}, nil
 	}
+
 	selected := info.Partitions
 	if partition != "" {
 		match, err := selectPartition(info.Partitions, partition)
@@ -408,6 +461,7 @@ func buildAffinityGroupDefinitions(info tableAffinityInfo, partition string) ([]
 		}
 		selected = []partitionInfo{match}
 	}
+
 	defs := make([]affinityGroupDefinition, 0, len(selected))
 	for _, p := range selected {
 		start, end := tableKeyRange(p.ID)
@@ -420,19 +474,6 @@ func buildAffinityGroupDefinitions(info tableAffinityInfo, partition string) ([]
 		})
 	}
 	return defs, nil
-}
-
-func buildKeyRanges(info tableAffinityInfo, partitions []partitionInfo) []pd.AffinityGroupKeyRange {
-	if len(partitions) == 0 {
-		start, end := tableKeyRange(info.TableID)
-		return []pd.AffinityGroupKeyRange{{StartKey: start, EndKey: end}}
-	}
-	ranges := make([]pd.AffinityGroupKeyRange, 0, len(partitions))
-	for _, p := range partitions {
-		start, end := tableKeyRange(p.ID)
-		ranges = append(ranges, pd.AffinityGroupKeyRange{StartKey: start, EndKey: end})
-	}
-	return ranges
 }
 
 func selectPartition(partitions []partitionInfo, target string) (partitionInfo, error) {
@@ -493,11 +534,7 @@ func parseUint64List(input string) ([]uint64, error) {
 }
 
 func affinityListCommandFunc(cmd *cobra.Command, _ []string) {
-	dsn, _ := cmd.Flags().GetString("dsn")
-	if dsn == "" {
-		cmd.Println("dsn is required to resolve table names")
-		return
-	}
+	tidbHTTP, _ := cmd.Flags().GetString("tidb-http")
 	groups, err := PDCli.GetAllAffinityGroups(cmd.Context())
 	if err != nil {
 		cmd.Printf("Failed to get affinity groups: %v\n", err)
@@ -510,26 +547,28 @@ func affinityListCommandFunc(cmd *cobra.Command, _ []string) {
 		return
 	}
 
-	db, err := openTiDB(cmd, dsn)
+	// Get HTTP client
+	httpClient, err := createHTTPClient(cmd)
+	if err != nil {
+		cmd.Printf("Failed to create HTTP client: %v\n", err)
+		return
+	}
+
+	// Resolve TiDB HTTP address
+	httpAddr, err := resolveTiDBHTTPAddress(cmd.Context(), httpClient, tidbHTTP)
 	if err != nil {
 		cmd.Println(err)
 		return
 	}
-	defer db.Close()
 
-	if err := db.PingContext(cmd.Context()); err != nil {
-		cmd.Println(errors.WithStack(err))
-		return
-	}
-
-	tableNames, _ := fetchTablesByIDs(cmd.Context(), db, parsed.tableIDs)
-	partitionNames, _ := fetchPartitionsByIDs(cmd.Context(), db, parsed.partitionIDs)
+	// Resolve all table and partition names in a single pass
+	names := resolveNames(cmd.Context(), httpClient, httpAddr, parsed.tableIDs, parsed.partitionIDs)
 
 	result := make([]affinityGroupResolved, 0, len(groups))
 	for id, state := range groups {
 		if info, ok := parsed.partitionGroups[id]; ok {
-			pName := partitionNames[info.partitionID]
-			tName := tableNames[pName.TableID]
+			pName := names.partitions[info.partitionID]
+			tName := names.tables[pName.TableID]
 			result = append(result, affinityGroupResolved{
 				GroupID:     id,
 				Database:    tName.Schema,
@@ -542,7 +581,7 @@ func affinityListCommandFunc(cmd *cobra.Command, _ []string) {
 			continue
 		}
 		if info, ok := parsed.tableGroups[id]; ok {
-			tName := tableNames[info.tableID]
+			tName := names.tables[info.tableID]
 			result = append(result, affinityGroupResolved{
 				GroupID:  id,
 				Database: tName.Schema,
@@ -624,64 +663,75 @@ type partitionName struct {
 	Name    string
 }
 
-func fetchTablesByIDs(ctx context.Context, db *sql.DB, ids []int64) (map[int64]tableName, error) {
-	res := make(map[int64]tableName, len(ids))
-	if len(ids) == 0 {
-		return res, nil
-	}
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
-	var sb strings.Builder
-	sb.WriteString("SELECT TABLE_ID, TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_ID IN (")
-	sb.WriteString(placeholders)
-	sb.WriteString(")")
-	query := sb.String()
-	args := make([]any, 0, len(ids))
-	for _, id := range ids {
-		args = append(args, id)
-	}
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var schema, name string
-		if err := rows.Scan(&id, &schema, &name); err != nil {
-			return nil, errors.WithStack(err)
-		}
-		res[id] = tableName{Schema: schema, Name: name}
-	}
-	return res, nil
+type resolvedNames struct {
+	tables     map[int64]tableName     // tableID -> tableName
+	partitions map[int64]partitionName // partitionID -> partitionName
 }
 
-func fetchPartitionsByIDs(ctx context.Context, db *sql.DB, ids []int64) (map[int64]partitionName, error) {
-	res := make(map[int64]partitionName, len(ids))
-	if len(ids) == 0 {
-		return res, nil
+// resolveNames fetches table and partition names by IDs in a single pass.
+// This function performs a single traversal of all schemas and tables,
+// resolving both table IDs and partition IDs simultaneously to minimize HTTP requests.
+// Returns a best-effort result, ignoring any errors.
+func resolveNames(ctx context.Context, httpClient *http.Client, httpAddr string, tableIDs, partitionIDs []int64) resolvedNames {
+	result := resolvedNames{
+		tables:     make(map[int64]tableName),
+		partitions: make(map[int64]partitionName),
 	}
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
-	var sb strings.Builder
-	sb.WriteString("SELECT PARTITION_ID, TABLE_ID, PARTITION_NAME FROM INFORMATION_SCHEMA.PARTITIONS WHERE PARTITION_ID IN (")
-	sb.WriteString(placeholders)
-	sb.WriteString(")")
-	query := sb.String()
-	args := make([]any, 0, len(ids))
-	for _, id := range ids {
-		args = append(args, id)
+
+	if len(tableIDs) == 0 && len(partitionIDs) == 0 {
+		return result
 	}
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, errors.WithStack(err)
+
+	// Build lookup sets for O(1) checking
+	neededTableIDs := make(map[int64]bool, len(tableIDs))
+	for _, id := range tableIDs {
+		neededTableIDs[id] = true
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var pid, tableID int64
-		var name string
-		if err := rows.Scan(&pid, &tableID, &name); err != nil {
-			return nil, errors.WithStack(err)
+
+	neededPartitionIDs := make(map[int64]bool, len(partitionIDs))
+	for _, id := range partitionIDs {
+		neededPartitionIDs[id] = true
+	}
+
+	// Fetch all schemas
+	var schemas []struct {
+		Name string `json:"name"`
+	}
+	url := fmt.Sprintf("%s/schema", httpAddr)
+	if err := doHTTPRequest(ctx, httpClient, url, &schemas); err != nil {
+		return result // Return empty result if API fails
+	}
+
+	// Single pass: fetch all tables and resolve both table and partition names
+	for _, schema := range schemas {
+		var tables []tidbTableInfo
+		url := fmt.Sprintf("%s/schema/%s", httpAddr, schema.Name)
+		if err := doHTTPRequest(ctx, httpClient, url, &tables); err != nil {
+			continue
 		}
-		res[pid] = partitionName{TableID: tableID, Name: name}
+
+		for _, table := range tables {
+			// Check if this table ID is needed
+			if neededTableIDs[table.ID] {
+				result.tables[table.ID] = tableName{
+					Schema: schema.Name,
+					Name:   table.Name.String(),
+				}
+			}
+
+			// Check partitions if present
+			if table.Partition != nil && table.Partition.Enable {
+				for _, partition := range table.Partition.Definitions {
+					if neededPartitionIDs[partition.ID] {
+						result.partitions[partition.ID] = partitionName{
+							TableID: table.ID,
+							Name:    partition.Name.String(),
+						}
+					}
+				}
+			}
+		}
 	}
-	return res, nil
+
+	return result
 }
