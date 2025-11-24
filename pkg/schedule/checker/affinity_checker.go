@@ -205,6 +205,13 @@ func (c *AffinityChecker) createAffinityOperator(region *core.RegionInfo, group 
 		region,
 	).SetPeers(peers).SetExpectedRoles(roles)
 
+	// Skip building if target leader store currently disallows leader in (e.g., evict-leader / reject-leader).
+	if targetLeader := c.cluster.GetStore(group.LeaderStoreID); targetLeader != nil {
+		if !targetLeader.AllowLeaderTransferIn() || c.conf.CheckLabelProperty(config.RejectLeader, targetLeader.GetLabels()) {
+			return nil
+		}
+	}
+
 	// Determine operator kind based on whether leader needs to change
 	kind := operator.OpAffinity | operator.OpRegion
 	if currentLeaderStoreID != group.LeaderStoreID {
