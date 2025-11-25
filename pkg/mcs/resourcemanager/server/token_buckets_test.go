@@ -273,3 +273,151 @@ func TestGroupTokenBucketRequestLoop(t *testing.T) {
 		currentTime = currentTime.Add(timeIncrement)
 	}
 }
+
+// Regression for unfair penalty: heavier slot should not get less fill than lighter one.
+func TestSlotBalancePenaltyReproduction(t *testing.T) {
+	re := require.New(t)
+	now := time.Now()
+	fillRate := uint64(1000)
+	burst := int64(1000)
+	gtb := &GroupTokenBucket{
+		Settings: &rmpb.TokenLimitSettings{FillRate: fillRate, BurstLimit: burst},
+		GroupTokenBucketState: GroupTokenBucketState{
+			Tokens:             float64(fillRate),
+			resourceGroupName:  testResourceGroupName,
+			tokenSlots:         make(map[uint64]*tokenSlot),
+			overrideFillRate:   -1,
+			overrideBurstLimit: -1,
+			Initialized:        true,
+		},
+	}
+	gtb.tokenSlots[1] = &tokenSlot{requireTokensSum: 900, lastReqTime: now}
+	gtb.tokenSlots[2] = &tokenSlot{requireTokensSum: 100, lastReqTime: now}
+	gtb.clientConsumptionTokensSum = 1000
+
+	gtb.balanceSlotTokens(now, 1, 1, float64(fillRate))
+	re.GreaterOrEqual(gtb.tokenSlots[1].fillRate, gtb.tokenSlots[2].fillRate)
+}
+
+func TestSlotBalanceHighWaterBypass(t *testing.T) {
+	re := require.New(t)
+	now := time.Now()
+	fillRate := uint64(1000)
+	burst := int64(1000)
+	gtb := &GroupTokenBucket{
+		Settings: &rmpb.TokenLimitSettings{FillRate: fillRate, BurstLimit: burst},
+		GroupTokenBucketState: GroupTokenBucketState{
+			Tokens:             float64(burst),
+			resourceGroupName:  testResourceGroupName,
+			tokenSlots:         make(map[uint64]*tokenSlot),
+			overrideFillRate:   -1,
+			overrideBurstLimit: -1,
+			Initialized:        true,
+		},
+	}
+	gtb.tokenSlots[1] = &tokenSlot{requireTokensSum: 900, lastReqTime: now}
+	gtb.tokenSlots[2] = &tokenSlot{requireTokensSum: 100, lastReqTime: now}
+	gtb.clientConsumptionTokensSum = 1000
+
+	gtb.balanceSlotTokens(now, 1, 1, float64(fillRate))
+	re.Equal(fillRate, gtb.tokenSlots[1].fillRate)
+	re.Equal(fillRate, gtb.tokenSlots[2].fillRate)
+	re.InDelta(gtb.Tokens/2, gtb.tokenSlots[1].tokenCapacity, 1e-6)
+	re.InDelta(gtb.Tokens/2, gtb.tokenSlots[2].tokenCapacity, 1e-6)
+}
+
+// Sanity matrix comparing master-like, 9887, and new-decay in typical scenes.
+func TestBalanceScenarioMatrix(t *testing.T) {
+	type scenario struct {
+		name          string
+		requireTokens []float64
+		tokens        float64
+		fillRate      float64
+		warmupDecays  int
+		burstForS1    float64
+	}
+	scenarios := []scenario{
+		{name: "high_water_hotspot", requireTokens: []float64{900, 50, 50}, tokens: 1000, fillRate: 1000},
+		{name: "low_water_skewed", requireTokens: []float64{900, 100, 100}, tokens: 200, fillRate: 1000},
+		{name: "low_water_single_hotspot", requireTokens: []float64{1000, 1, 1}, tokens: 200, fillRate: 1000},
+		{name: "recovery_after_suppression", requireTokens: []float64{0, 5000}, tokens: 200, fillRate: 1000, warmupDecays: 20, burstForS1: 5000},
+	}
+
+	masterFill := func(req []float64, fillRate float64) []float64 {
+		n := float64(len(req))
+		sum := 0.0
+		for _, r := range req {
+			sum += r
+		}
+		out := make([]float64, len(req))
+		for i, r := range req {
+			ratio := (1 - r/sum + 1/n) * (1 / n)
+			out[i] = fillRate * ratio
+		}
+		return out
+	}
+
+	pr9887Fill := func(req []float64, fillRate float64) []float64 {
+		n := float64(len(req))
+		even := 1 / n
+		sum := 0.0
+		for _, r := range req {
+			sum += r
+		}
+		out := make([]float64, len(req))
+		for i, r := range req {
+			share := r / sum
+			ratio := even*(1-defaultConsumptionBiasWeight) + share*defaultConsumptionBiasWeight
+			out[i] = fillRate * ratio
+		}
+		return out
+	}
+
+	newFill := func(sc scenario) []float64 {
+		now := time.Now()
+		gtb := &GroupTokenBucket{
+			Settings: &rmpb.TokenLimitSettings{FillRate: uint64(sc.fillRate), BurstLimit: int64(sc.fillRate)},
+			GroupTokenBucketState: GroupTokenBucketState{
+				Tokens:             sc.tokens,
+				resourceGroupName:  testResourceGroupName,
+				tokenSlots:         make(map[uint64]*tokenSlot),
+				overrideFillRate:   -1,
+				overrideBurstLimit: -1,
+				Initialized:        true,
+			},
+		}
+		sum := 0.0
+		for i, r := range sc.requireTokens {
+			gtb.tokenSlots[uint64(i+1)] = &tokenSlot{requireTokensSum: r, lastReqTime: now}
+			sum += r
+		}
+		gtb.clientConsumptionTokensSum = sum
+		// apply warmup decays (no new demand) to simulate time passing
+		for i := 0; i < sc.warmupDecays; i++ {
+			gtb.balanceSlotTokens(now, 0, 0, sc.fillRate)
+		}
+		burstReq := sc.burstForS1
+		if burstReq == 0 {
+			burstReq = 1
+		}
+		gtb.balanceSlotTokens(now, 1, burstReq, sc.fillRate)
+		out := make([]float64, len(sc.requireTokens))
+		for i := range sc.requireTokens {
+			out[i] = float64(gtb.tokenSlots[uint64(i+1)].fillRate)
+		}
+		return out
+	}
+
+	for _, sc := range scenarios {
+		m := masterFill(sc.requireTokens, sc.fillRate)
+		p := pr9887Fill(sc.requireTokens, sc.fillRate)
+		nf := newFill(sc)
+		t.Logf("[%s] master=%v pr9887=%v new=%v", sc.name, m, p, nf)
+		if len(sc.requireTokens) > 1 && sc.requireTokens[0] >= sc.requireTokens[1] {
+			require.GreaterOrEqual(t, nf[0], nf[1], "[%s] heavy should be >= light", sc.name)
+		}
+		if sc.warmupDecays > 0 && sc.burstForS1 > 0 {
+			require.GreaterOrEqual(t, nf[0], p[0], "[%s] decay+bypass should recover faster or equal to pr9887", sc.name)
+		}
+	}
+}

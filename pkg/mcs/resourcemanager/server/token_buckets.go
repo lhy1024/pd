@@ -34,6 +34,8 @@ const (
 	maxAssignTokens              = math.MaxFloat64 / 1024 // assume max client connect is 1024
 	slotExpireTimeout            = 10 * time.Minute
 	defaultConsumptionBiasWeight = 0.75
+	defaultDemandDecayFactor     = 0.9
+	defaultHighWaterRatio        = 0.5
 )
 
 type burstableMode int
@@ -238,6 +240,21 @@ func (gtb *GroupTokenBucket) balanceSlotTokens(
 	clientUniqueID uint64,
 	requiredToken, tokensForBalance float64,
 ) {
+	// Decay historical demand to keep it in a recent window.
+	// NOTE: decay is per balance call. If balanceSlotTokens is triggered very frequently
+	// (e.g. many tiny requests), this may decay too fast and introduce jitter. In such
+	// cases consider time-based decay (e.g. exp(-dt/tau)) instead of per-call decay.
+	gtb.clientConsumptionTokensSum = 0
+	for _, slot := range gtb.tokenSlots {
+		slot.requireTokensSum *= defaultDemandDecayFactor
+		gtb.clientConsumptionTokensSum += slot.requireTokensSum
+	}
+	// Include current request once in the total demand for this round to avoid
+	// inflating the active slot's share against a stale denominator.
+	if requiredToken > 0 {
+		gtb.clientConsumptionTokensSum += requiredToken
+	}
+
 	slot, exist := gtb.tokenSlots[clientUniqueID]
 	if !exist {
 		// Only slots that require a positive number will be considered alive,
@@ -275,6 +292,20 @@ func (gtb *GroupTokenBucket) balanceSlotTokens(
 	if len(gtb.tokenSlots) == 0 {
 		return
 	}
+
+	burstLimit := gtb.getBurstLimit()
+	// High water: bucket is healthy, bypass complex rebalance to avoid throttling hotspots.
+	if burstLimit > 0 && gtb.Tokens >= float64(burstLimit)*defaultHighWaterRatio && tokensForBalance >= 0 {
+		evenRatio := 1 / float64(len(gtb.tokenSlots))
+		for _, slot := range gtb.tokenSlots {
+			slot.tokenCapacity = evenRatio * gtb.Tokens
+			slot.lastTokenCapacity = evenRatio * gtb.Tokens
+			slot.fillRate = uint64(gtb.getFillRate())
+			slot.burstLimit = burstLimit
+		}
+		return
+	}
+
 	evenRatio := 1 / float64(len(gtb.tokenSlots))
 	if mode := gtb.getBurstableMode(); mode == rateControlled || mode == unlimited {
 		for _, slot := range gtb.tokenSlots {
@@ -284,7 +315,7 @@ func (gtb *GroupTokenBucket) balanceSlotTokens(
 		return
 	}
 
-	for _, slot := range gtb.tokenSlots {
+	for clientID, slot := range gtb.tokenSlots {
 		if gtb.clientConsumptionTokensSum == 0 || len(gtb.tokenSlots) == 1 {
 			// Need to make each slot even.
 			slot.tokenCapacity = evenRatio * gtb.Tokens
@@ -296,7 +327,11 @@ func (gtb *GroupTokenBucket) balanceSlotTokens(
 		} else {
 			// Blend historical consumption with an even share so active clients receive
 			// proportionally higher refill rates without starving low-traffic ones.
-			consumptionShare := slot.requireTokensSum / gtb.clientConsumptionTokensSum
+			consumption := slot.requireTokensSum
+			if clientID == clientUniqueID && requiredToken > 0 {
+				consumption += requiredToken
+			}
+			consumptionShare := consumption / gtb.clientConsumptionTokensSum
 			ratio := evenRatio*(1-defaultConsumptionBiasWeight) + consumptionShare*defaultConsumptionBiasWeight
 
 			assignTokens := tokensForBalance * ratio
@@ -319,7 +354,6 @@ func (gtb *GroupTokenBucket) balanceSlotTokens(
 	if requiredToken != 0 {
 		// Only slots that require a positive number will be considered alive.
 		slot.requireTokensSum += requiredToken
-		gtb.clientConsumptionTokensSum += requiredToken
 	}
 }
 
@@ -450,7 +484,6 @@ func (gtb *GroupTokenBucket) inspectAnomalies(
 				zap.String("resource-group-name", gtb.resourceGroupName),
 				zap.String("settings", gtb.Settings.String()),
 				zap.Float64("tokens", gtb.Tokens),
-				zap.Float64("client-consumption-tokens-sum", gtb.clientConsumptionTokensSum),
 				zap.Int("slot-len", len(gtb.tokenSlots)),
 			)...,
 		)
