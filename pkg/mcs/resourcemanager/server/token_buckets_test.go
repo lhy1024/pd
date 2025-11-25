@@ -393,7 +393,7 @@ func TestBalanceScenarioMatrix(t *testing.T) {
 		}
 		gtb.clientConsumptionTokensSum = sum
 		// apply warmup decays (no new demand) to simulate time passing
-		for i := 0; i < sc.warmupDecays; i++ {
+		for range sc.warmupDecays {
 			gtb.balanceSlotTokens(now, 0, 0, sc.fillRate)
 		}
 		burstReq := sc.burstForS1
@@ -420,4 +420,40 @@ func TestBalanceScenarioMatrix(t *testing.T) {
 			require.GreaterOrEqual(t, nf[0], p[0], "[%s] decay+bypass should recover faster or equal to pr9887", sc.name)
 		}
 	}
+}
+
+// Ensure hysteresis and bypass do not reset tokenCapacity.
+func TestHighWaterHysteresisAndCapacity(t *testing.T) {
+	re := require.New(t)
+	now := time.Now()
+	fillRate := uint64(1000)
+	burst := int64(1000)
+	gtb := &GroupTokenBucket{
+		Settings: &rmpb.TokenLimitSettings{FillRate: fillRate, BurstLimit: burst},
+		GroupTokenBucketState: GroupTokenBucketState{
+			Tokens:             800, // > enter (0.7)
+			resourceGroupName:  testResourceGroupName,
+			tokenSlots:         make(map[uint64]*tokenSlot),
+			overrideFillRate:   -1,
+			overrideBurstLimit: -1,
+			Initialized:        true,
+		},
+	}
+	// Custom capacities to verify they are not reset in bypass.
+	gtb.tokenSlots[1] = &tokenSlot{requireTokensSum: 100, tokenCapacity: 300, lastReqTime: now}
+	gtb.tokenSlots[2] = &tokenSlot{requireTokensSum: 50, tokenCapacity: 100, lastReqTime: now}
+	gtb.clientConsumptionTokensSum = 150
+
+	// Enter bypass (high water), capacities only get incremental balance.
+	gtb.balanceSlotTokens(now, 1, 1, 200)
+	re.True(gtb.highWaterMode)
+	re.InDelta(300+100, gtb.tokenSlots[1].tokenCapacity, 1e-6)
+	re.InDelta(100+100, gtb.tokenSlots[2].tokenCapacity, 1e-6)
+	re.Equal(fillRate, gtb.tokenSlots[1].fillRate)
+	re.Equal(int64(fillRate), gtb.tokenSlots[1].burstLimit)
+
+	// Drop water level below exit threshold, should leave bypass.
+	gtb.Tokens = 300 // < 0.4 * burst
+	gtb.balanceSlotTokens(now, 1, 1, 0)
+	re.False(gtb.highWaterMode)
 }

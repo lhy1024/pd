@@ -35,7 +35,8 @@ const (
 	slotExpireTimeout            = 10 * time.Minute
 	defaultConsumptionBiasWeight = 0.75
 	defaultDemandDecayFactor     = 0.9
-	defaultHighWaterRatio        = 0.5
+	defaultHighWaterEnterRatio   = 0.7
+	defaultHighWaterExitRatio    = 0.5
 )
 
 type burstableMode int
@@ -191,6 +192,9 @@ type GroupTokenBucketState struct {
 	// means the burst limit is overridden.
 	overrideBurstLimit int64
 
+	// highWaterMode indicates whether we are in the bypass mode (enough tokens).
+	highWaterMode bool
+
 	// settingChanged is used to avoid that the number of tokens returned is jitter because of changing fill rate.
 	settingChanged      bool
 	lastCheckExpireSlot time.Time
@@ -220,6 +224,7 @@ func (gts *GroupTokenBucketState) clone() *GroupTokenBucketState {
 		overrideBurstLimit:         gts.overrideBurstLimit,
 		clientConsumptionTokensSum: gts.clientConsumptionTokensSum,
 		lastCheckExpireSlot:        gts.lastCheckExpireSlot,
+		highWaterMode:              gts.highWaterMode,
 	}
 }
 
@@ -295,15 +300,32 @@ func (gtb *GroupTokenBucket) balanceSlotTokens(
 
 	burstLimit := gtb.getBurstLimit()
 	// High water: bucket is healthy, bypass complex rebalance to avoid throttling hotspots.
-	if burstLimit > 0 && gtb.Tokens >= float64(burstLimit)*defaultHighWaterRatio && tokensForBalance >= 0 {
-		evenRatio := 1 / float64(len(gtb.tokenSlots))
-		for _, slot := range gtb.tokenSlots {
-			slot.tokenCapacity = evenRatio * gtb.Tokens
-			slot.lastTokenCapacity = evenRatio * gtb.Tokens
-			slot.fillRate = uint64(gtb.getFillRate())
-			slot.burstLimit = burstLimit
+	if burstLimit > 0 {
+		waterRatio := gtb.Tokens / float64(burstLimit)
+		if gtb.highWaterMode {
+			if waterRatio <= defaultHighWaterExitRatio {
+				gtb.highWaterMode = false
+			}
+		} else {
+			if waterRatio >= defaultHighWaterEnterRatio {
+				gtb.highWaterMode = true
+			}
 		}
-		return
+		if gtb.highWaterMode {
+			evenRatio := 1 / float64(len(gtb.tokenSlots))
+			if tokensForBalance > 0 {
+				for _, slot := range gtb.tokenSlots {
+					delta := tokensForBalance * evenRatio
+					slot.tokenCapacity += delta
+					slot.lastTokenCapacity += delta
+				}
+			}
+			for _, slot := range gtb.tokenSlots {
+				slot.fillRate = uint64(gtb.getFillRate())
+				slot.burstLimit = burstLimit
+			}
+			return
+		}
 	}
 
 	evenRatio := 1 / float64(len(gtb.tokenSlots))
