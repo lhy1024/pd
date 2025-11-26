@@ -493,6 +493,13 @@ func (m *Manager) getCurrentRanges(groupID string) ([]GroupKeyRange, error) {
 	// Parse from label rule
 	labelRule := m.regionLabeler.GetLabelRule(GetLabelRuleID(groupID))
 	if labelRule == nil {
+		// Allow starting from empty when the group exists but has no ranges yet.
+		m.RLock()
+		_, exists := m.groups[groupID]
+		m.RUnlock()
+		if exists {
+			return nil, nil
+		}
 		return nil, errors.Errorf("label rule not found for group %s", groupID)
 	}
 

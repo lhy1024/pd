@@ -250,3 +250,75 @@ func TestLabelRuleIntegration(t *testing.T) {
 	re.NoError(err)
 	re.False(manager.IsGroupExist("group_no_label"))
 }
+
+// TestUpdateAffinityGroupKeyRangesAddToEmptyGroup documents the current failure
+// when adding key ranges to a group created without initial ranges.
+func TestUpdateAffinityGroupKeyRangesAddToEmptyGroup(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := storage.NewStorageWithMemoryBackend()
+	storeInfos := core.NewStoresInfo()
+	store1 := core.NewStoreInfo(&metapb.Store{Id: 1, Address: "test1"})
+	store1 = store1.Clone(core.SetLastHeartbeatTS(time.Now()))
+	storeInfos.PutStore(store1)
+
+	conf := mockconfig.NewTestOptions()
+
+	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+	re.NoError(err)
+	manager, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
+	re.NoError(err)
+
+	// Create a group without key ranges or peers.
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "empty-group"}}))
+
+	// Adding ranges should succeed; currently it returns "label rule not found".
+	err = manager.UpdateAffinityGroupKeyRanges(
+		[]GroupKeyRanges{{
+			GroupID: "empty-group",
+			KeyRanges: []keyutil.KeyRange{{
+				StartKey: []byte{0x00},
+				EndKey:   []byte{0x01},
+			}},
+		}},
+		nil,
+	)
+	re.NoError(err)
+}
+
+// TestDeleteAffinityGroupsForceMissing verifies force deletion tolerates missing IDs.
+func TestDeleteAffinityGroupsForceMissing(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := storage.NewStorageWithMemoryBackend()
+	storeInfos := core.NewStoresInfo()
+	store1 := core.NewStoreInfo(&metapb.Store{Id: 1, Address: "test1"})
+	store1 = store1.Clone(core.SetLastHeartbeatTS(time.Now()))
+	storeInfos.PutStore(store1)
+
+	conf := mockconfig.NewTestOptions()
+
+	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+	re.NoError(err)
+	manager, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
+	re.NoError(err)
+
+	// Create a group with a key range.
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{
+		GroupID: "with-range",
+		KeyRanges: []keyutil.KeyRange{{
+			StartKey: []byte{0x00},
+			EndKey:   []byte{0x10},
+		}},
+	}}))
+
+	// TODO: Do we need to fix this?
+	// Force delete should tolerate missing IDs and remove existing groups with ranges.
+	err = manager.DeleteAffinityGroups([]string{"missing-group", "with-range"}, true)
+	re.NoError(err)
+	re.False(manager.IsGroupExist("with-range"))
+}
