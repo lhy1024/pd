@@ -218,16 +218,8 @@ func BatchDeleteAffinityGroups(c *gin.Context) {
 		}
 	}
 
-	if err := manager.DeleteAffinityGroups(req.IDs, req.Force); err != nil {
-		if errs.ErrAffinityGroupNotFound.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
-			return
-		}
-		if errs.ErrAffinityGroupContent.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-			return
-		}
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+	err = manager.DeleteAffinityGroups(req.IDs, req.Force)
+	if handleAffinityError(c, err) {
 		return
 	}
 
@@ -279,21 +271,11 @@ func BatchModifyAffinityGroups(c *gin.Context) {
 	// Validate and convert operations in one pass
 	affectedGroups := make(map[string]bool)
 	addOps, err := convertAndValidateRangeOps(req.Add, manager, affectedGroups)
-	if err != nil {
-		if errs.ErrAffinityGroupNotFound.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
-			return
-		}
-		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+	if handleAffinityError(c, err) {
 		return
 	}
 	removeOps, err := convertAndValidateRangeOps(req.Remove, manager, affectedGroups)
-	if err != nil {
-		if errs.ErrAffinityGroupNotFound.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
-			return
-		}
-		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+	if handleAffinityError(c, err) {
 		return
 	}
 
@@ -302,16 +284,8 @@ func BatchModifyAffinityGroups(c *gin.Context) {
 	groupedRemoveOps := groupKeyRangesByGroupID(removeOps)
 
 	// Call manager to perform batch modify
-	if err := manager.UpdateAffinityGroupKeyRanges(groupedAddOps, groupedRemoveOps); err != nil {
-		if errs.ErrAffinityGroupNotFound.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
-			return
-		}
-		if errs.ErrAffinityGroupContent.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-			return
-		}
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+	err = manager.UpdateAffinityGroupKeyRanges(groupedAddOps, groupedRemoveOps)
+	if handleAffinityError(c, err) {
 		return
 	}
 
@@ -366,16 +340,7 @@ func UpdateAffinityGroupPeers(c *gin.Context) {
 
 	// Note: Duplicate store ID and leader-in-voters validation is performed by AdjustGroup in the manager layer
 	state, err := manager.UpdateAffinityGroupPeers(groupID, req.LeaderStoreID, req.VoterStoreIDs)
-	if err != nil {
-		if errs.ErrAffinityGroupNotFound.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
-			return
-		}
-		if errs.ErrAffinityGroupContent.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-			return
-		}
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+	if handleAffinityError(c, err) {
 		return
 	}
 
@@ -424,12 +389,7 @@ func DeleteAffinityGroup(c *gin.Context) {
 
 	// Delete the affinity group from manager
 	err = manager.DeleteAffinityGroups([]string{groupID}, force)
-	if err != nil {
-		if errs.ErrAffinityGroupContent.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-			return
-		}
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+	if handleAffinityError(c, err) {
 		return
 	}
 
@@ -512,6 +472,26 @@ func validateGroupID(id string) error {
 		return errs.ErrInvalidGroupID.GenWithStackByArgs(id)
 	}
 	return nil
+}
+
+// handleAffinityError maps affinity-related errors to HTTP status codes and writes the response.
+// Returns true if the error has been handled and a response has been written.
+func handleAffinityError(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errs.ErrAffinityGroupNotFound.Equal(err):
+		c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+	case errs.ErrAffinityGroupContent.Equal(err),
+		errs.ErrInvalidGroupID.Equal(err),
+		errs.ErrEmptyRequest.Equal(err),
+		errs.ErrAffinityGroupConflict.Equal(err):
+		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+	default:
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+	}
+	return true
 }
 
 // validateKeyRange checks if a key range is valid.
