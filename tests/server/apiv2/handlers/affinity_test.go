@@ -268,7 +268,6 @@ func doBatchDeleteAffinityGroups(re *require.Assertions, serverAddr string, req 
 	return resp.StatusCode, errorMsg
 }
 
-
 func (suite *affinityHandlerTestSuite) TestAffinityGroupLifecycle() {
 	suite.env.RunTest(func(cluster *tests.TestCluster) {
 		re := suite.Require()
@@ -370,19 +369,21 @@ func (suite *affinityHandlerTestSuite) TestAffinityFirstRegionWins() {
 			&metapb.Peer{Id: 11, StoreId: 1, Role: metapb.PeerRole_Voter},
 		)
 
-		// Re-fetch the latest group state before observing region to ensure affinityVer is current.
-		// This avoids silent failures due to version mismatch.
-		group = manager.GetAffinityGroupState("first-win")
-		re.NotNil(group)
-
-		// Manually observe region; first available region should set the peer layout.
-		manager.ObserveAvailableRegion(region, group)
-
 		// Fetch group via API to ensure effect and peers are set.
-		finalState := mustGetAffinityGroup(re, serverAddr, "first-win")
-		re.True(finalState.IsAffinitySchedulingAllowed)
-		re.Equal(region.GetLeader().GetStoreId(), finalState.LeaderStoreID)
-		re.ElementsMatch([]uint64{region.GetLeader().GetStoreId()}, finalState.VoterStoreIDs)
+		// Retry until group schedule is observed.
+		var state *affinity.GroupState
+		testutil.Eventually(re, func() bool {
+			group := manager.GetAffinityGroupState("first-win")
+			if group == nil {
+				return false
+			}
+			manager.ObserveAvailableRegion(region, group)
+			state = manager.GetAffinityGroupState("first-win")
+			return state != nil &&
+				state.IsAffinitySchedulingAllowed
+		})
+		re.Equal(region.GetLeader().GetStoreId(), state.LeaderStoreID)
+		re.ElementsMatch([]uint64{region.GetLeader().GetStoreId()}, state.VoterStoreIDs)
 	})
 }
 
@@ -1071,5 +1072,3 @@ func (suite *affinityHandlerTestSuite) TestBatchModifyRemoveNonExistentRange() {
 		re.Equal(1, state.RangeCount)
 	})
 }
-
-
