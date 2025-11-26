@@ -280,11 +280,19 @@ func BatchModifyAffinityGroups(c *gin.Context) {
 	affectedGroups := make(map[string]bool)
 	addOps, err := convertAndValidateRangeOps(req.Add, manager, affectedGroups)
 	if err != nil {
+		if errs.ErrAffinityGroupNotFound.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+			return
+		}
 		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
 		return
 	}
 	removeOps, err := convertAndValidateRangeOps(req.Remove, manager, affectedGroups)
 	if err != nil {
+		if errs.ErrAffinityGroupNotFound.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+			return
+		}
 		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
 		return
 	}
@@ -295,6 +303,14 @@ func BatchModifyAffinityGroups(c *gin.Context) {
 
 	// Call manager to perform batch modify
 	if err := manager.UpdateAffinityGroupKeyRanges(groupedAddOps, groupedRemoveOps); err != nil {
+		if errs.ErrAffinityGroupNotFound.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+			return
+		}
+		if errs.ErrAffinityGroupContent.Equal(err) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+			return
+		}
 		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
 		return
 	}

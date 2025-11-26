@@ -514,7 +514,16 @@ func (suite *affinityHandlerTestSuite) TestAffinityHandlersErrors() {
 		resp, err = client.Do(request)
 		re.NoError(err)
 		defer resp.Body.Close()
-		re.Equal(http.StatusBadRequest, resp.StatusCode)
+		re.Equal(http.StatusNotFound, resp.StatusCode)
+
+		// Verify existing group "ok" is not affected (state not polluted)
+		res, err := client.Get(baseURL + "/ok")
+		re.NoError(err)
+		defer res.Body.Close()
+		re.Equal(http.StatusOK, res.StatusCode)
+		groupState := &affinity.GroupState{}
+		re.NoError(json.NewDecoder(res.Body).Decode(groupState))
+		re.Equal(1, groupState.RangeCount)
 
 		// Batch modify with empty operations.
 		patchReq = handlers.BatchModifyAffinityGroupsRequest{}
@@ -1093,22 +1102,325 @@ func (suite *affinityHandlerTestSuite) TestBatchModifyRemoveNonExistentGroup() {
 		client := tests.TestDialClient
 		baseURL := fmt.Sprintf("%s/pd/api/v2/affinity-groups", leader.GetAddr())
 
+		// Create a baseline group to verify it's not affected
+		createReq := handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"baseline": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x10}}}},
+			},
+		}
+		data, err := json.Marshal(createReq)
+		re.NoError(err)
+		resp, err := client.Post(baseURL, "application/json", bytes.NewReader(data))
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+
 		// Try to remove ranges from a non-existent group
 		patchReq := handlers.BatchModifyAffinityGroupsRequest{
 			Remove: []handlers.GroupRangesModification{
 				{ID: "non-existent-group", Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x10}, EndKey: []byte{0x20}}}},
 			},
 		}
-		data, err := json.Marshal(patchReq)
+		data, err = json.Marshal(patchReq)
 		re.NoError(err)
 		request, err := http.NewRequest(http.MethodPatch, baseURL, bytes.NewReader(data))
 		re.NoError(err)
-		resp, err := client.Do(request)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusNotFound, resp.StatusCode)
+		var errorMsg string
+		re.NoError(json.NewDecoder(resp.Body).Decode(&errorMsg))
+		re.Contains(errorMsg, "not found")
+
+		// Verify baseline group is not affected (state not polluted)
+		res, err := client.Get(baseURL)
+		re.NoError(err)
+		defer res.Body.Close()
+		re.Equal(http.StatusOK, res.StatusCode)
+		var listResp handlers.AffinityGroupsResponse
+		re.NoError(json.NewDecoder(res.Body).Decode(&listResp))
+		re.Len(listResp.AffinityGroups, 1)
+		re.Equal(1, listResp.AffinityGroups["baseline"].RangeCount)
+
+		// Cleanup
+		request, err = http.NewRequest(http.MethodDelete, baseURL+"/baseline?force=true", http.NoBody)
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+	})
+}
+
+// TestAffinityCreateEmptyRanges tests creating a group with empty ranges array.
+func (suite *affinityHandlerTestSuite) TestAffinityCreateEmptyRanges() {
+	suite.env.RunTest(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		leader := cluster.GetLeaderServer()
+		client := tests.TestDialClient
+		baseURL := fmt.Sprintf("%s/pd/api/v2/affinity-groups", leader.GetAddr())
+
+		// Try to create a group with empty ranges array
+		createReq := handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"empty-ranges": {Ranges: []handlers.AffinityKeyRange{}},
+			},
+		}
+		data, err := json.Marshal(createReq)
+		re.NoError(err)
+		resp, err := client.Post(baseURL, "application/json", bytes.NewReader(data))
 		re.NoError(err)
 		defer resp.Body.Close()
 		re.Equal(http.StatusBadRequest, resp.StatusCode)
 		var errorMsg string
 		re.NoError(json.NewDecoder(resp.Body).Decode(&errorMsg))
-		re.Contains(errorMsg, "not found")
+		re.Contains(errorMsg, "no key ranges provided")
 	})
 }
+
+// TestBatchModifyOverlappingRanges tests adding overlapping ranges via batch modify.
+func (suite *affinityHandlerTestSuite) TestBatchModifyOverlappingRanges() {
+	suite.env.RunTest(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		leader := cluster.GetLeaderServer()
+		client := tests.TestDialClient
+		baseURL := fmt.Sprintf("%s/pd/api/v2/affinity-groups", leader.GetAddr())
+
+		// Create two groups with non-overlapping ranges
+		createReq := handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"group-1": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x10}}}},
+				"group-2": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x20}, EndKey: []byte{0x30}}}},
+			},
+		}
+		data, err := json.Marshal(createReq)
+		re.NoError(err)
+		resp, err := client.Post(baseURL, "application/json", bytes.NewReader(data))
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+
+		// Try to add overlapping range to group-2 (overlaps with group-1's range)
+		patchReq := handlers.BatchModifyAffinityGroupsRequest{
+			Add: []handlers.GroupRangesModification{
+				{ID: "group-2", Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x05}, EndKey: []byte{0x15}}}},
+			},
+		}
+		data, err = json.Marshal(patchReq)
+		re.NoError(err)
+		request, err := http.NewRequest(http.MethodPatch, baseURL, bytes.NewReader(data))
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusBadRequest, resp.StatusCode)
+		var errorMsg string
+		re.NoError(json.NewDecoder(resp.Body).Decode(&errorMsg))
+		re.Contains(errorMsg, "overlap")
+
+		// Verify system state not polluted: both groups still have only 1 range each
+		res, err := client.Get(baseURL)
+		re.NoError(err)
+		defer res.Body.Close()
+		re.Equal(http.StatusOK, res.StatusCode)
+		var listResp handlers.AffinityGroupsResponse
+		re.NoError(json.NewDecoder(res.Body).Decode(&listResp))
+		re.Len(listResp.AffinityGroups, 2)
+		re.Equal(1, listResp.AffinityGroups["group-1"].RangeCount)
+		re.Equal(1, listResp.AffinityGroups["group-2"].RangeCount)
+
+		// Cleanup
+		request, err = http.NewRequest(http.MethodDelete, baseURL+"/group-1?force=true", http.NoBody)
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+
+		request, err = http.NewRequest(http.MethodDelete, baseURL+"/group-2?force=true", http.NoBody)
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+	})
+}
+
+// TestUpdatePeersMissingRequiredFields tests updating peers with missing required fields.
+func (suite *affinityHandlerTestSuite) TestUpdatePeersMissingRequiredFields() {
+	suite.env.RunTest(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		leader := cluster.GetLeaderServer()
+		client := tests.TestDialClient
+		baseURL := fmt.Sprintf("%s/pd/api/v2/affinity-groups", leader.GetAddr())
+
+		// Create a group first
+		createReq := handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"test-peers": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x10}}}},
+			},
+		}
+		data, err := json.Marshal(createReq)
+		re.NoError(err)
+		resp, err := client.Post(baseURL, "application/json", bytes.NewReader(data))
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+
+		// Test 1: LeaderStoreID = 0 (missing)
+		updateReq := handlers.UpdateAffinityGroupPeersRequest{
+			LeaderStoreID: 0,
+			VoterStoreIDs: []uint64{1},
+		}
+		data, err = json.Marshal(updateReq)
+		re.NoError(err)
+		request, err := http.NewRequest(http.MethodPut, baseURL+"/test-peers", bytes.NewReader(data))
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusBadRequest, resp.StatusCode)
+		var errorMsg string
+		re.NoError(json.NewDecoder(resp.Body).Decode(&errorMsg))
+		re.Contains(errorMsg, "required")
+
+		// Test 2: VoterStoreIDs empty
+		updateReq = handlers.UpdateAffinityGroupPeersRequest{
+			LeaderStoreID: 1,
+			VoterStoreIDs: []uint64{},
+		}
+		data, err = json.Marshal(updateReq)
+		re.NoError(err)
+		request, err = http.NewRequest(http.MethodPut, baseURL+"/test-peers", bytes.NewReader(data))
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusBadRequest, resp.StatusCode)
+		re.NoError(json.NewDecoder(resp.Body).Decode(&errorMsg))
+		re.Contains(errorMsg, "required")
+
+		// Cleanup
+		request, err = http.NewRequest(http.MethodDelete, baseURL+"/test-peers?force=true", http.NoBody)
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+	})
+}
+
+// TestBatchDeleteNonExistentGroup tests batch deleting a non-existent group.
+func (suite *affinityHandlerTestSuite) TestBatchDeleteNonExistentGroup() {
+	suite.env.RunTest(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		leader := cluster.GetLeaderServer()
+		client := tests.TestDialClient
+		baseURL := fmt.Sprintf("%s/pd/api/v2/affinity-groups", leader.GetAddr())
+
+		// Create a baseline group to verify it's not affected
+		createReq := handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"existing": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x10}}}},
+			},
+		}
+		data, err := json.Marshal(createReq)
+		re.NoError(err)
+		resp, err := client.Post(baseURL, "application/json", bytes.NewReader(data))
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+
+		// Try to delete a non-existent group
+		batchDeleteReq := handlers.BatchDeleteAffinityGroupsRequest{
+			IDs: []string{"non-existent-group"},
+		}
+		data, err = json.Marshal(batchDeleteReq)
+		re.NoError(err)
+		resp, err = client.Post(baseURL+"/batch-delete", "application/json", bytes.NewReader(data))
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusNotFound, resp.StatusCode)
+		var errorMsg string
+		re.NoError(json.NewDecoder(resp.Body).Decode(&errorMsg))
+		re.Contains(errorMsg, "not found")
+
+		// Verify baseline group is not affected (state not polluted)
+		res, err := client.Get(baseURL)
+		re.NoError(err)
+		defer res.Body.Close()
+		re.Equal(http.StatusOK, res.StatusCode)
+		var listResp handlers.AffinityGroupsResponse
+		re.NoError(json.NewDecoder(res.Body).Decode(&listResp))
+		re.Len(listResp.AffinityGroups, 1)
+		re.Contains(listResp.AffinityGroups, "existing")
+		re.Equal(1, listResp.AffinityGroups["existing"].RangeCount)
+
+		// Cleanup
+		request, err := http.NewRequest(http.MethodDelete, baseURL+"/existing?force=true", http.NoBody)
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+	})
+}
+
+// TestBatchModifyRemoveNonExistentRange tests removing a range that the group doesn't contain.
+func (suite *affinityHandlerTestSuite) TestBatchModifyRemoveNonExistentRange() {
+	suite.env.RunTest(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		leader := cluster.GetLeaderServer()
+		client := tests.TestDialClient
+		baseURL := fmt.Sprintf("%s/pd/api/v2/affinity-groups", leader.GetAddr())
+
+		// Create a group with a specific range
+		createReq := handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"test-group": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x10}}}},
+			},
+		}
+		data, err := json.Marshal(createReq)
+		re.NoError(err)
+		resp, err := client.Post(baseURL, "application/json", bytes.NewReader(data))
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+
+		// Try to remove a range that the group doesn't contain
+		patchReq := handlers.BatchModifyAffinityGroupsRequest{
+			Remove: []handlers.GroupRangesModification{
+				{ID: "test-group", Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x20}, EndKey: []byte{0x30}}}},
+			},
+		}
+		data, err = json.Marshal(patchReq)
+		re.NoError(err)
+		request, err := http.NewRequest(http.MethodPatch, baseURL, bytes.NewReader(data))
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusNotFound, resp.StatusCode)
+		var errorMsg string
+		re.NoError(json.NewDecoder(resp.Body).Decode(&errorMsg))
+		re.Contains(errorMsg, "not found")
+
+		// Verify the original range is still intact (state not polluted)
+		res, err := client.Get(baseURL + "/test-group")
+		re.NoError(err)
+		defer res.Body.Close()
+		re.Equal(http.StatusOK, res.StatusCode)
+		state := &affinity.GroupState{}
+		re.NoError(json.NewDecoder(res.Body).Decode(state))
+		re.Equal(1, state.RangeCount)
+
+		// Cleanup
+		request, err = http.NewRequest(http.MethodDelete, baseURL+"/test-group?force=true", http.NoBody)
+		re.NoError(err)
+		resp, err = client.Do(request)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusOK, resp.StatusCode)
+	})
+}
+
+
