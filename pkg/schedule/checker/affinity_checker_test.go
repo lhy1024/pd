@@ -28,6 +28,7 @@ import (
 	"github.com/tikv/pd/pkg/mock/mockcluster"
 	"github.com/tikv/pd/pkg/mock/mockconfig"
 	"github.com/tikv/pd/pkg/schedule/affinity"
+	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
 )
@@ -1878,4 +1879,375 @@ func TestAffinityCheckerMultipleLearners(t *testing.T) {
 	op := ops[0]
 	re.Equal("affinity-move-region", op.Desc())
 	re.Positive(op.Len())
+}
+
+// TestAffinityCheckerManagerNil tests that checker returns nil when affinity manager is nil.
+func TestAffinityCheckerManagerNil(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 10)
+	tc.AddRegionStore(2, 10)
+	tc.AddRegionStore(3, 10)
+	tc.AddLeaderRegion(1, 1, 2, 3)
+
+	// Create checker with nil affinity manager
+	checker := &AffinityChecker{
+		cluster:         tc,
+		affinityManager: nil,
+		conf:            opt,
+	}
+
+	// Check should return nil when manager is nil
+	ops := checker.Check(tc.GetRegion(1))
+	re.Nil(ops)
+}
+
+// TestAffinityCheckerWithWitnessPeers tests that regions with witness peers are skipped.
+func TestAffinityCheckerWithWitnessPeers(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 10)
+	tc.AddRegionStore(2, 10)
+	tc.AddRegionStore(3, 10)
+
+	// Create region with witness peer
+	tc.AddLeaderRegion(1, 1, 2, 3)
+	region := tc.GetRegion(1)
+
+	// Make peer on store 3 a witness
+	peers := region.GetMeta().GetPeers()
+	for _, peer := range peers {
+		if peer.GetStoreId() == 3 {
+			peer.IsWitness = true
+			break
+		}
+	}
+	region = region.Clone(core.SetPeers(peers))
+	tc.PutRegion(region)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	// Create affinity group
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 2,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+
+	// Check should return nil for regions with witness peers
+	ops := checker.Check(region)
+	re.Nil(ops)
+}
+
+// TestAffinityCheckerTargetStoreEvictLeader tests that operator is not created when target store has evict-leader.
+func TestAffinityCheckerTargetStoreEvictLeader(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 10)
+	tc.AddRegionStore(2, 10)
+	tc.AddRegionStore(3, 10)
+	tc.AddLeaderRegion(1, 1, 2, 3) // Leader on store 1
+
+	// Set store 2 to evict leader
+	tc.SetStoreEvictLeader(2, true)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	// Create affinity group with leader on store 2 (which has evict-leader)
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 2,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+
+	// Check should return nil because target store doesn't allow leader transfer in
+	ops := checker.Check(tc.GetRegion(1))
+	re.Nil(ops, "Should not create operator when target store has evict-leader")
+}
+
+// TestAffinityCheckerTargetStoreRejectLeader tests that operator is not created when target store has reject-leader label.
+func TestAffinityCheckerTargetStoreRejectLeader(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 10)
+	tc.AddRegionStore(2, 10)
+	tc.AddRegionStore(3, 10)
+	tc.AddLeaderRegion(1, 1, 2, 3) // Leader on store 1
+
+	// Set reject-leader label property for store 2
+	tc.SetLabelProperty("reject-leader", "reject", "leader")
+	tc.AddLabelsStore(2, 10, map[string]string{"reject": "leader"})
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	// Create affinity group with leader on store 2 (which has reject-leader label)
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 2,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+
+	// Check should return nil because target store has reject-leader label
+	ops := checker.Check(tc.GetRegion(1))
+	re.Nil(ops, "Should not create operator when target store has reject-leader label")
+}
+
+// TestAffinityMergeCheckPeerStoreMismatch tests that merge is rejected when peer stores don't match.
+func TestAffinityMergeCheckPeerStoreMismatch(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	opt.SetMaxAffinityMergeRegionSize(20)
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 100)
+	tc.AddRegionStore(2, 100)
+	tc.AddRegionStore(3, 100)
+	tc.AddRegionStore(4, 100)
+
+	// Create two small adjacent regions with different peer stores
+	tc.AddLeaderRegion(1, 1, 2, 3) // Region 1: stores [1, 2, 3]
+	tc.AddLeaderRegion(2, 1, 2, 4) // Region 2: stores [1, 2, 4] - different from region 1
+	region1 := tc.GetRegion(1).Clone(
+		core.SetApproximateSize(10),
+		core.SetApproximateKeys(10),
+		core.WithStartKey([]byte("a")),
+		core.WithEndKey([]byte("b")),
+	)
+	region2 := tc.GetRegion(2).Clone(
+		core.SetApproximateSize(10),
+		core.SetApproximateKeys(10),
+		core.WithStartKey([]byte("b")),
+		core.WithEndKey([]byte("c")),
+	)
+
+	tc.PutRegion(region1)
+	tc.PutRegion(region2)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 1,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+	affinityManager.SetRegionGroup(2, "test_group")
+
+	// MergeCheck should return nil because peer stores don't match
+	groupState, _ := affinityManager.GetRegionAffinityGroupState(region1)
+	re.NotNil(groupState)
+	ops := checker.MergeCheck(region1, groupState)
+	re.Nil(ops, "Should not merge when peer stores don't match")
+}
+
+// TestAffinityMergeCheckAdjacentAbnormalReplica tests that merge is rejected when adjacent region has abnormal replica count.
+func TestAffinityMergeCheckAdjacentAbnormalReplica(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	opt.SetMaxAffinityMergeRegionSize(20)
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.SetMaxReplicasWithLabel(true, 3) // Require 3 replicas
+	tc.AddRegionStore(1, 100)
+	tc.AddRegionStore(2, 100)
+	tc.AddRegionStore(3, 100)
+
+	// Create two adjacent regions - region 2 has only 2 replicas (abnormal)
+	tc.AddLeaderRegion(1, 1, 2, 3) // Region 1: 3 replicas (normal)
+	tc.AddLeaderRegion(2, 1, 2)    // Region 2: 2 replicas (abnormal)
+	region1 := tc.GetRegion(1).Clone(
+		core.SetApproximateSize(10),
+		core.SetApproximateKeys(10),
+		core.WithStartKey([]byte("a")),
+		core.WithEndKey([]byte("b")),
+	)
+	region2 := tc.GetRegion(2).Clone(
+		core.SetApproximateSize(10),
+		core.SetApproximateKeys(10),
+		core.WithStartKey([]byte("b")),
+		core.WithEndKey([]byte("c")),
+	)
+
+	tc.PutRegion(region1)
+	tc.PutRegion(region2)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 1,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+	affinityManager.SetRegionGroup(2, "test_group")
+
+	// MergeCheck should return nil because adjacent region has abnormal replica count
+	groupState, _ := affinityManager.GetRegionAffinityGroupState(region1)
+	re.NotNil(groupState)
+	ops := checker.MergeCheck(region1, groupState)
+	re.Nil(ops, "Should not merge when adjacent region has abnormal replica count")
+}
+
+// TestAffinityMergeCheckPlacementSplitKeys tests that merge is rejected when placement rules require split.
+func TestAffinityMergeCheckPlacementSplitKeys(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	opt.SetMaxAffinityMergeRegionSize(20)
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.SetMaxReplicasWithLabel(true, 3)
+	tc.AddRegionStore(1, 100)
+	tc.AddRegionStore(2, 100)
+	tc.AddRegionStore(3, 100)
+
+	// Create two small adjacent regions
+	tc.AddLeaderRegion(1, 1, 2, 3)
+	tc.AddLeaderRegion(2, 1, 2, 3)
+	region1 := tc.GetRegion(1).Clone(
+		core.SetApproximateSize(10),
+		core.SetApproximateKeys(10),
+		core.WithStartKey([]byte("a")),
+		core.WithEndKey([]byte("b")),
+	)
+	region2 := tc.GetRegion(2).Clone(
+		core.SetApproximateSize(10),
+		core.SetApproximateKeys(10),
+		core.WithStartKey([]byte("b")),
+		core.WithEndKey([]byte("c")),
+	)
+
+	tc.PutRegion(region1)
+	tc.PutRegion(region2)
+
+	// Add a placement rule that requires split at key "b" (between the two regions)
+	err := tc.GetRuleManager().SetRule(&placement.Rule{
+		GroupID:  "test",
+		ID:       "test_rule",
+		Role:     placement.Voter,
+		Count:    3,
+		StartKey: []byte("b"),
+		EndKey:   []byte("c"),
+	})
+	re.NoError(err)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 1,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err = createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+	affinityManager.SetRegionGroup(2, "test_group")
+
+	// MergeCheck should return nil because placement rules require split at key "b"
+	groupState, _ := affinityManager.GetRegionAffinityGroupState(region1)
+	re.NotNil(groupState)
+	ops := checker.MergeCheck(region1, groupState)
+	re.Nil(ops, "Should not merge when placement rules require split")
+}
+
+// TestAffinityMergeCheckLabelerSplitKeys tests that merge is rejected when region labeler requires split.
+func TestAffinityMergeCheckLabelerSplitKeys(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	opt.SetMaxAffinityMergeRegionSize(20)
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 100)
+	tc.AddRegionStore(2, 100)
+	tc.AddRegionStore(3, 100)
+
+	// Create two small adjacent regions
+	tc.AddLeaderRegion(1, 1, 2, 3)
+	tc.AddLeaderRegion(2, 1, 2, 3)
+	region1 := tc.GetRegion(1).Clone(
+		core.SetApproximateSize(10),
+		core.SetApproximateKeys(10),
+		core.WithStartKey([]byte("a")),
+		core.WithEndKey([]byte("b")),
+	)
+	region2 := tc.GetRegion(2).Clone(
+		core.SetApproximateSize(10),
+		core.SetApproximateKeys(10),
+		core.WithStartKey([]byte("b")),
+		core.WithEndKey([]byte("c")),
+	)
+
+	tc.PutRegion(region1)
+	tc.PutRegion(region2)
+
+	// Add a region label rule that requires split at key "b"
+	regionLabeler := tc.GetRegionLabeler()
+	err := regionLabeler.SetLabelRule(&labeler.LabelRule{
+		ID:       "test_rule",
+		Labels:   []labeler.RegionLabel{{Key: "test", Value: "value"}},
+		RuleType: labeler.KeyRange,
+		Data:     labeler.MakeKeyRanges("62", "63"), // hex for "b" and "c"
+	})
+	re.NoError(err)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 1,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err = createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+	affinityManager.SetRegionGroup(2, "test_group")
+
+	// MergeCheck should return nil because region labeler requires split at key "b"
+	groupState, _ := affinityManager.GetRegionAffinityGroupState(region1)
+	re.NotNil(groupState)
+	ops := checker.MergeCheck(region1, groupState)
+	re.Nil(ops, "Should not merge when region labeler requires split")
 }
