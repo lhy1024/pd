@@ -494,6 +494,7 @@ func GetAffinityGroup(c *gin.Context) {
 }
 
 const (
+	// TODO: we need to ensure special characters in the id.
 	// idPattern is a regex that specifies acceptable characters of the id.
 	// Valid id must be non-empty and 64 characters or fewer and consist only of letters (a-z, A-Z),
 	// numbers (0-9), hyphens (-), and underscores (_).
