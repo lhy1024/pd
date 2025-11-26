@@ -616,6 +616,55 @@ func TestAffinityMergeCheckBasic(t *testing.T) {
 	re.Contains(ops[0].Desc(), "merge")
 }
 
+// TestAffinityCheckerMergePath ensures affinity merge path is triggered from Check when region is already in affinity.
+func TestAffinityCheckerMergePath(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	opt.SetMaxAffinityMergeRegionSize(20)
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 100)
+	tc.AddRegionStore(2, 100)
+	tc.AddRegionStore(3, 100)
+
+	tc.AddLeaderRegion(1, 1, 2, 3)
+	tc.AddLeaderRegion(2, 1, 2, 3)
+	region1 := tc.GetRegion(1).Clone(
+		core.SetApproximateSize(5),
+		core.SetApproximateKeys(5),
+		core.WithStartKey([]byte("a")),
+		core.WithEndKey([]byte("b")),
+	)
+	region2 := tc.GetRegion(2).Clone(
+		core.SetApproximateSize(5),
+		core.SetApproximateKeys(5),
+		core.WithStartKey([]byte("b")),
+		core.WithEndKey([]byte("c")),
+	)
+	tc.PutRegion(region1)
+	tc.PutRegion(region2)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 1,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+	affinityManager.SetRegionGroup(2, "test_group")
+
+	// Regions match affinity config, so Check should go to MergeCheck path.
+	ops := checker.Check(region1)
+	re.NotNil(ops)
+	re.Len(ops, 2)
+	re.Contains(ops[0].Desc(), "merge")
+}
+
 // TestAffinityMergeCheckNoTarget tests merge when no valid target exists.
 func TestAffinityMergeCheckNoTarget(t *testing.T) {
 	re := require.New(t)
@@ -1629,6 +1678,46 @@ func TestAffinityCheckerRegionNoLeader(t *testing.T) {
 	re.Nil(ops)
 }
 
+// TestAffinityCheckerUnhealthyRegion tests that regions with down peers are skipped.
+func TestAffinityCheckerUnhealthyRegion(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 10)
+	tc.AddRegionStore(2, 10)
+	tc.AddRegionStore(3, 10)
+
+	tc.AddLeaderRegion(1, 1, 2, 3)
+	region := tc.GetRegion(1)
+	var peerOnStore2 *pdpb.PeerStats
+	for _, peer := range region.GetMeta().Peers {
+		if peer.GetStoreId() == 2 {
+			peerOnStore2 = &pdpb.PeerStats{Peer: peer}
+			break
+		}
+	}
+	region = region.Clone(core.WithDownPeers([]*pdpb.PeerStats{peerOnStore2}))
+	tc.PutRegion(region)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 1,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+
+	ops := checker.Check(region)
+	re.Nil(ops, "Unhealthy region should be skipped")
+}
+
 // TestAffinityCheckerDuplicateStores tests when VoterStoreIDs has duplicates.
 // This is an invalid configuration that should be rejected by SaveAffinityGroups.
 func TestAffinityCheckerDuplicateStores(t *testing.T) {
@@ -1685,6 +1774,37 @@ func TestAffinityCheckerEmptyVoterList(t *testing.T) {
 	// Should return error for empty voter list
 	re.Error(err)
 	re.Contains(err.Error(), "leader store ID and voter store IDs must be provided")
+}
+
+// TestAffinityCheckerAbnormalReplicaCount tests that checker skips regions that are not fully replicated.
+func TestAffinityCheckerAbnormalReplicaCount(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 10)
+	tc.AddRegionStore(2, 10)
+	tc.AddRegionStore(3, 10)
+
+	// Region only has 2 replicas while default max replicas is 3.
+	tc.AddLeaderRegion(1, 1, 2)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 1,
+		VoterStoreIDs: []uint64{1, 2},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+
+	ops := checker.Check(tc.GetRegion(1))
+	re.Nil(ops, "Region that is not fully replicated should be skipped")
 }
 
 // TestAffinityCheckerPreserveLearners tests that existing learner peers are preserved.
@@ -1949,6 +2069,47 @@ func TestAffinityCheckerWithWitnessPeers(t *testing.T) {
 	// Check should return nil for regions with witness peers
 	ops := checker.Check(region)
 	re.Nil(ops)
+}
+
+// TestAffinityCheckerGroupScheduleDisallowed verifies group state that forbids affinity scheduling is respected.
+func TestAffinityCheckerGroupScheduleDisallowed(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	affinity.SetAvailabilityCheckIntervalForTest(100 * time.Millisecond)
+	defer affinity.SetAvailabilityCheckIntervalForTest(0)
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.AddRegionStore(1, 10)
+	tc.AddRegionStore(2, 10)
+	tc.AddRegionStore(3, 10)
+	tc.AddLeaderRegion(1, 1, 2, 3)
+
+	// Make store 2 unavailable for leader (evict-leader).
+	tc.SetStoreEvictLeader(2, true)
+
+	affinityManager := tc.GetAffinityManager()
+	checker := NewAffinityChecker(tc, opt)
+
+	group := &affinity.Group{
+		ID:            "test_group",
+		LeaderStoreID: 2,
+		VoterStoreIDs: []uint64{1, 2, 3},
+	}
+	err := createAffinityGroupForTest(affinityManager, group)
+	re.NoError(err)
+	affinityManager.SetRegionGroup(1, "test_group")
+
+	// Wait for availability checker to mark the group as not schedulable.
+	time.Sleep(200 * time.Millisecond)
+	groupState := affinityManager.GetAffinityGroupState("test_group")
+	re.NotNil(groupState)
+	re.False(groupState.IsAffinitySchedulingAllowed)
+
+	ops := checker.Check(tc.GetRegion(1))
+	re.Nil(ops, "Affinity scheduling should be blocked when group is not allowed")
 }
 
 // TestAffinityCheckerTargetStoreEvictLeader tests that operator is not created when target store has evict-leader.
