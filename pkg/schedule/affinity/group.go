@@ -112,7 +112,7 @@ type GroupState struct {
 	IsAffinitySchedulingAllowed bool `json:"is_affinity_scheduling_allowed"`
 	// RangeCount indicates how many key ranges are associated with this group.
 	RangeCount int `json:"range_count"`
-	// RegionCount indicates how many Regions are currently in the affinity state.
+	// RegionCount indicates how many Regions are currently in the group.
 	RegionCount int `json:"region_count"`
 	// AffinityRegionCount indicates how many Regions have all Voter and Leader peers in the correct stores.
 	AffinityRegionCount int `json:"affinity_region_count"`

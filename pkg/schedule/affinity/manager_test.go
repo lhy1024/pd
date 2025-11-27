@@ -215,7 +215,7 @@ func TestRegionCountStaleCache(t *testing.T) {
 	re.True(isAffinity)
 	groupInfo := manager.GetGroups()["g"]
 	re.Equal(1, groupInfo.AffinityRegionCount)
-	re.Equal(1, len(groupInfo.Regions))
+	re.Len(groupInfo.Regions, 1)
 
 	// Change peers, which bumps AffinityVer and invalidates affinity for the cached region.
 	_, err = manager.UpdateAffinityGroupPeers("g", 4, []uint64{4, 5, 6})

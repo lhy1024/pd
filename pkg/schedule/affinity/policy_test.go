@@ -249,7 +249,7 @@ func TestDegradedGroupShouldExpire(t *testing.T) {
 
 	// Force the degraded state to be considered expired.
 	manager.Lock()
-	groupInfo.DegradedExpireAt = uint64(time.Now().Add(-time.Second).Unix())
+	groupInfo.DegradedExpireAt = uint64(time.Now().Add(-time.Hour).Unix())
 	manager.Unlock()
 
 	// Run availability check again without changing the unavailable store set.
