@@ -350,7 +350,6 @@ func TestDeleteAffinityGroupsForceMissing(t *testing.T) {
 		}},
 	}}))
 
-	// TODO: Do we need to fix this?
 	// Force delete should tolerate missing IDs and remove existing groups with ranges.
 	err = manager.DeleteAffinityGroups([]string{"missing-group", "with-range"}, true)
 	re.NoError(err)
@@ -358,7 +357,7 @@ func TestDeleteAffinityGroupsForceMissing(t *testing.T) {
 }
 
 // TestApplyRemoveOpsSameStartDifferentEnd verifies removal when ranges share the same start key
-// but have different end keys. With rangeKey = start+end it should succeed; using only startKey would fail.
+// but have different end keys.
 func TestApplyRemoveOpsSameStartDifferentEnd(t *testing.T) {
 	re := require.New(t)
 	current := []GroupKeyRange{
@@ -373,4 +372,98 @@ func TestApplyRemoveOpsSameStartDifferentEnd(t *testing.T) {
 	re.NoError(err)
 	re.Len(filtered, 1)
 	re.Equal([]byte{0x10}, filtered[0].EndKey)
+}
+
+// TestSameGroupNonOverlappingAdd ensures adding disjoint ranges to the same group is allowed.
+func TestSameGroupNonOverlappingAdd(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := storage.NewStorageWithMemoryBackend()
+	storeInfos := core.NewStoresInfo()
+	store1 := core.NewStoreInfo(&metapb.Store{Id: 1, Address: "test1"})
+	store1 = store1.Clone(core.SetLastHeartbeatTS(time.Now()))
+	storeInfos.PutStore(store1)
+
+	conf := mockconfig.NewTestOptions()
+	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+	re.NoError(err)
+	manager, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
+	re.NoError(err)
+
+	r1 := keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x10}}
+	r2 := keyutil.KeyRange{StartKey: []byte{0x20}, EndKey: []byte{0x30}}
+
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g", KeyRanges: []keyutil.KeyRange{r1}}}))
+
+	err = manager.UpdateAffinityGroupKeyRanges(
+		[]GroupKeyRanges{{GroupID: "g", KeyRanges: []keyutil.KeyRange{r2}}},
+		nil,
+	)
+	re.NoError(err)
+
+	state := manager.GetAffinityGroupState("g")
+	re.Equal(2, state.RangeCount)
+}
+
+// TestOverlapDuringMigration documents that add+remove with overlapping ranges is rejected.
+// Scenario: group1 has [0x00,0x10], we try to add group2 [0x00,0x10] while removing group1 [0x00,0x10].
+// Current logic reports overlap (expected current design).
+func TestOverlapDuringMigration(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := storage.NewStorageWithMemoryBackend()
+	storeInfos := core.NewStoresInfo()
+	store1 := core.NewStoreInfo(&metapb.Store{Id: 1, Address: "test1"})
+	store1 = store1.Clone(core.SetLastHeartbeatTS(time.Now()))
+	storeInfos.PutStore(store1)
+
+	conf := mockconfig.NewTestOptions()
+	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+	re.NoError(err)
+	manager, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
+	re.NoError(err)
+
+	r := keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x10}}
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g1", KeyRanges: []keyutil.KeyRange{r}}}))
+
+	err = manager.UpdateAffinityGroupKeyRanges(
+		[]GroupKeyRanges{{GroupID: "g2", KeyRanges: []keyutil.KeyRange{r}}},
+		[]GroupKeyRanges{{GroupID: "g1", KeyRanges: []keyutil.KeyRange{r}}},
+	)
+	re.Error(err)
+}
+
+// TestPartialOverlapSameGroup documents that add+remove in the same request for same group is rejected.
+// Scenario: existing [0,10), request removes [0,10) and adds [0,5) for the same group. Current design forbids mixed add/remove same group.
+func TestPartialOverlapSameGroup(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := storage.NewStorageWithMemoryBackend()
+	storeInfos := core.NewStoresInfo()
+	store1 := core.NewStoreInfo(&metapb.Store{Id: 1, Address: "test1"})
+	store1 = store1.Clone(core.SetLastHeartbeatTS(time.Now()))
+	storeInfos.PutStore(store1)
+
+	conf := mockconfig.NewTestOptions()
+	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+	re.NoError(err)
+	manager, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
+	re.NoError(err)
+
+	rOld := keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x10}}
+	rNew := keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x05}}
+
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g", KeyRanges: []keyutil.KeyRange{rOld}}}))
+
+	err = manager.UpdateAffinityGroupKeyRanges(
+		[]GroupKeyRanges{{GroupID: "g", KeyRanges: []keyutil.KeyRange{rNew}}},
+		[]GroupKeyRanges{{GroupID: "g", KeyRanges: []keyutil.KeyRange{rOld}}},
+	)
+	re.Error(err)
 }

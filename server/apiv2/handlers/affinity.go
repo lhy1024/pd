@@ -218,6 +218,9 @@ func BatchDeleteAffinityGroups(c *gin.Context) {
 		}
 	}
 
+	// Semantics are enforced in manager:
+	// - force=false: missing IDs will cause an error
+	// - force=true: missing IDs are ignored while existing groups are deleted
 	err = manager.DeleteAffinityGroups(req.IDs, req.Force)
 	if handleAffinityError(c, err) {
 		return
