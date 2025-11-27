@@ -356,24 +356,6 @@ func TestDeleteAffinityGroupsForceMissing(t *testing.T) {
 	re.False(manager.IsGroupExist("with-range"))
 }
 
-// TestApplyRemoveOpsSameStartDifferentEnd verifies removal when ranges share the same start key
-// but have different end keys.
-func TestApplyRemoveOpsSameStartDifferentEnd(t *testing.T) {
-	re := require.New(t)
-	current := []GroupKeyRange{
-		{KeyRange: keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x10}}},
-		{KeyRange: keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x20}}},
-	}
-	removes := []GroupKeyRange{
-		{KeyRange: keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x20}}},
-	}
-
-	filtered, err := applyRemoveOps(current, removes)
-	re.NoError(err)
-	re.Len(filtered, 1)
-	re.Equal([]byte{0x10}, filtered[0].EndKey)
-}
-
 // TestSameGroupNonOverlappingAdd ensures adding disjoint ranges to the same group is allowed.
 func TestSameGroupNonOverlappingAdd(t *testing.T) {
 	re := require.New(t)

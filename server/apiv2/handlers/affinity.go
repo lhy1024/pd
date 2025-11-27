@@ -185,6 +185,7 @@ func CreateAffinityGroups(c *gin.Context) {
 // BatchDeleteAffinityGroups deletes multiple affinity groups in batch.
 // @Tags     affinity-groups
 // @Summary  Delete multiple affinity groups in batch.
+// @Description force=false: missing IDs return error; force=true: missing IDs are ignored, existing groups are deleted.
 // @Param    body  body  BatchDeleteAffinityGroupsRequest  true  "Batch delete request with group ids and force flag"
 // @Produce  json
 // @Success  200  {object}  map[string]any  "Delete result with success and error lists"
@@ -361,6 +362,7 @@ func UpdateAffinityGroupPeers(c *gin.Context) {
 // @Failure  404  {string}  string  "Affinity group not found."
 // @Failure  500  {string}  string  "PD server failed to proceed the request."
 // @Router   /affinity-groups/{group_id} [delete]
+// @Description force=false: missing group returns 404; force=true: missing group is ignored, existing group is deleted.
 func DeleteAffinityGroup(c *gin.Context) {
 	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
 	manager, err := svr.GetAffinityManager()

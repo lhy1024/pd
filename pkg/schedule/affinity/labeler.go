@@ -614,8 +614,8 @@ func extractKeyRangesFromLabelRule(rule *labeler.LabelRule) ([]GroupKeyRange, er
 // checkKeyRangesOverlap checks if two key ranges overlap.
 // Returns true if [start1, end1) and [start2, end2) have any overlap.
 func checkKeyRangesOverlap(start1, end1, start2, end2 []byte) bool {
-	// Identical ranges count as overlap.
-	if bytes.Equal(start1, start2) && bytes.Equal(end1, end2) {
+	// If the start or end keys are the same, they overlap
+	if bytes.Equal(start1, start2) || bytes.Equal(end1, end2) {
 		return true
 	}
 
