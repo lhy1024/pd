@@ -82,6 +82,15 @@ func TestKeyRangeOverlapValidation(t *testing.T) {
 	err = validate(keyRanges3)
 	re.NoError(err, "Adjacent ranges should pass validation")
 
+	// Test 5: Duplicate range should fail validation
+	keyRangesDup := []GroupKeyRange{
+		{KeyRange: keyutil.KeyRange{StartKey: []byte("a"), EndKey: []byte("c")}, GroupID: "group1"},
+		{KeyRange: keyutil.KeyRange{StartKey: []byte("a"), EndKey: []byte("c")}, GroupID: "group1"},
+	}
+	err = validate(keyRangesDup)
+	re.Error(err, "Duplicate ranges should fail validation")
+	re.Contains(err.Error(), "overlap")
+
 	// Test 4: Verify checkKeyRangesOverlap function directly
 	overlaps := checkKeyRangesOverlap([]byte("a"), []byte("c"), []byte("b"), []byte("d"))
 	re.True(overlaps, "Ranges [a,c) and [b,d) should overlap")
@@ -189,17 +198,11 @@ func TestAffinityPersistenceWithLabeler(t *testing.T) {
 	re.NotNil(state2)
 	re.Equal(1, state2.RangeCount)
 
-	// Update ranges and ensure cache/label are updated.
+	// Remove all ranges and ensure cache/label are cleared.
 	ranges := []keyutil.KeyRange{{
 		StartKey: []byte{0x00},
 		EndKey:   []byte{0x10},
 	}}
-	re.NoError(manager2.UpdateAffinityGroupKeyRanges(
-		[]GroupKeyRanges{{GroupID: "persist", KeyRanges: ranges}},
-		nil,
-	))
-
-	// Remove all ranges and ensure cache/label are cleared.
 	re.NoError(manager2.UpdateAffinityGroupKeyRanges(
 		nil,
 		[]GroupKeyRanges{{GroupID: "persist", KeyRanges: ranges}},
@@ -288,6 +291,37 @@ func TestUpdateAffinityGroupKeyRangesAddToEmptyGroup(t *testing.T) {
 	re.NoError(err)
 }
 
+func TestDuplicateRangeAdd(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := storage.NewStorageWithMemoryBackend()
+	storeInfos := core.NewStoresInfo()
+	store1 := core.NewStoreInfo(&metapb.Store{Id: 1, Address: "test1"})
+	store1 = store1.Clone(core.SetLastHeartbeatTS(time.Now()))
+	storeInfos.PutStore(store1)
+
+	conf := mockconfig.NewTestOptions()
+
+	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+	re.NoError(err)
+	manager, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
+	re.NoError(err)
+
+	r := keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x10}}
+
+	// First add.
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "dup",
+		KeyRanges: []keyutil.KeyRange{r}}}))
+	// Second add with same range should be rejected due to duplicate/overlap.
+	err = manager.UpdateAffinityGroupKeyRanges(
+		[]GroupKeyRanges{{GroupID: "dup", KeyRanges: []keyutil.KeyRange{r}}},
+		nil,
+	)
+	re.Error(err)
+}
+
 // TestDeleteAffinityGroupsForceMissing verifies force deletion tolerates missing IDs.
 func TestDeleteAffinityGroupsForceMissing(t *testing.T) {
 	re := require.New(t)
@@ -321,4 +355,22 @@ func TestDeleteAffinityGroupsForceMissing(t *testing.T) {
 	err = manager.DeleteAffinityGroups([]string{"missing-group", "with-range"}, true)
 	re.NoError(err)
 	re.False(manager.IsGroupExist("with-range"))
+}
+
+// TestApplyRemoveOpsSameStartDifferentEnd verifies removal when ranges share the same start key
+// but have different end keys. With rangeKey = start+end it should succeed; using only startKey would fail.
+func TestApplyRemoveOpsSameStartDifferentEnd(t *testing.T) {
+	re := require.New(t)
+	current := []GroupKeyRange{
+		{KeyRange: keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x10}}},
+		{KeyRange: keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x20}}},
+	}
+	removes := []GroupKeyRange{
+		{KeyRange: keyutil.KeyRange{StartKey: []byte{0x00}, EndKey: []byte{0x20}}},
+	}
+
+	filtered, err := applyRemoveOps(current, removes)
+	re.NoError(err)
+	re.Len(filtered, 1)
+	re.Equal([]byte{0x10}, filtered[0].EndKey)
 }
