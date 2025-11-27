@@ -55,7 +55,7 @@ const (
 	// groupDegraded is intended to be a temporary state that may return to groupAvailable,
 	// while groupExpired usually represents a terminal state under the current topology,
 	// but can become groupAvailable again after the Group’s stores/peers are reconfigured.
-	// groupDegraded has an expiration time (degradedExpireAt); once it expires, the Group is
+	// groupDegraded has an expiration time (degradedExpiredAt); once it expires, the Group is
 	// automatically treated as groupExpired.
 )
 
@@ -157,8 +157,8 @@ type runtimeGroupInfo struct {
 
 	// State should use the condition enum values whose names start with group.
 	State condition
-	// DegradedExpireAt indicates the expiration time of groupDegraded. After this time, it should be treated as groupExpired.
-	DegradedExpireAt uint64
+	// DegradedExpiredAt indicates the expiration time of groupDegraded. After this time, it should be treated as groupExpired.
+	DegradedExpiredAt uint64
 	// AffinityVer initializes at 1 and increments by 1 each time the Group changes.
 	AffinityVer uint64
 	// AffinityRegionCount indicates how many Regions have all Voter and Leader peers in the correct stores. (AffinityVer equals).
@@ -205,7 +205,7 @@ func (g *runtimeGroupInfo) IsExpired() bool {
 	case groupExpired:
 		return true
 	case groupDegraded:
-		return uint64(time.Now().Unix()) > g.DegradedExpireAt
+		return uint64(time.Now().Unix()) > g.DegradedExpiredAt
 	default:
 		return false
 	}
