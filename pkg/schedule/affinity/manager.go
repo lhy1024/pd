@@ -206,7 +206,9 @@ func (m *Manager) updateGroupPeers(groupID string, leaderStoreID uint64, voterSt
 	groupInfo.LeaderStoreID = leaderStoreID
 	groupInfo.VoterStoreIDs = append([]uint64(nil), voterStoreIDs...)
 	// Reset Statistics
-	m.clearGroupRegionCachesLocked(groupInfo)
+	m.affinityRegionCount -= groupInfo.AffinityRegionCount
+	groupInfo.AffinityRegionCount = 0
+	groupInfo.AffinityVer++
 
 	return newGroupState(groupInfo), nil
 }
@@ -236,7 +238,9 @@ func (m *Manager) updateGroupStateLocked(groupID string, state condition) {
 	}
 
 	// Reset Statistics
-	m.clearGroupRegionCachesLocked(groupInfo)
+	m.affinityRegionCount -= groupInfo.AffinityRegionCount
+	groupInfo.AffinityRegionCount = 0
+	groupInfo.AffinityVer++
 }
 
 // ExpireAffinityGroup changes the Group state to groupExpired.
@@ -257,27 +261,14 @@ func (m *Manager) updateGroupLabelRuleLocked(groupID string, labelRule *labeler.
 	if !ok {
 		log.Error("group not initialized", zap.String("group-id", groupID))
 	} else {
+		// Reset Statistics
+		m.affinityRegionCount -= groupInfo.AffinityRegionCount
+		groupInfo.AffinityRegionCount = 0
+		groupInfo.AffinityVer++
 		// Set LabelRule
 		groupInfo.LabelRule = labelRule
 		groupInfo.RangeCount = rangeCount
-		// Reset Statistics
-		m.clearGroupRegionCachesLocked(groupInfo)
 	}
-}
-
-// clearGroupRegionCachesLocked clears region caches for a group and updates counters.
-// Caller must hold m.Lock.
-func (m *Manager) clearGroupRegionCachesLocked(groupInfo *runtimeGroupInfo) {
-	if groupInfo == nil {
-		return
-	}
-	m.affinityRegionCount -= groupInfo.AffinityRegionCount
-	groupInfo.AffinityVer++
-	groupInfo.AffinityRegionCount = 0
-	for regionID := range groupInfo.Regions {
-		delete(m.regions, regionID)
-	}
-	groupInfo.Regions = make(map[uint64]regionCache)
 }
 
 func (m *Manager) updateGroupLabelRules(labels map[string]*labeler.LabelRule) {
