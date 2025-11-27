@@ -225,12 +225,13 @@ func (c *AffinityChecker) createAffinityOperator(region *core.RegionInfo, group 
 		if existingRole, exists := roles[storeID]; !exists {
 			roles[storeID] = placement.Learner
 		} else if existingRole != placement.Learner {
-			// Log when a learner's store conflicts with a voter
+			affinityCheckerLearnerPeerConflictCounter.Inc()
 			log.Debug("learner peer conflicts with affinity voter, voter takes precedence",
 				zap.Uint64("region-id", region.GetID()),
 				zap.String("group-id", group.ID),
 				zap.Uint64("store-id", storeID),
 				zap.String("conflicting-role", string(existingRole)))
+			return nil
 		}
 	}
 

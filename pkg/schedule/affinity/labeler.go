@@ -693,7 +693,7 @@ func (m *Manager) loadRegionLabel() error {
 		}
 
 		if _, exists := m.groups[groupID]; !exists {
-			log.Warn("found label rule for unknown affinity group, skip rebuilding",
+			log.Debug("found label rule for unknown affinity group, skip rebuilding",
 				zap.String("group-id", groupID),
 				zap.String("rule-id", rule.ID))
 			return true
