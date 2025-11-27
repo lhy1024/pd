@@ -255,5 +255,4 @@ func TestDegradedGroupShouldExpire(t *testing.T) {
 	// Run availability check again without changing the unavailable store set.
 	manager.checkStoresAvailability()
 	re.True(groupInfo.IsExpired())
-	// re.Equal(groupExpired, groupInfo.State.toGroupState())
 }
