@@ -34,6 +34,10 @@ import (
 const (
 	// labelKey is the key for affinity group id in region label.
 	labelKey = "affinity_group"
+	// defaultDegradedExpirationSeconds is the default expiration time for a degraded group.
+	// After a group becomes degraded , it will automatically
+	// expire after this duration if the stores don't recover.
+	defaultDegradedExpirationSeconds = 600 // 10 minutes
 )
 
 type regionCache struct {
@@ -133,8 +137,7 @@ func (m *Manager) IsAvailable() bool {
 }
 
 func (*Manager) getExpiredAt() uint64 {
-	// TODO: How to make the decision?
-	return uint64(time.Now().Unix()) + 600
+	return uint64(time.Now().Unix()) + defaultDegradedExpirationSeconds
 }
 
 func (m *Manager) initGroupLocked(group *Group) {
@@ -203,9 +206,7 @@ func (m *Manager) updateGroupPeers(groupID string, leaderStoreID uint64, voterSt
 	groupInfo.LeaderStoreID = leaderStoreID
 	groupInfo.VoterStoreIDs = append([]uint64(nil), voterStoreIDs...)
 	// Reset Statistics
-	m.affinityRegionCount -= groupInfo.AffinityRegionCount
-	groupInfo.AffinityRegionCount = 0
-	groupInfo.AffinityVer++
+	m.clearGroupRegionCachesLocked(groupInfo)
 
 	return newGroupState(groupInfo), nil
 }
@@ -235,9 +236,7 @@ func (m *Manager) updateGroupStateLocked(groupID string, state condition) {
 	}
 
 	// Reset Statistics
-	m.affinityRegionCount -= groupInfo.AffinityRegionCount
-	groupInfo.AffinityRegionCount = 0
-	groupInfo.AffinityVer++
+	m.clearGroupRegionCachesLocked(groupInfo)
 }
 
 // ExpireAffinityGroup changes the Group state to groupExpired.
@@ -258,14 +257,27 @@ func (m *Manager) updateGroupLabelRuleLocked(groupID string, labelRule *labeler.
 	if !ok {
 		log.Error("group not initialized", zap.String("group-id", groupID))
 	} else {
-		// Reset Statistics
-		m.affinityRegionCount -= groupInfo.AffinityRegionCount
-		groupInfo.AffinityRegionCount = 0
-		groupInfo.AffinityVer++
 		// Set LabelRule
 		groupInfo.LabelRule = labelRule
 		groupInfo.RangeCount = rangeCount
+		// Reset Statistics
+		m.clearGroupRegionCachesLocked(groupInfo)
 	}
+}
+
+// clearGroupRegionCachesLocked clears region caches for a group and updates counters.
+// Caller must hold m.Lock.
+func (m *Manager) clearGroupRegionCachesLocked(groupInfo *runtimeGroupInfo) {
+	if groupInfo == nil {
+		return
+	}
+	m.affinityRegionCount -= groupInfo.AffinityRegionCount
+	groupInfo.AffinityVer++
+	groupInfo.AffinityRegionCount = 0
+	for regionID := range groupInfo.Regions {
+		delete(m.regions, regionID)
+	}
+	groupInfo.Regions = make(map[uint64]regionCache)
 }
 
 func (m *Manager) updateGroupLabelRules(labels map[string]*labeler.LabelRule) {
@@ -345,16 +357,7 @@ func (m *Manager) InvalidCache(regionID uint64) {
 
 	m.Lock()
 	defer m.Unlock()
-	cache, ok := m.regions[regionID]
-	if !ok {
-		return
-	}
-	if cache.isAffinity && cache.affinityVer == cache.groupInfo.AffinityVer {
-		cache.groupInfo.AffinityRegionCount--
-		m.affinityRegionCount--
-	}
-	delete(m.regions, regionID)
-	delete(cache.groupInfo.Regions, regionID)
+	m.deleteCacheLocked(regionID)
 }
 
 func (m *Manager) getCache(region *core.RegionInfo) (*regionCache, *GroupState) {
