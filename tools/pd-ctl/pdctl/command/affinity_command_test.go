@@ -121,7 +121,7 @@ func TestTableKeyRange(t *testing.T) {
 	re.Equal(expectedEndHex, actualEndHex, "end key should match expected encoding")
 
 	// Verify start < end
-	re.True(string(start) < string(end), "start key should be less than end key")
+	re.Less(start, end)
 }
 
 func TestTableKeyRangeWithPartition(t *testing.T) {
@@ -143,7 +143,7 @@ func TestTableKeyRangeWithPartition(t *testing.T) {
 	re.Equal(expectedEndHex, actualEndHex, "partition end key should match expected encoding")
 
 	// Verify start < end
-	re.True(string(start) < string(end), "start key should be less than end key")
+	re.Less(start, end)
 }
 
 func TestBuildAffinityGroupDefinitionsWithPartitionKeyEncoding(t *testing.T) {
@@ -168,4 +168,3 @@ func TestBuildAffinityGroupDefinitionsWithPartitionKeyEncoding(t *testing.T) {
 	actualStartHex := hex.EncodeToString(defs[0].ranges[0].StartKey)
 	re.Equal(expectedStartHex, actualStartHex, "partition key range should use EncodeBytes encoding")
 }
-
