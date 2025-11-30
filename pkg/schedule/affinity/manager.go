@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -258,6 +259,10 @@ func (m *Manager) updateGroupLabelRuleLocked(groupID string, labelRule *labeler.
 			rangeCount = len(ranges)
 		}
 	}
+	m.updateGroupLabelRuleLockedWithCount(groupID, labelRule, rangeCount, needClear)
+}
+
+func (m *Manager) updateGroupLabelRuleLockedWithCount(groupID string, labelRule *labeler.LabelRule, rangeCount int, needClear bool) {
 	groupInfo, ok := m.groups[groupID]
 	if !ok {
 		log.Error("group not initialized", zap.String("group-id", groupID))
@@ -468,4 +473,127 @@ func (m *Manager) RestoreAffinityGroupForTest(groupID string) {
 	m.Lock()
 	defer m.Unlock()
 	m.updateGroupStateLocked(groupID, groupAvailable)
+}
+
+// These methods are called by the watcher in microservice.
+// They are called by the watcher when it receives events from etcd.
+
+// SyncGroupFromEtcd synchronizes a group from etcd to the in-memory state.
+func (m *Manager) SyncGroupFromEtcd(group *Group) {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+
+	m.Lock()
+	defer m.Unlock()
+
+	groupInfo, exists := m.groups[group.ID]
+	if !exists {
+		m.initGroupLocked(group)
+		// If the group is newly created, try to attach existing label rule.
+		labelRule := m.regionLabeler.GetLabelRule(GetLabelRuleID(group.ID))
+		if labelRule != nil {
+			gkr, err := extractKeyRangesFromLabelRule(labelRule)
+			if err != nil {
+				log.Warn("failed to attach existing label rule to new affinity group",
+					zap.String("group-id", group.ID),
+					zap.Error(err))
+				return
+			}
+			if len(gkr.KeyRanges) > 0 {
+				// Pass the rangeCount directly instead of letting updateGroupLabelRuleLocked calculate it
+				// because labelRule.Data might be []any (from watcher) instead of []*labeler.KeyRangeRule
+				m.keyRanges[group.ID] = gkr
+				m.updateGroupLabelRuleLockedWithCount(group.ID, labelRule, len(gkr.KeyRanges), false)
+			}
+		}
+	} else {
+		changed := false
+		if groupInfo.LeaderStoreID != group.LeaderStoreID {
+			groupInfo.LeaderStoreID = group.LeaderStoreID
+			changed = true
+		}
+		if !slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs) {
+			groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
+			changed = true
+		}
+
+		if changed {
+			m.resetCountLocked(groupInfo)
+		}
+	}
+}
+
+// SyncGroupDeleteFromEtcd synchronizes a group deletion from etcd.
+func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) {
+	m.metaMutex.Lock()
+	delete(m.keyRanges, groupID)
+	m.metaMutex.Unlock()
+
+	m.Lock()
+	defer m.Unlock()
+	if _, exists := m.groups[groupID]; !exists {
+		log.Warn("affinity group not found during etcd sync delete", zap.String("group-id", groupID))
+		return
+	}
+
+	m.deleteGroupLocked(groupID)
+}
+
+// SyncKeyRangesFromEtcd synchronizes key ranges from a label rule.
+func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
+	groupID, isAffinity := parseAffinityGroupIDFromLabelRule(labelRule)
+	if !isAffinity {
+		return nil
+	}
+
+	// Extract key ranges from label rule
+	gkr, err := extractKeyRangesFromLabelRule(labelRule)
+	if err != nil {
+		log.Error("failed to extract key ranges from label rule during sync",
+			zap.String("rule-id", labelRule.ID),
+			zap.Error(err))
+		return err
+	}
+
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+
+	m.Lock()
+	defer m.Unlock()
+
+	if _, groupExists := m.groups[groupID]; !groupExists {
+		return nil
+	}
+
+	if len(gkr.KeyRanges) > 0 {
+		m.keyRanges[groupID] = gkr
+	} else {
+		delete(m.keyRanges, groupID)
+	}
+
+	// Pass the rangeCount directly instead of letting updateGroupLabelRuleLocked calculate it
+	// because labelRule.Data might be []any (from watcher) instead of []*labeler.KeyRangeRule
+	m.updateGroupLabelRuleLockedWithCount(groupID, labelRule, len(gkr.KeyRanges), false)
+
+	return nil
+}
+
+// SyncKeyRangesDeleteFromEtcd synchronizes key ranges deletion.
+func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) {
+	groupID := strings.TrimPrefix(ruleID, LabelRuleIDPrefix)
+	if groupID == "" || groupID == ruleID {
+		return
+	}
+
+	// Clear keyRanges cache (needs metaMutex)
+	m.metaMutex.Lock()
+	delete(m.keyRanges, groupID)
+	m.metaMutex.Unlock()
+
+	// Update group label rule (needs RWMutex)
+	m.Lock()
+	if _, exists := m.groups[groupID]; exists {
+		m.updateGroupLabelRuleLocked(groupID, nil, true)
+	}
+	m.Unlock()
 }
