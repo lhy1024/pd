@@ -102,6 +102,9 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 
 // initialize loads affinity groups from storage and rebuilds the group-label mapping.
 func (m *Manager) initialize() error {
+	// metaMutex must be locked, because loadRegionLabel will acquire RWMutex to protect keyRanges
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
 	m.Lock()
 	defer m.Unlock()
 
@@ -483,20 +486,41 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
+	// Fast path: avoid taking write lock if nothing changes.
+	m.RLock()
+	existingGroup, exists := m.groups[group.ID]
+	if exists &&
+		existingGroup.LeaderStoreID == group.LeaderStoreID &&
+		slices.Equal(existingGroup.VoterStoreIDs, group.VoterStoreIDs) {
+		m.RUnlock()
+		return
+	}
+	m.RUnlock()
+
+	// If the group is newly created, try to attach existing label rule without holding the write lock.
+	var (
+		labelRule *labeler.LabelRule
+		gkr       GroupKeyRanges
+		labelErr  error
+	)
+	if !exists {
+		labelRule = m.regionLabeler.GetLabelRule(GetLabelRuleID(group.ID))
+		if labelRule != nil {
+			gkr, labelErr = extractKeyRangesFromLabelRule(labelRule)
+		}
+	}
+
 	m.Lock()
 	defer m.Unlock()
-
+	// Check if the group exists again to avoid other threads modifying the group.
 	groupInfo, exists := m.groups[group.ID]
 	if !exists {
 		m.initGroupLocked(group)
-		// If the group is newly created, try to attach existing label rule.
-		labelRule := m.regionLabeler.GetLabelRule(GetLabelRuleID(group.ID))
 		if labelRule != nil {
-			gkr, err := extractKeyRangesFromLabelRule(labelRule)
-			if err != nil {
+			if labelErr != nil {
 				log.Warn("failed to attach existing label rule to new affinity group",
 					zap.String("group-id", group.ID),
-					zap.Error(err))
+					zap.Error(labelErr))
 				return
 			}
 			if len(gkr.KeyRanges) > 0 {
@@ -555,6 +579,16 @@ func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
 		return err
 	}
 
+	// Fast path: avoid taking write lock if no group exists.
+	m.RLock()
+	if _, exists := m.groups[groupID]; !exists {
+		m.RUnlock()
+		return nil
+	}
+	m.RUnlock()
+
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
 	m.Lock()
 	defer m.Unlock()
 
