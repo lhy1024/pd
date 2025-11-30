@@ -16,6 +16,7 @@ package command
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +32,7 @@ import (
 
 	pd "github.com/tikv/pd/client/http"
 	"github.com/tikv/pd/pkg/codec"
+	"github.com/tikv/pd/tools/pd-ctl/helper/topology"
 )
 
 const (
@@ -311,13 +313,13 @@ func loadTableAffinityInfo(cmd *cobra.Command) (tableAffinityInfo, string, error
 
 func fetchTableAffinityInfo(ctx context.Context, cmd *cobra.Command, tidbHTTP, dbName, tableName string) (tableAffinityInfo, error) {
 	// Get HTTP client with TLS support
-	httpClient, err := createHTTPClient(cmd)
+	httpClient, tlsConfig, err := createHTTPClient(cmd)
 	if err != nil {
 		return tableAffinityInfo{}, err
 	}
 
 	// Resolve TiDB HTTP address
-	httpAddr, err := resolveTiDBHTTPAddress(ctx, httpClient, tidbHTTP)
+	httpAddr, err := resolveTiDBHTTPAddress(ctx, httpClient, tlsConfig, tidbHTTP, getEndpoints(cmd))
 	if err != nil {
 		return tableAffinityInfo{}, err
 	}
@@ -348,24 +350,29 @@ func fetchTableAffinityInfo(ctx context.Context, cmd *cobra.Command, tidbHTTP, d
 }
 
 // resolveTiDBHTTPAddress resolves the TiDB HTTP address from flag or auto-discovery.
-func resolveTiDBHTTPAddress(ctx context.Context, httpClient *http.Client, tidbHTTP string) (string, error) {
+func resolveTiDBHTTPAddress(ctx context.Context, httpClient *http.Client, tlsConfig *tls.Config, tidbHTTP string, pdEndpoints []string) (string, error) {
 	if tidbHTTP != "" {
 		return tidbHTTP, nil
 	}
 
-	// Auto-discover from default address
-	httpAddr, err := discoverTiDBHTTPAddress(ctx, httpClient)
-	if err != nil {
-		return "", errors.New("failed to discover TiDB HTTP address. Please specify --tidb-http flag (e.g., --tidb-http=http://127.0.0.1:10080)")
+	autoAddrs, err := topology.DiscoverTiDBStatusAddrs(ctx, pdEndpoints, tlsConfig)
+	if err == nil && len(autoAddrs) > 0 {
+		return autoAddrs[0], nil
 	}
-	return httpAddr, nil
+
+	// Fallback to the legacy default address check for backward compatibility.
+	httpAddr, err := discoverTiDBHTTPAddress(ctx, httpClient)
+	if err == nil {
+		return httpAddr, nil
+	}
+	return "", errors.New("failed to discover TiDB HTTP address. Please specify --tidb-http flag (e.g., --tidb-http=http://127.0.0.1:10080)")
 }
 
 // createHTTPClient creates an HTTP client with optional TLS configuration.
-func createHTTPClient(cmd *cobra.Command) (*http.Client, error) {
+func createHTTPClient(cmd *cobra.Command) (*http.Client, *tls.Config, error) {
 	tlsConfig, err := parseTLSConfig(cmd)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	transport := &http.Transport{
@@ -375,7 +382,7 @@ func createHTTPClient(cmd *cobra.Command) (*http.Client, error) {
 	return &http.Client{
 		Timeout:   httpRequestTimeout,
 		Transport: transport,
-	}, nil
+	}, tlsConfig, nil
 }
 
 // doHTTPRequest performs an HTTP GET request and optionally decodes the JSON response.
@@ -547,14 +554,14 @@ func affinityListCommandFunc(cmd *cobra.Command, _ []string) {
 	}
 
 	// Get HTTP client
-	httpClient, err := createHTTPClient(cmd)
+	httpClient, tlsConfig, err := createHTTPClient(cmd)
 	if err != nil {
 		cmd.Printf("Failed to create HTTP client: %v\n", err)
 		return
 	}
 
 	// Resolve TiDB HTTP address
-	httpAddr, err := resolveTiDBHTTPAddress(cmd.Context(), httpClient, tidbHTTP)
+	httpAddr, err := resolveTiDBHTTPAddress(cmd.Context(), httpClient, tlsConfig, tidbHTTP, getEndpoints(cmd))
 	if err != nil {
 		cmd.Println(err)
 		return
