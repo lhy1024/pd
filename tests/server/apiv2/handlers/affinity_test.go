@@ -24,6 +24,7 @@ import (
 	"github.com/docker/go-units"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/pd/pkg/utils/apiutil"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	pdpb "github.com/pingcap/kvproto/pkg/pdpb"
@@ -1078,5 +1079,29 @@ func (suite *affinityHandlerTestSuite) TestBatchModifyRemoveNonExistentRange() {
 		// Verify the original range is still intact (state not polluted)
 		state := mustGetAffinityGroup(re, serverAddr, "test-group")
 		re.Equal(1, state.RangeCount)
+	})
+}
+
+// TestAffinityForwardedHeader verifies microservice forwarding sets the header.
+func (suite *affinityHandlerTestSuite) TestAffinityForwardedHeader() {
+	suite.env.RunTestInMicroserviceEnv(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		leader := cluster.GetLeaderServer()
+		serverAddr := leader.GetAddr()
+
+		// Create a group to ensure GET succeeds.
+		createReq := handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"header-check": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x10}}}},
+			},
+		}
+		mustCreateAffinityGroups(re, serverAddr, &createReq)
+
+		resp, err := tests.TestDialClient.Get(getAffinityGroupURL(serverAddr))
+		re.NoError(err)
+		defer resp.Body.Close()
+
+		re.Equal(http.StatusOK, resp.StatusCode)
+		re.Equal("true", resp.Header.Get(apiutil.XForwardedToMicroserviceHeader))
 	})
 }
