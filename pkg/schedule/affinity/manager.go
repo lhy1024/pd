@@ -526,8 +526,8 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 // SyncGroupDeleteFromEtcd synchronizes a group deletion from etcd.
 func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) {
 	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
 	delete(m.keyRanges, groupID)
-	m.metaMutex.Unlock()
 
 	m.Lock()
 	defer m.Unlock()
@@ -554,9 +554,6 @@ func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
 			zap.Error(err))
 		return err
 	}
-
-	m.metaMutex.Lock()
-	defer m.metaMutex.Unlock()
 
 	m.Lock()
 	defer m.Unlock()
@@ -587,13 +584,13 @@ func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) {
 
 	// Clear keyRanges cache (needs metaMutex)
 	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
 	delete(m.keyRanges, groupID)
-	m.metaMutex.Unlock()
 
 	// Update group label rule (needs RWMutex)
 	m.Lock()
+	defer m.Unlock()
 	if _, exists := m.groups[groupID]; exists {
 		m.updateGroupLabelRuleLocked(groupID, nil, true)
 	}
-	m.Unlock()
 }
