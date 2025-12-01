@@ -39,6 +39,7 @@ const (
 	tableGroupIDPattern     = "_tidb_c_t_%d"
 	partitionGroupIDPattern = "_tidb_p_t_%d_p%d"
 	httpRequestTimeout      = 30 * time.Second
+	defaultTiDBStatusAddr   = "http://127.0.0.1:10080"
 )
 
 // NOTE: The regex patterns below must match the format defined in the constants above:
@@ -109,10 +110,10 @@ func NewAffinityCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "affinity",
 		Short:             "affinity group commands based on TiDB metadata",
-		Long:              `Affinity group commands use TiDB HTTP API to fetch table/partition metadata.`,
+		Long:              `Affinity group commands use TiDB API to fetch table/partition metadata.`,
 		PersistentPreRunE: requirePDClient,
 	}
-	cmd.PersistentFlags().String("tidb-http", "", "TiDB HTTP status address (e.g., http://127.0.0.1:10080)")
+	cmd.PersistentFlags().String("tidb-status-addr", "", "TiDB status address (e.g., http://127.0.0.1:10080)")
 	cmd.PersistentFlags().String("db", "", "database name of the target table")
 	cmd.PersistentFlags().String("table", "", "table name of the target table")
 	cmd.PersistentFlags().String("partition", "", "target partition name or ID when operating on a partitioned table")
@@ -172,7 +173,7 @@ func newAffinityListCommand() *cobra.Command {
 		Short: "list affinity groups with resolved table and partition names",
 		Run:   affinityListCommandFunc,
 	}
-	cmd.Flags().String("tidb-http", "", "TiDB HTTP status address to resolve table names")
+	cmd.Flags().String("tidb-status-addr", "", "TiDB status address to resolve table names")
 	return cmd
 }
 
@@ -299,27 +300,27 @@ func loadAffinityGroupDefinitions(cmd *cobra.Command) ([]affinityGroupDefinition
 func loadTableAffinityInfo(cmd *cobra.Command) (tableAffinityInfo, string, error) {
 	dbName, _ := cmd.Flags().GetString("db")
 	tableName, _ := cmd.Flags().GetString("table")
-	tidbHTTP, _ := cmd.Flags().GetString("tidb-http")
+	tidbStatusAddr, _ := cmd.Flags().GetString("tidb-status-addr")
 	partition, _ := cmd.Flags().GetString("partition")
 	if dbName == "" || tableName == "" {
 		return tableAffinityInfo{}, "", errors.New("db and table are required")
 	}
-	info, err := fetchTableAffinityInfo(cmd.Context(), cmd, tidbHTTP, dbName, tableName)
+	info, err := fetchTableAffinityInfo(cmd.Context(), cmd, tidbStatusAddr, dbName, tableName)
 	if err != nil {
 		return tableAffinityInfo{}, "", err
 	}
 	return info, partition, nil
 }
 
-func fetchTableAffinityInfo(ctx context.Context, cmd *cobra.Command, tidbHTTP, dbName, tableName string) (tableAffinityInfo, error) {
+func fetchTableAffinityInfo(ctx context.Context, cmd *cobra.Command, tidbStatusAddr, dbName, tableName string) (tableAffinityInfo, error) {
 	// Get HTTP client with TLS support
 	httpClient, tlsConfig, err := createHTTPClient(cmd)
 	if err != nil {
 		return tableAffinityInfo{}, err
 	}
 
-	// Resolve TiDB HTTP address
-	httpAddr, err := resolveTiDBHTTPAddress(ctx, httpClient, tlsConfig, tidbHTTP, getEndpoints(cmd))
+	// Resolve TiDB status address
+	httpAddr, err := resolveTiDBStatusAddress(ctx, httpClient, tlsConfig, tidbStatusAddr, getEndpoints(cmd))
 	if err != nil {
 		return tableAffinityInfo{}, err
 	}
@@ -349,10 +350,10 @@ func fetchTableAffinityInfo(ctx context.Context, cmd *cobra.Command, tidbHTTP, d
 	}, nil
 }
 
-// resolveTiDBHTTPAddress resolves the TiDB HTTP address from flag or auto-discovery.
-func resolveTiDBHTTPAddress(ctx context.Context, httpClient *http.Client, tlsConfig *tls.Config, tidbHTTP string, pdEndpoints []string) (string, error) {
-	if tidbHTTP != "" {
-		return tidbHTTP, nil
+// resolveTiDBStatusAddress resolves the TiDB status address from flag or auto-discovery.
+func resolveTiDBStatusAddress(ctx context.Context, httpClient *http.Client, tlsConfig *tls.Config, tidbStatusAddr string, pdEndpoints []string) (string, error) {
+	if tidbStatusAddr != "" {
+		return tidbStatusAddr, nil
 	}
 
 	autoAddrs, err := topology.DiscoverTiDBStatusAddrs(ctx, pdEndpoints, tlsConfig)
@@ -360,12 +361,12 @@ func resolveTiDBHTTPAddress(ctx context.Context, httpClient *http.Client, tlsCon
 		return autoAddrs[0], nil
 	}
 
-	// Fallback to the legacy default address check for backward compatibility.
-	httpAddr, err := discoverTiDBHTTPAddress(ctx, httpClient)
-	if err == nil {
-		return httpAddr, nil
+	// Fallback to the legacy default address
+	url := fmt.Sprintf("%s/status", defaultTiDBStatusAddr)
+	if err := doHTTPRequest(ctx, httpClient, url, nil); err == nil {
+		return defaultTiDBStatusAddr, nil
 	}
-	return "", errors.New("failed to discover TiDB HTTP address. Please specify --tidb-http flag (e.g., --tidb-http=http://127.0.0.1:10080)")
+	return "", errors.New("failed to discover TiDB status address. Please specify --tidb-status-addr flag (e.g., --tidb-status-addr=http://127.0.0.1:10080)")
 }
 
 // createHTTPClient creates an HTTP client with optional TLS configuration.
@@ -414,20 +415,6 @@ func doHTTPRequest(ctx context.Context, httpClient *http.Client, url string, res
 	}
 
 	return nil
-}
-
-// discoverTiDBHTTPAddress attempts to discover a TiDB server address using the default address.
-func discoverTiDBHTTPAddress(ctx context.Context, httpClient *http.Client) (string, error) {
-	// Use default TiDB status port
-	addr := "http://127.0.0.1:10080"
-	url := fmt.Sprintf("%s/status", addr)
-
-	// Try /status endpoint to verify TiDB is accessible
-	if err := doHTTPRequest(ctx, httpClient, url, nil); err != nil {
-		return "", errors.Wrapf(err, "TiDB not accessible at %s", addr)
-	}
-
-	return addr, nil
 }
 
 // fetchTableSchema fetches table schema from TiDB HTTP API.
@@ -540,7 +527,7 @@ func parseUint64List(input string) ([]uint64, error) {
 }
 
 func affinityListCommandFunc(cmd *cobra.Command, _ []string) {
-	tidbHTTP, _ := cmd.Flags().GetString("tidb-http")
+	tidbStatusAddr, _ := cmd.Flags().GetString("tidb-status-addr")
 	groups, err := PDCli.GetAllAffinityGroups(cmd.Context())
 	if err != nil {
 		cmd.Printf("Failed to get affinity groups: %v\n", err)
@@ -560,8 +547,8 @@ func affinityListCommandFunc(cmd *cobra.Command, _ []string) {
 		return
 	}
 
-	// Resolve TiDB HTTP address
-	httpAddr, err := resolveTiDBHTTPAddress(cmd.Context(), httpClient, tlsConfig, tidbHTTP, getEndpoints(cmd))
+	// Resolve TiDB status address
+	httpAddr, err := resolveTiDBStatusAddress(cmd.Context(), httpClient, tlsConfig, tidbStatusAddr, getEndpoints(cmd))
 	if err != nil {
 		cmd.Println(err)
 		return
