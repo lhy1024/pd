@@ -112,9 +112,9 @@ func (m *Manager) collectMetrics() {
 	defer m.RUnlock()
 
 	// Collect global metrics
-	affinityGroupCount.Set(float64(len(m.groups)))
-	affinityRegionCount.Set(float64(len(m.regions)))
-	affinityAffinityRegionCount.Set(float64(m.affinityRegionCount))
+	groupCount.Set(float64(len(m.groups)))
+	regionCount.Set(float64(len(m.regions)))
+	affinityRegionCount.Set(float64(m.affinityRegionCount))
 }
 
 func (m *Manager) generateUnavailableStores() map[uint64]condition {

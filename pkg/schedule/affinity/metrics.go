@@ -28,9 +28,9 @@ var (
 
 var (
 	// WithLabelValues is a heavy operation, define variable to avoid call it every time.
-	affinityGroupCount          = affinityStatusGauge.WithLabelValues("group-count")
-	affinityRegionCount         = affinityStatusGauge.WithLabelValues("region-count")
-	affinityAffinityRegionCount = affinityStatusGauge.WithLabelValues("affinity-region-count")
+	groupCount          = affinityStatusGauge.WithLabelValues("group-count")
+	regionCount         = affinityStatusGauge.WithLabelValues("region-count")
+	affinityRegionCount = affinityStatusGauge.WithLabelValues("affinity-region-count")
 )
 
 func init() {
