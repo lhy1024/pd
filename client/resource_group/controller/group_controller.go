@@ -489,12 +489,18 @@ func (gc *groupCostController) calcRequest(counter *tokenCounter) float64 {
 	return value
 }
 
-func (gc *groupCostController) acquireTokens(ctx context.Context, delta *rmpb.Consumption, waitDuration *time.Duration, allowDebt bool) (time.Duration, error) {
+func (gc *groupCostController) acquireTokens(
+	ctx context.Context,
+	delta *rmpb.Consumption,
+	waitDuration *time.Duration,
+	allowDebt bool,
+) (float64, time.Duration, error) {
 	gc.metrics.runningKVRequestCounter.Inc()
 	defer gc.metrics.runningKVRequestCounter.Dec()
 	var (
-		err error
-		d   time.Duration
+		err        error
+		d          time.Duration
+		waitTokens float64
 	)
 retryLoop:
 	for range gc.mainCfg.WaitRetryTimes {
@@ -513,14 +519,14 @@ retryLoop:
 			}
 			res = counter.limiter.Reserve(ctx, gc.mainCfg.LTBMaxWaitDuration, now, v)
 		}
-		if d, err = WaitReservations(ctx, now, []*Reservation{res}); err == nil || errs.ErrClientResourceGroupThrottled.NotEqual(err) {
+		if waitTokens, d, err = WaitReservations(ctx, now, []*Reservation{res}); err == nil || errs.ErrClientResourceGroupThrottled.NotEqual(err) {
 			break retryLoop
 		}
 		gc.metrics.requestRetryCounter.Inc()
 		time.Sleep(gc.mainCfg.WaitRetryInterval)
 		*waitDuration += gc.mainCfg.WaitRetryInterval
 	}
-	return d, err
+	return waitTokens, d, err
 }
 
 func (gc *groupCostController) onRequestWaitImpl(
@@ -536,7 +542,7 @@ func (gc *groupCostController) onRequestWaitImpl(
 	gc.mu.Unlock()
 
 	if !gc.burstable.Load() {
-		d, err := gc.acquireTokens(ctx, delta, &waitDuration, false)
+		waitTokens, d, err := gc.acquireTokens(ctx, delta, &waitDuration, false)
 		if err != nil {
 			if errs.ErrClientResourceGroupThrottled.Equal(err) {
 				gc.metrics.failedRequestCounterWithThrottled.Inc()
@@ -554,6 +560,7 @@ func (gc *groupCostController) onRequestWaitImpl(
 		}
 		gc.metrics.successfulRequestDuration.Observe(d.Seconds())
 		waitDuration += d
+		delta.WaitRU = waitTokens
 	}
 
 	gc.mu.Lock()
@@ -614,7 +621,7 @@ func (gc *groupCostController) onResponseWaitImpl(
 	var waitDuration time.Duration
 	if !gc.burstable.Load() {
 		allowDebt := delta.ReadBytes+delta.WriteBytes < bigRequestThreshold || !gc.isThrottled.Load()
-		d, err := gc.acquireTokens(ctx, delta, &waitDuration, allowDebt)
+		waitTokens, d, err := gc.acquireTokens(ctx, delta, &waitDuration, allowDebt)
 		if err != nil {
 			if errs.ErrClientResourceGroupThrottled.Equal(err) {
 				gc.metrics.failedRequestCounterWithThrottled.Inc()
@@ -626,6 +633,7 @@ func (gc *groupCostController) onResponseWaitImpl(
 		}
 		gc.metrics.successfulRequestDuration.Observe(d.Seconds())
 		waitDuration += d
+		delta.WaitRU = waitTokens
 	}
 
 	gc.mu.Lock()

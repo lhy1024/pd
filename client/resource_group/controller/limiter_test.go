@@ -175,7 +175,7 @@ func TestCancel(t *testing.T) {
 	r2 := lim2.Reserve(ctx1, InfDuration, t1, 5)
 	checkTokens(re, lim1, t2, 7)
 	checkTokens(re, lim2, t2, 2)
-	d, err := WaitReservations(ctx, t2, []*Reservation{r1, r2})
+	_, d, err := WaitReservations(ctx, t2, []*Reservation{r1, r2})
 	re.Error(err)
 	re.Equal(4*time.Second, d)
 	re.Contains(err.Error(), "estimated wait time 4s, ltb state is 1.00:-4.00")
@@ -191,7 +191,7 @@ func TestCancel(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		_, err := WaitReservations(ctx2, t3, []*Reservation{r1, r2})
+		_, _, err := WaitReservations(ctx2, t3, []*Reservation{r1, r2})
 		re.Error(err)
 		wg.Done()
 	}()
@@ -209,7 +209,7 @@ func TestCancelErrorOfReservation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	r := lim.Reserve(ctx, InfDuration, t0, 5)
-	d, err := WaitReservations(context.Background(), t0, []*Reservation{r})
+	_, d, err := WaitReservations(context.Background(), t0, []*Reservation{r})
 	re.Equal(0*time.Second, d)
 	re.Error(err)
 	re.Contains(err.Error(), "context canceled")
