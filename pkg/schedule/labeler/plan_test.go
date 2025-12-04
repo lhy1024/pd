@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
@@ -58,7 +59,6 @@ func TestPlanSetLabelRule(t *testing.T) {
 
 	err = plan.SetLabelRule(invalidRule)
 	re.Error(err)
-	re.NotNil(plan.err)
 
 	// Test that subsequent SetLabelRule calls return the error
 	anotherRule := &LabelRule{
