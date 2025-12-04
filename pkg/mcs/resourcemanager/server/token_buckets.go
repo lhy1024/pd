@@ -32,6 +32,12 @@ const (
 	defaultReserveRatio       = 0.5
 	defaultLoanCoefficient    = 2
 	slotExpireTimeout         = 10 * time.Minute
+	// warmupDemandFraction is the fraction of the even share used to bootstrap cold slots.
+	warmupDemandFraction = 0.1
+	// warmupMinDemand caps the minimum bootstrap demand to avoid being too small when fill rate is tiny.
+	warmupMinDemand = 1.0
+	// warmupDuration is the window during which a slot is considered cold and is eligible for warm-up demand.
+	warmupDuration = 2 * defaultRUTrackerTimeConstant
 )
 
 type burstableMode int
@@ -296,10 +302,20 @@ func (gtb *GroupTokenBucket) balanceSlotTokens(
 		demandMap                      = make(map[uint64]float64, len(gtb.tokenSlots))
 		totalFillRate, totalBurstLimit = gtb.getFillRateAndBurstLimit()
 	)
+	warmupDemand := warmupMinDemand
+	if slotNum > 0 {
+		// Use a small portion of the even share as the warm-up demand so that a cold slot gets
+		// some tokens to start sampling without starving existing hot slots.
+		warmupDemand = math.Max(warmupMinDemand, gtb.getFillRateSetting()*warmupDemandFraction/float64(slotNum))
+	}
 	for clientUniqueID, slot := range gtb.tokenSlots {
 		ruDemand := slot.rt.getRUPerSec()
-		demandSum += ruDemand
-		demandMap[clientUniqueID] = ruDemand
+		demand := ruDemand
+		if ruDemand < warmupDemand && now.Sub(slot.lastReqTime) <= warmupDuration {
+			demand = warmupDemand
+		}
+		demandSum += demand
+		demandMap[clientUniqueID] = demand
 	}
 	for clientUniqueID, slot := range gtb.tokenSlots {
 		demand := demandMap[clientUniqueID]

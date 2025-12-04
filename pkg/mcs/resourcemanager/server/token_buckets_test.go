@@ -273,3 +273,35 @@ func TestGroupTokenBucketRequestLoop(t *testing.T) {
 		currentTime = currentTime.Add(timeIncrement)
 	}
 }
+
+func TestWarmupDemandForColdSlot(t *testing.T) {
+	re := require.New(t)
+
+	tbSetting := &rmpb.TokenBucket{
+		Settings: &rmpb.TokenLimitSettings{
+			FillRate:   100,
+			BurstLimit: 100,
+		},
+	}
+	gtb := NewGroupTokenBucket(testResourceGroupName, tbSetting)
+	now := time.Now()
+	gtb.init(now)
+
+	hot := newTokenSlot(1, now)
+	hot.rt.initialized = true
+	hot.rt.lastSampleTime = now
+	hot.rt.lastEMA = 80
+
+	cold := newTokenSlot(2, now)
+	cold.rt.initialized = true
+	cold.rt.lastSampleTime = now
+	cold.rt.lastEMA = 0
+
+	gtb.tokenSlots[hot.id] = hot
+	gtb.tokenSlots[cold.id] = cold
+
+	gtb.balanceSlotTokens(now, 0, 0, float64(gtb.getFillRate()))
+
+	re.Greater(float64(gtb.tokenSlots[cold.id].fillRate), 0.0)
+	re.Less(float64(gtb.tokenSlots[hot.id].fillRate), float64(gtb.getFillRate()))
+}
