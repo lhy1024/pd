@@ -634,25 +634,25 @@ type flattenKeyRange struct {
 // Uses in-memory keyRanges cache to avoid repeated labeler access and reduce lock contention.
 // Complexity: O(M log M) where M is the total number of ranges (new + existing).
 func (m *Manager) validateNoKeyRangeOverlapLocked(newRanges []GroupKeyRanges) error {
-	// Collect all ranges (new + existing) into a single slice
-	var allRanges []flattenKeyRange
+	// Combine new ranges with existing ranges
+	combined := make([]GroupKeyRanges, 0, len(newRanges)+len(m.keyRanges))
+	combined = append(combined, newRanges...)
+	for _, gkr := range m.keyRanges {
+		combined = append(combined, gkr)
+	}
+	return validateRangesNoOverlap(combined)
+}
 
-	// Add new ranges
-	for _, gkr := range newRanges {
+// validateRangesNoOverlap validates that ranges in the given slice don't overlap with each other.
+// This is a pure function that doesn't access any manager state.
+// Complexity: O(M log M) where M is the total number of ranges.
+func validateRangesNoOverlap(ranges []GroupKeyRanges) error {
+	var allRanges []flattenKeyRange
+	for _, gkr := range ranges {
 		for _, kr := range gkr.KeyRanges {
 			allRanges = append(allRanges, flattenKeyRange{
 				KeyRange: kr,
 				groupID:  gkr.GroupID,
-			})
-		}
-	}
-
-	// Add existing ranges
-	for _, existingGKR := range m.keyRanges {
-		for _, kr := range existingGKR.KeyRanges {
-			allRanges = append(allRanges, flattenKeyRange{
-				KeyRange: kr,
-				groupID:  existingGKR.GroupID,
 			})
 		}
 	}
@@ -724,34 +724,8 @@ func (m *Manager) loadRegionLabel() error {
 	})
 
 	// Validate that all key ranges are non-overlapping
-	for i := range allRanges {
-		// Check within the same group
-		for idx1 := range allRanges[i].KeyRanges {
-			for idx2 := idx1 + 1; idx2 < len(allRanges[i].KeyRanges); idx2++ {
-				if checkKeyRangesOverlap(
-					allRanges[i].KeyRanges[idx1].StartKey, allRanges[i].KeyRanges[idx1].EndKey,
-					allRanges[i].KeyRanges[idx2].StartKey, allRanges[i].KeyRanges[idx2].EndKey,
-				) {
-					return errs.ErrAffinityGroupContent.FastGenByArgs(
-						"found overlapping key ranges within group " + allRanges[i].GroupID + " during rebuild")
-				}
-			}
-		}
-		// Check between different groups
-		for _, rangeI := range allRanges[i].KeyRanges {
-			for j := i + 1; j < len(allRanges); j++ {
-				for _, rangeJ := range allRanges[j].KeyRanges {
-					if checkKeyRangesOverlap(
-						rangeI.StartKey, rangeI.EndKey,
-						rangeJ.StartKey, rangeJ.EndKey,
-					) {
-						return errs.ErrAffinityGroupContent.FastGenByArgs(
-							"found overlapping key ranges during rebuild: group " +
-								allRanges[i].GroupID + " overlaps with group " + allRanges[j].GroupID)
-					}
-				}
-			}
-		}
+	if err := validateRangesNoOverlap(allRanges); err != nil {
+		return err
 	}
 
 	log.Info("rebuilt group-label mapping",
