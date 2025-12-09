@@ -309,8 +309,8 @@ func TestGroupAvailabilityPriority(t *testing.T) {
 	_, err = manager.UpdateAffinityGroupPeers("priority", 1, []uint64{1, 2})
 	re.NoError(err)
 	unavailable = map[uint64]storeCondition{
-		1: storeDisconnected,        // degraded
-		2: storeRemovingOrRemoved,   // expired
+		1: storeDisconnected,      // degraded
+		2: storeRemovingOrRemoved, // expired
 	}
 	changed, changes = manager.getGroupAvailabilityChanges(unavailable)
 	re.True(changed)
