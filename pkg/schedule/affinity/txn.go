@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -116,7 +117,7 @@ func (m *Manager) CreateAffinityGroups(changes []GroupKeyRanges) error {
 	}
 
 	// Step 2: Convert and validate key ranges no overlaps
-	if err := m.validateNoKeyRangeOverlapLocked(changes); err != nil {
+	if err := m.validateNoOverlapLocked(changes); err != nil {
 		return err
 	}
 
@@ -375,7 +376,7 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 	}
 	// Validate no overlaps with newly added ranges
 	if len(addOps) > 0 {
-		if err := m.validateNoKeyRangeOverlapLocked(addOps); err != nil {
+		if err := m.validateNoOverlapLocked(addOps); err != nil {
 			return err
 		}
 	}
@@ -629,24 +630,20 @@ type flattenKeyRange struct {
 	groupID string
 }
 
-// validateNoKeyRangeOverlapLocked validates that the given key ranges do not overlap with existing ones.
+// validateNoOverlapLocked validates that the given key ranges do not overlap with existing ones.
 // It should be called with the manager lock held.
 // Uses in-memory keyRanges cache to avoid repeated labeler access and reduce lock contention.
 // Complexity: O(M log M) where M is the total number of ranges (new + existing).
-func (m *Manager) validateNoKeyRangeOverlapLocked(newRanges []GroupKeyRanges) error {
+func (m *Manager) validateNoOverlapLocked(newRanges []GroupKeyRanges) error {
 	// Combine new ranges with existing ranges
-	combined := make([]GroupKeyRanges, 0, len(newRanges)+len(m.keyRanges))
-	combined = append(combined, newRanges...)
-	for _, gkr := range m.keyRanges {
-		combined = append(combined, gkr)
-	}
-	return validateRangesNoOverlap(combined)
+	combined := slices.Concat(newRanges, slices.Collect(maps.Values(m.keyRanges)))
+	return validateNoOverlap(combined)
 }
 
-// validateRangesNoOverlap validates that ranges in the given slice don't overlap with each other.
+// validateNoOverlap validates that ranges in the given slice don't overlap with each other.
 // This is a pure function that doesn't access any manager state.
 // Complexity: O(M log M) where M is the total number of ranges.
-func validateRangesNoOverlap(ranges []GroupKeyRanges) error {
+func validateNoOverlap(ranges []GroupKeyRanges) error {
 	var allRanges []flattenKeyRange
 	for _, gkr := range ranges {
 		for _, kr := range gkr.KeyRanges {
@@ -664,7 +661,7 @@ func validateRangesNoOverlap(ranges []GroupKeyRanges) error {
 
 	// Check adjacent ranges for overlap
 	// After sorting, if any two ranges overlap, they must be adjacent in the sorted order
-	for i := 0; i < len(allRanges)-1; i++ {
+	for i := range len(allRanges) - 1 {
 		if checkKeyRangesOverlap(
 			allRanges[i].StartKey, allRanges[i].EndKey,
 			allRanges[i+1].StartKey, allRanges[i+1].EndKey,
@@ -724,7 +721,7 @@ func (m *Manager) loadRegionLabel() error {
 	})
 
 	// Validate that all key ranges are non-overlapping
-	if err := validateRangesNoOverlap(allRanges); err != nil {
+	if err := validateNoOverlap(allRanges); err != nil {
 		return err
 	}
 
