@@ -75,11 +75,11 @@ func parseAffinityGroupIDFromLabelRule(rule *labeler.LabelRule) (string, bool) {
 
 // MakeLabelRule makes the label rule for the given GroupKeyRanges.
 func MakeLabelRule(groupKeyRanges GroupKeyRanges) *labeler.LabelRule {
-	labelData := make([]*labeler.KeyRangeRule, 0, len(groupKeyRanges.KeyRanges))
+	var labelData []any
 	for _, kr := range groupKeyRanges.KeyRanges {
-		labelData = append(labelData, &labeler.KeyRangeRule{
-			StartKeyHex: hex.EncodeToString(kr.StartKey),
-			EndKeyHex:   hex.EncodeToString(kr.EndKey),
+		labelData = append(labelData, map[string]any{
+			"start_key": hex.EncodeToString(kr.StartKey),
+			"end_key":   hex.EncodeToString(kr.EndKey),
 		})
 	}
 	return &labeler.LabelRule{
