@@ -632,58 +632,50 @@ type flattenKeyRange struct {
 // validateNoKeyRangeOverlapLocked validates that the given key ranges do not overlap with existing ones.
 // It should be called with the manager lock held.
 // Uses in-memory keyRanges cache to avoid repeated labeler access and reduce lock contention.
+// Complexity: O(M log M) where M is the total number of ranges (new + existing).
 func (m *Manager) validateNoKeyRangeOverlapLocked(newRanges []GroupKeyRanges) error {
-	var allNewRanges []flattenKeyRange
+	// Collect all ranges (new + existing) into a single slice
+	var allRanges []flattenKeyRange
+
+	// Add new ranges
 	for _, gkr := range newRanges {
 		for _, kr := range gkr.KeyRanges {
-			allNewRanges = append(allNewRanges, flattenKeyRange{
+			allRanges = append(allRanges, flattenKeyRange{
 				KeyRange: kr,
 				groupID:  gkr.GroupID,
 			})
 		}
 	}
 
-	// Step 1: Check for overlaps within the new ranges themselves
-	// This is O(N²) where N is the total number of new ranges across all groups
-	for i := range allNewRanges {
-		for j := i + 1; j < len(allNewRanges); j++ {
-			if checkKeyRangesOverlap(
-				allNewRanges[i].StartKey, allNewRanges[i].EndKey,
-				allNewRanges[j].StartKey, allNewRanges[j].EndKey,
-			) {
-				if allNewRanges[i].groupID == allNewRanges[j].groupID {
-					return errs.ErrAffinityGroupContent.FastGenByArgs(
-						"key ranges overlap within group " + allNewRanges[i].groupID)
-				}
-				return errs.ErrAffinityGroupContent.FastGenByArgs(
-					"key range overlaps between groups: " +
-						allNewRanges[i].groupID + " and " + allNewRanges[j].groupID)
-			}
+	// Add existing ranges
+	for _, existingGKR := range m.keyRanges {
+		for _, kr := range existingGKR.KeyRanges {
+			allRanges = append(allRanges, flattenKeyRange{
+				KeyRange: kr,
+				groupID:  existingGKR.GroupID,
+			})
 		}
 	}
 
-	// Step 2: Check new ranges against ALL existing ranges
-	// This is O(N × G×R) where N is new ranges, G is existing groups, R is ranges per group
-	// We must check against all existing groups, including those being updated,
-	// to catch cases like:
-	// - Adding ranges to group A and group B, where A's new range overlaps with B's existing range
-	// - Adding duplicate range to the same group
-	for _, newRange := range allNewRanges {
-		for _, existingGKR := range m.keyRanges {
-			for _, existingRange := range existingGKR.KeyRanges {
-				if checkKeyRangesOverlap(
-					newRange.StartKey, newRange.EndKey,
-					existingRange.StartKey, existingRange.EndKey,
-				) {
-					if newRange.groupID == existingGKR.GroupID {
-						return errs.ErrAffinityGroupContent.FastGenByArgs(
-							"key range overlaps with existing ranges in group " + newRange.groupID)
-					}
-					return errs.ErrAffinityGroupContent.FastGenByArgs(
-						"key range overlaps between groups: " +
-							newRange.groupID + " and " + existingGKR.GroupID)
-				}
+	// Sort by start key
+	slices.SortFunc(allRanges, func(a, b flattenKeyRange) int {
+		return bytes.Compare(a.StartKey, b.StartKey)
+	})
+
+	// Check adjacent ranges for overlap
+	// After sorting, if any two ranges overlap, they must be adjacent in the sorted order
+	for i := 0; i < len(allRanges)-1; i++ {
+		if checkKeyRangesOverlap(
+			allRanges[i].StartKey, allRanges[i].EndKey,
+			allRanges[i+1].StartKey, allRanges[i+1].EndKey,
+		) {
+			if allRanges[i].groupID == allRanges[i+1].groupID {
+				return errs.ErrAffinityGroupContent.FastGenByArgs(
+					"key ranges overlap within group " + allRanges[i].groupID)
 			}
+			return errs.ErrAffinityGroupContent.FastGenByArgs(
+				"key range overlaps between groups: " +
+					allRanges[i].groupID + " and " + allRanges[i+1].groupID)
 		}
 	}
 
