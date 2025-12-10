@@ -58,7 +58,6 @@ func (m *Manager) ObserveAvailableRegion(region *core.RegionInfo, group *GroupSt
 	_, _ = m.updateAffinityGroupPeersWithAffinityVer(group.ID, group.affinityVer, leaderStoreID, voterStoreIDs)
 }
 
-
 // startAvailabilityCheckLoop starts a goroutine to periodically check store availability and invalidate groups with unavailable stores.
 func (m *Manager) startAvailabilityCheckLoop() {
 	interval := defaultAvailabilityCheckInterval

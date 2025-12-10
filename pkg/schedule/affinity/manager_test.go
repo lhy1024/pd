@@ -49,8 +49,6 @@ func TestGetRegionAffinityGroupState(t *testing.T) {
 	}
 
 	conf := mockconfig.NewTestOptions()
-
-	// Create region labeler
 	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
 	re.NoError(err)
 
@@ -66,65 +64,53 @@ func TestGetRegionAffinityGroupState(t *testing.T) {
 	groupInfo := getGroupForTest(re, manager, "test_group")
 	re.True(slices.Equal([]uint64{1, 2, 3}, groupInfo.VoterStoreIDs))
 
+	// Test the positive case first
+	t.Run("region conforming to affinity", func(t *testing.T) {
+		re := require.New(t)
+		region := generateRegionForTest(1, []uint64{1, 2, 3}, ranges[0])
+		_, isAffinity := manager.GetRegionAffinityGroupState(region)
+		re.True(isAffinity)
+	})
+
+	// Test negative cases: all should return false
 	testCases := []struct {
-		name       string
-		regionID   uint64
-		peers      []uint64
-		keyRange   keyutil.KeyRange
-		setup      func()
-		wantResult bool
-		reason     string
+		name          string
+		regionID      uint64
+		peers         []uint64
+		keyRange      keyutil.KeyRange
+		withoutLeader bool
+		setup         func()
 	}{
 		{
-			name:       "region not in any affinity group",
-			regionID:   1,
-			peers:      []uint64{1, 2, 3},
-			keyRange:   nonOverlappingRange,
-			wantResult: false,
-			reason:     "Region not in group should return false",
-		},
-		{
-			name:       "region conforming to affinity",
-			regionID:   1,
-			peers:      []uint64{1, 2, 3},
-			keyRange:   ranges[0],
-			wantResult: true,
-			reason:     "Region conforming to affinity should return true",
-		},
-		{
-			name:       "region with wrong leader",
-			regionID:   1,
-			peers:      []uint64{2, 1, 3},
-			keyRange:   ranges[1],
-			wantResult: false,
-			reason:     "Region with wrong leader should return false",
-		},
-		{
-			name:       "region with wrong voter stores",
-			regionID:   3,
-			peers:      []uint64{1, 2, 4},
-			keyRange:   ranges[2],
-			wantResult: false,
-			reason:     "Region with wrong voter stores should return false",
-		},
-		{
-			name:       "region with different number of voters",
-			regionID:   4,
-			peers:      []uint64{1, 2},
-			keyRange:   ranges[3],
-			wantResult: false,
-			reason:     "Region with wrong number of voters should return false",
-		},
-		{
-			name:     "region without leader",
-			regionID: 5,
+			name:     "region not in any affinity group",
+			regionID: 1,
 			peers:    []uint64{1, 2, 3},
-			keyRange: ranges[4],
-			setup: func() {
-				// This will be handled specially in the loop
-			},
-			wantResult: false,
-			reason:     "Region without leader should return false",
+			keyRange: nonOverlappingRange,
+		},
+		{
+			name:     "region with wrong leader",
+			regionID: 1,
+			peers:    []uint64{2, 1, 3},
+			keyRange: ranges[1],
+		},
+		{
+			name:     "region with wrong voter stores",
+			regionID: 3,
+			peers:    []uint64{1, 2, 4},
+			keyRange: ranges[2],
+		},
+		{
+			name:     "region with different number of voters",
+			regionID: 4,
+			peers:    []uint64{1, 2},
+			keyRange: ranges[3],
+		},
+		{
+			name:          "region without leader",
+			regionID:      5,
+			peers:         []uint64{1, 2, 3},
+			keyRange:      ranges[4],
+			withoutLeader: true,
 		},
 		{
 			name:     "group not in effect",
@@ -134,8 +120,6 @@ func TestGetRegionAffinityGroupState(t *testing.T) {
 			setup: func() {
 				manager.ExpireAffinityGroup("test_group")
 			},
-			wantResult: false,
-			reason:     "Group not in effect should return false",
 		},
 	}
 
@@ -147,18 +131,15 @@ func TestGetRegionAffinityGroupState(t *testing.T) {
 			}
 
 			region := generateRegionForTest(tc.regionID, tc.peers, tc.keyRange)
-
-			// Special handling for "region without leader" test
-			if tc.name == "region without leader" {
+			if tc.withoutLeader {
 				region = region.Clone(core.WithLeader(nil))
 			}
 
 			_, isAffinity := manager.GetRegionAffinityGroupState(region)
-			re.Equal(tc.wantResult, isAffinity, tc.reason)
+			re.False(isAffinity)
 		})
 	}
 }
-
 
 // TestBasicGroupOperations tests basic group CRUD operations
 func TestBasicGroupOperations(t *testing.T) {

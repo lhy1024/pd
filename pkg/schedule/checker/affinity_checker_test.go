@@ -18,9 +18,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 
