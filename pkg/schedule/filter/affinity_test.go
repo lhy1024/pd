@@ -69,7 +69,8 @@ func (s *affinityFilterSuite) TestSelect() {
 	groupID := "g1"
 	createAffinityGroup(re, s.cluster, groupID, "a", "z")
 	defer func() {
-		s.cluster.GetAffinityManager().DeleteAffinityGroups([]string{groupID}, true)
+		err := s.cluster.GetAffinityManager().DeleteAffinityGroups([]string{groupID}, true)
+		re.NoError(err)
 	}()
 
 	affinityRegion := newRegionWithPeers(1, "b", "y", []uint64{1, 2, 3})
@@ -87,7 +88,8 @@ func (s *affinityFilterSuite) TestAllowAutoSplit() {
 	groupID := "g1"
 	createAffinityGroup(re, s.cluster, groupID, "a", "z")
 	defer func() {
-		s.cluster.GetAffinityManager().DeleteAffinityGroups([]string{groupID}, true)
+		err := s.cluster.GetAffinityManager().DeleteAffinityGroups([]string{groupID}, true)
+		re.NoError(err)
 	}()
 
 	oldSize := s.cluster.GetCheckerConfig().GetMaxAffinityMergeRegionSize()
