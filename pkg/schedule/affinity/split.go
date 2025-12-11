@@ -30,17 +30,18 @@ const (
 	affinityRegionSizeMultiplier = 4
 )
 
+// AllowSplit returns true if the region can be auto split
 func (m *Manager) AllowSplit(region *core.RegionInfo, reason pdpb.SplitReason) bool {
 	if region == nil {
 		// The default behavior is to allow it.
 		return true
 	}
 
-	if !m.conf.IsAffinitySchedulingEnabled() {
+	if reason == pdpb.SplitReason_ADMIN {
 		return true
 	}
 
-	if reason == pdpb.SplitReason_ADMIN {
+	if !m.conf.IsAffinitySchedulingEnabled() {
 		return true
 	}
 
