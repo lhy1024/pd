@@ -17,6 +17,7 @@ package checker
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -300,8 +301,8 @@ func TestAffinityAvailabilityCheckWithOfflineStore(t *testing.T) {
 	re.Equal(affinity.PhasePending, groupInfo.Phase)
 }
 
-// TestAffinityAvailabilityCheckWithDownStores tests behavior when stores go down.
-func TestAffinityAvailabilityCheckWithDownStores(t *testing.T) {
+// TestAffinityAvailabilityCheckWithUnhealthyStores tests behavior when stores go unhealthy.
+func TestAffinityAvailabilityCheckWithUnhealthyStores(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -329,10 +330,10 @@ func TestAffinityAvailabilityCheckWithDownStores(t *testing.T) {
 	err := createAffinityGroupForTest(affinityManager, group, []byte(""), []byte(""))
 	re.NoError(err)
 
-	// Set stores 2 and 3 down
+	// Set stores 2 and 3 disconnect
 	tc.SetStoreUp(1)
-	tc.SetStoreDown(2)
-	tc.SetStoreDown(3)
+	tc.SetStoreDisconnect(2)
+	tc.SetStoreDisconnect(3)
 
 	// Wait for health check
 	var groupInfo *affinity.GroupState
@@ -343,21 +344,38 @@ func TestAffinityAvailabilityCheckWithDownStores(t *testing.T) {
 
 	// Group should be invalidated
 	re.NotNil(groupInfo)
-	re.False(groupInfo.AffinitySchedulingAllowed, "Group should be invalidated when stores are down")
+	re.False(groupInfo.AffinitySchedulingAllowed, "Group should be invalidated when stores are disconnected")
 	re.Equal(affinity.PhasePending, groupInfo.Phase)
 
-	// Recover store 2 (store 3 still down)
+	// Recover store 2 and 3
+	tc.SetStoreUp(1)
+	tc.SetStoreUp(2)
+	tc.SetStoreUp(3)
+
+	// Wait for health check to mark group as available again
+	testutil.Eventually(re, func() bool {
+		groupInfo = affinityManager.GetAffinityGroupState("test_group")
+		// Check that the group is no longer invalidated (Phase should not be Pending)
+		return groupInfo != nil && groupInfo.AffinitySchedulingAllowed
+	})
+
+	// Now group should be restored
+	re.NotNil(groupInfo)
+	re.True(groupInfo.AffinitySchedulingAllowed, "Group should be restored when all stores are healthy")
+	re.Equal(affinity.PhasePreparing, groupInfo.Phase)
+
+	// Set stores 3 down
 	tc.SetStoreUp(1)
 	tc.SetStoreUp(2)
 	tc.SetStoreDown(3)
 
-	// Wait for health check - group should still be invalidated
+	// Wait for health check
 	testutil.Eventually(re, func() bool {
 		groupInfo = affinityManager.GetAffinityGroupState("test_group")
 		return groupInfo != nil && !groupInfo.AffinitySchedulingAllowed
 	})
 
-	// Group should still be invalidated (store 3 still down)
+	// Group should still be invalidated
 	re.NotNil(groupInfo)
 	re.False(groupInfo.AffinitySchedulingAllowed, "Group should remain invalidated while any store is unhealthy")
 	re.Equal(affinity.PhasePending, groupInfo.Phase)
@@ -367,24 +385,29 @@ func TestAffinityAvailabilityCheckWithDownStores(t *testing.T) {
 	tc.SetStoreUp(2)
 	tc.SetStoreUp(3)
 
-	// Wait for health check to mark group as available again
-	testutil.Eventually(re, func() bool {
-		groupInfo = affinityManager.GetAffinityGroupState("test_group")
-		// Check that the group is no longer invalidated (Phase should not be Pending)
-		return groupInfo != nil && groupInfo.Phase != affinity.PhasePending
-	})
+	// Wait for health check
+	time.Sleep(2 * time.Second)
+
+	// Group should still be invalidated
+	groupInfo = affinityManager.GetAffinityGroupState("test_group")
+	re.NotNil(groupInfo)
+	re.True(groupInfo.RegularSchedulingAllowed, "Group should remain invalidated while any store is unhealthy")
+	re.Equal(affinity.PhasePending, groupInfo.Phase)
 
 	// Manually observe region to enable affinity scheduling
-	region := tc.GetRegion(1)
-	groupInfo = affinityManager.GetAffinityGroupState("test_group")
-	affinityManager.ObserveAvailableRegion(region, groupInfo)
+	testutil.Eventually(re, func() bool {
+		region := tc.GetRegion(1)
+		groupInfo = affinityManager.GetAffinityGroupState("test_group")
+		affinityManager.ObserveAvailableRegion(region, groupInfo)
+		_, isAffinity := affinityManager.GetRegionAffinityGroupState(region)
+		return isAffinity
+	})
 
 	// Now group should be restored
-	groupInfo, isAffinity := affinityManager.GetRegionAffinityGroupState(region)
-	re.True(isAffinity)
+	groupInfo = affinityManager.GetAffinityGroupState("test_group")
 	re.NotNil(groupInfo)
 	re.True(groupInfo.AffinitySchedulingAllowed, "Group should be restored when all stores are healthy")
-	re.Equal(affinity.PhasePreparing, groupInfo.Phase)
+	re.Equal(affinity.PhaseStable, groupInfo.Phase)
 }
 
 // TestAffinityCheckerNoOperatorWhenAligned tests that no operator is created when region matches group.
