@@ -55,7 +55,7 @@ func getAffinityManager(c *gin.Context) (*affinity.Manager, bool) {
 	}
 	manager := cluster.GetAffinityManager()
 	if manager == nil {
-		c.AbortWithStatusJSON(http.StatusServiceUnavailable, errs.ErrAffinityDisabled.FastGenByArgs().Error())
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, errs.ErrAffinityInternal.FastGenByArgs().Error())
 		return nil, false
 	}
 	return manager, true
