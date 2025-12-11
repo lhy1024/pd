@@ -45,7 +45,12 @@ func TestAllowSplit(t *testing.T) {
 		storeInfos.PutStore(storeInfo)
 	}
 
+	// Enable affinity scheduling
 	conf := mockconfig.NewTestOptions()
+	cfg := conf.GetScheduleConfig().Clone()
+	cfg.EnableAffinityScheduling = true
+	conf.SetScheduleConfig(cfg)
+
 	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
 	re.NoError(err)
 
