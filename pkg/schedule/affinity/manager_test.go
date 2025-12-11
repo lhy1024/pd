@@ -381,11 +381,11 @@ func TestAvailabilityChangeRegionCount(t *testing.T) {
 	storeInfos.PutStore(store2Down)
 
 	// Trigger availability check
-	manager.checkStoresAvailability()
+	manager.checkGroupsAvailability()
 
 	// Verify group state changed
 	groupInfo := getGroupForTest(re, manager, "availability-test")
-	re.False(groupInfo.IsAffinitySchedulingEnabled())
+	re.False(groupInfo.IsAffinitySchedulingAllowed())
 
 	// Verify cache is cleared
 	groupState2 := manager.GetAffinityGroupState("availability-test")
@@ -552,7 +552,7 @@ func TestConcurrentOperations(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range 20 {
-			manager.checkStoresAvailability()
+			manager.checkGroupsAvailability()
 			time.Sleep(2 * time.Millisecond)
 		}
 	}()
@@ -603,18 +603,18 @@ func TestDegradedExpiration(t *testing.T) {
 	// Verify group is available
 	groupState := manager.GetAffinityGroupState("expiration-test")
 	re.NotNil(groupState)
-	re.True(groupState.AffinitySchedulingEnabled)
+	re.True(groupState.AffinitySchedulingAllowed)
 
 	// Make store 2 unhealthy to trigger degraded status
 	store2 := storeInfos.GetStore(2)
 	store2Down := store2.Clone(core.SetLastHeartbeatTS(time.Now().Add(-2 * time.Minute)))
 	storeInfos.PutStore(store2Down)
-	manager.checkStoresAvailability()
+	manager.checkGroupsAvailability()
 
 	// Verify group became degraded
 	groupInfo := getGroupForTest(re, manager, "expiration-test")
 	re.Equal(groupDegraded, groupInfo.GetAvailability())
-	re.False(groupInfo.IsAffinitySchedulingEnabled())
+	re.False(groupInfo.IsAffinitySchedulingAllowed())
 
 	// Record the expiration time
 	manager.RLock()
@@ -632,7 +632,7 @@ func TestDegradedExpiration(t *testing.T) {
 	manager.Unlock()
 
 	// Run availability check again
-	manager.checkStoresAvailability()
+	manager.checkGroupsAvailability()
 
 	// Verify group is now expired
 	re.True(groupInfo.IsExpired())
@@ -641,5 +641,5 @@ func TestDegradedExpiration(t *testing.T) {
 	// Verify scheduling is still disallowed
 	groupState2 := manager.GetAffinityGroupState("expiration-test")
 	re.NotNil(groupState2)
-	re.False(groupState2.AffinitySchedulingEnabled)
+	re.False(groupState2.AffinitySchedulingAllowed)
 }
