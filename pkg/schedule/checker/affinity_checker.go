@@ -16,6 +16,7 @@ package checker
 
 import (
 	"bytes"
+	"slices"
 
 	"go.uber.org/zap"
 
@@ -107,9 +108,12 @@ func (c *AffinityChecker) Check(region *core.RegionInfo) []*operator.Operator {
 		// Before doing so, check whether the Group’s peers are replicated.
 		// If not, the Group information should be expired (e.g. due to Placement Rules changes),
 		// so expire the group first, then provide the available Region information and fetch the Group state again.
-		if !isAffinity && !c.isGroupReplicated(region, group) {
-			c.affinityManager.ExpireAffinityGroup(group.ID)
-			needRefetch = true
+		if !isAffinity {
+			targetRegion := cloneRegionWithReplacePeerStores(region, group.LeaderStoreID, group.VoterStoreIDs...)
+			if targetRegion == nil || !filter.IsRegionReplicated(c.cluster, targetRegion) {
+				c.affinityManager.ExpireAffinityGroup(group.ID)
+				needRefetch = true
+			}
 		}
 	} else {
 		// If the Group is not affinity scheduling allowed, provide the available Region information and fetch group state again.
@@ -139,29 +143,6 @@ func (c *AffinityChecker) Check(region *core.RegionInfo) []*operator.Operator {
 	}
 
 	return nil
-}
-
-// isGroupReplicated checks whether the Group’s target Region is in the replicated state.
-func (c *AffinityChecker) isGroupReplicated(region *core.RegionInfo, group *affinity.GroupState) bool {
-	voters := region.GetVoters()
-
-	if len(voters) != len(group.VoterStoreIDs) {
-		return false
-	}
-
-	options := make([]core.RegionCreateOption, 0, len(voters)+1)
-	for i, voterStoreID := range group.VoterStoreIDs {
-		options = append(options, core.WithReplacePeerStore(voters[i].GetStoreId(), voterStoreID))
-		if group.LeaderStoreID == voterStoreID {
-			options = append(options, core.WithLeader(voters[i]))
-		}
-	}
-	if len(options) != len(voters)+1 {
-		return false
-	}
-
-	targetRegion := region.Clone(options...)
-	return filter.IsRegionReplicated(c.cluster, targetRegion)
 }
 
 // createAffinityOperator creates an operator to adjust region replicas according to affinity group constraints.
@@ -256,6 +237,8 @@ func (c *AffinityChecker) createAffinityOperator(region *core.RegionInfo, group 
 		if !targetLeader.AllowLeaderTransferIn() || c.conf.CheckLabelProperty(config.RejectLeader, targetLeader.GetLabels()) {
 			return nil
 		}
+	} else {
+		return nil
 	}
 
 	// Determine operator kind based on whether leader needs to change
@@ -279,7 +262,8 @@ func (c *AffinityChecker) createAffinityOperator(region *core.RegionInfo, group 
 
 // MergeCheck verifies if a region can be merged with its adjacent regions within the same affinity group.
 // It follows similar logic to merge_checker but with affinity-specific constraints:
-// - Does NOT skip recently split or recently started regions (as requested)
+// - Does NOT skip recently split or recently started regions
+// - Does NOT skip hot spots regions
 // - Only merges regions within the same affinity group
 func (c *AffinityChecker) MergeCheck(region *core.RegionInfo, group *affinity.GroupState) []*operator.Operator {
 	maxAffinityMergeRegionSize := c.conf.GetMaxAffinityMergeRegionSize()
@@ -417,4 +401,50 @@ func (c *AffinityChecker) allowAffinityMerge(region, adjacent *core.RegionInfo) 
 	}
 
 	return true
+}
+
+// cloneRegionWithReplacePeerStores clones the Region and updates its voters and leader to the target stores.
+// If the number of voters does not match or the leader is not among the target voters,
+// it returns nil to indicate failure. Source and target placement must not contain duplicate store IDs respectively.
+func cloneRegionWithReplacePeerStores(region *core.RegionInfo, leaderStoreID uint64, voterStoreIDs ...uint64) *core.RegionInfo {
+	if region == nil {
+		return nil
+	}
+
+	sourceVoters := region.GetVoters()
+
+	if len(sourceVoters) != len(voterStoreIDs) || !slices.Contains(voterStoreIDs, leaderStoreID) {
+		return nil
+	}
+
+	// presence records whether a storeID exists in the source and/or target:
+	//   - 1(0b01) if only in source
+	//   - 2(0b10) if only in target
+	//   - 3(0b11) if in both
+	presences := make(map[uint64]int, len(sourceVoters)+len(voterStoreIDs))
+	for _, voter := range sourceVoters {
+		presences[voter.GetStoreId()] |= 1
+	}
+	for _, voterStoreID := range voterStoreIDs {
+		presences[voterStoreID] |= 2
+	}
+
+	sourceOnly := make([]uint64, 0, len(sourceVoters))
+	targetOnly := make([]uint64, 0, len(voterStoreIDs))
+	for storeID, presence := range presences {
+		switch presence {
+		case 1:
+			sourceOnly = append(sourceOnly, storeID)
+		case 2:
+			targetOnly = append(targetOnly, storeID)
+		}
+	}
+
+	options := make([]core.RegionCreateOption, 0, len(sourceOnly)+1)
+	for i, sourceStoreID := range sourceOnly {
+		options = append(options, core.WithReplacePeerStore(sourceStoreID, targetOnly[i]))
+	}
+	options = append(options, core.WithLeaderStore(leaderStoreID))
+
+	return region.Clone(options...)
 }
