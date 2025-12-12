@@ -30,7 +30,7 @@ import (
 // RegisterAffinity registers affinity group related handlers to router paths.
 func RegisterAffinity(r *gin.RouterGroup) {
 	router := r.Group("affinity-groups")
-	router.Use(middlewares.BootstrapChecker(), middlewares.AffinitySchedulingEnabledChecker())
+	router.Use(middlewares.BootstrapChecker())
 	router.POST("", PostAffinityGroups)
 	router.PATCH("", BatchModifyAffinityGroups)
 	router.PUT("/:group_id", UpdateAffinityGroupPeers)
@@ -138,7 +138,7 @@ func createAffinityGroups(c *gin.Context) {
 		return
 	}
 
-	changes := make([]affinity.GroupKeyRanges, 0, len(req.AffinityGroups))
+	groups := make([]affinity.GroupKeyRanges, 0, len(req.AffinityGroups))
 	for groupID, input := range req.AffinityGroups {
 		if err := affinity.ValidateGroupID(groupID); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
@@ -164,7 +164,7 @@ func createAffinityGroups(c *gin.Context) {
 			keyRanges = append(keyRanges, kr.toKeyutilKeyRange())
 		}
 
-		changes = append(changes, affinity.GroupKeyRanges{
+		groups = append(groups, affinity.GroupKeyRanges{
 			GroupID:   groupID,
 			KeyRanges: keyRanges,
 		})
@@ -172,12 +172,8 @@ func createAffinityGroups(c *gin.Context) {
 
 	// Create affinity groups with their key ranges
 	// The manager will handle storage persistence, label creation, and in-memory updates atomically
-	if err := manager.CreateAffinityGroups(changes); err != nil {
-		if errs.ErrAffinityGroupContent.Equal(err) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-			return
-		}
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+	err = manager.CreateAffinityGroups(groups)
+	if handleAffinityError(c, err) {
 		return
 	}
 
@@ -185,12 +181,12 @@ func createAffinityGroups(c *gin.Context) {
 	resp := AffinityGroupsResponse{
 		AffinityGroups: make(map[string]*affinity.GroupState, len(req.AffinityGroups)),
 	}
-	for _, change := range changes {
-		state := manager.GetAffinityGroupState(change.GroupID)
+	for _, group := range groups {
+		state := manager.GetAffinityGroupState(group.GroupID)
 		if state == nil {
 			state = &affinity.GroupState{}
 		}
-		resp.AffinityGroups[change.GroupID] = state
+		resp.AffinityGroups[group.GroupID] = state
 	}
 	c.IndentedJSON(http.StatusOK, resp)
 }
@@ -231,7 +227,7 @@ func deleteAffinityGroups(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, map[string]any{
+	c.IndentedJSON(http.StatusOK, map[string]any{
 		"deleted": req.IDs,
 	})
 }
@@ -389,7 +385,12 @@ func DeleteAffinityGroup(c *gin.Context) {
 	force := queryParams.Force
 
 	if !manager.IsGroupExist(groupID) {
-		c.AbortWithStatusJSON(http.StatusNotFound, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID).Error())
+		if !force {
+			c.AbortWithStatusJSON(http.StatusNotFound, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID).Error())
+			return
+		}
+		// If force is true and group does not exist, succeed silently
+		c.JSON(http.StatusOK, "Affinity group deleted successfully.")
 		return
 	}
 
@@ -408,7 +409,7 @@ func DeleteAffinityGroup(c *gin.Context) {
 // @Tags     affinity-groups
 // @Summary  List all affinity groups.
 // @Produce  json
-// @Success  200  {object}  GetAllAffinityGroupsResponse
+// @Success  200  {object}  AffinityGroupsResponse
 // @Failure  500  {string}  string  "PD server failed to proceed the request."
 // @Router   /affinity-groups [get]
 func GetAllAffinityGroups(c *gin.Context) {

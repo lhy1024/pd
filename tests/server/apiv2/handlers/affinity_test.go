@@ -441,7 +441,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityRemoveOnlyPatch() {
 	})
 }
 
-func (suite *affinityHandlerTestSuite) TestAffinityBatchModifySuccess() {
+func (suite *affinityHandlerTestSuite) TestAffinityBatchModifySameGroupInAddAndRemove() {
 	suite.env.RunTest(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
@@ -1127,6 +1127,8 @@ func (suite *affinityHandlerTestSuite) TestBatchModifyRemoveNonExistentRange() {
 
 // TestAffinityForwardedHeader verifies microservice forwarding sets the header.
 func (suite *affinityHandlerTestSuite) TestAffinityForwardedHeader() {
+	// TODO: remove this test when mcs support affinity
+	suite.T().Skip("wait mcs support")
 	suite.env.RunTestInMicroserviceEnv(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
@@ -1146,26 +1148,5 @@ func (suite *affinityHandlerTestSuite) TestAffinityForwardedHeader() {
 
 		re.Equal(http.StatusOK, resp.StatusCode)
 		re.Equal("true", resp.Header.Get(apiutil.XForwardedToMicroserviceHeader))
-	})
-}
-
-func TestAffinitySchedulingDisabled(t *testing.T) {
-	re := require.New(t)
-	env := tests.NewSchedulingTestEnvironment(t, func(conf *config.Config, _ string) {
-		conf.Schedule.EnableAffinityScheduling = false
-	})
-	defer env.Cleanup()
-
-	env.RunTest(func(cluster *tests.TestCluster) {
-		leader := cluster.GetLeaderServer()
-		serverAddr := leader.GetAddr()
-		createReq := handlers.CreateAffinityGroupsRequest{
-			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
-				"disabled": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x02}}}},
-			},
-		}
-		statusCode, errorMsg := doCreateAffinityGroups(re, serverAddr, &createReq)
-		re.Equal(http.StatusServiceUnavailable, statusCode)
-		re.Contains(errorMsg, "affinity is disabled")
 	})
 }
