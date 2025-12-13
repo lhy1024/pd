@@ -18,14 +18,12 @@ import (
 	"net/http"
 
 	scheserver "github.com/tikv/pd/pkg/mcs/scheduling/server"
-	apiv2 "github.com/tikv/pd/pkg/mcs/scheduling/server/apis/v2"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 )
 
 func init() {
 	scheserver.SetUpRestHandler = func(srv *scheserver.Service) (http.Handler, apiutil.APIServiceGroup) {
 		service := NewService(srv)
-		apiv2.RegisterV2Router(service.Engine())
 		return service.Engine(), APIServiceGroup()
 	}
 }

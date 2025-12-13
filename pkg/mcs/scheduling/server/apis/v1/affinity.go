@@ -25,20 +25,18 @@ import (
 	"github.com/tikv/pd/pkg/utils/apiutil/multiservicesapi"
 )
 
-// APIPathPrefix is the prefix of the scheduling v2 API path.
-const APIPathPrefix = "/scheduling/api/v2"
-
 // AffinityGroupsResponse defines the response payload for listing affinity groups.
 type AffinityGroupsResponse struct {
 	AffinityGroups map[string]*affinity.GroupState `json:"affinity_groups"`
 }
 
-// RegisterV2Router registers v2 affinity routes to the given engine.
-func RegisterV2Router(engine *gin.Engine) {
-	root := engine.Group(APIPathPrefix)
+// RegisterAffinityRouter registers affinity routes to the v1 API group.
+func (s *Service) RegisterAffinityRouter() {
 	redirector := multiservicesapi.ServiceRedirector()
-	root.GET("/affinity-groups", redirector, getAllAffinityGroups)
-	root.GET("/affinity-groups/:group_id", redirector, getAffinityGroup)
+	router := s.root.Group("affinity-groups")
+	router.Use(redirector)
+	router.GET("", getAllAffinityGroups)
+	router.GET("/:group_id", getAffinityGroup)
 }
 
 func getAffinityManager(c *gin.Context) (*affinity.Manager, bool) {

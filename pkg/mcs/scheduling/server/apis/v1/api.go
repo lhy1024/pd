@@ -125,6 +125,7 @@ func NewService(srv *scheserver.Service) *Service {
 	s.RegisterRegionsRouter()
 	s.RegisterStoresRouter()
 	s.RegisterPrimaryRouter()
+	s.RegisterAffinityRouter()
 	return s
 }
 

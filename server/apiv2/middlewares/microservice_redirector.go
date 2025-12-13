@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/tikv/pd/pkg/errs"
-	apisv2 "github.com/tikv/pd/pkg/mcs/scheduling/server/apis/v2"
+	scheapi "github.com/tikv/pd/pkg/mcs/scheduling/server/apis/v1"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/apiutil/serverapi"
@@ -66,7 +66,7 @@ func MicroserviceRedirector(rules ...serverapi.RedirectRule) gin.HandlerFunc {
 // AffinityMicroserviceRedirector only forwards affinity GET requests to the scheduling service.
 func AffinityMicroserviceRedirector() gin.HandlerFunc {
 	pdAffinityPath := "/pd/api/v2/affinity-groups"
-	targetAffinityPath := apisv2.APIPathPrefix + "/affinity-groups"
+	targetAffinityPath := scheapi.APIPathPrefix + "/affinity-groups"
 	return MicroserviceRedirector(
 		serverapi.RedirectRule{
 			MatchPath:         pdAffinityPath,
