@@ -168,3 +168,19 @@ func TestBuildAffinityGroupDefinitionsWithPartitionKeyEncoding(t *testing.T) {
 	actualStartHex := hex.EncodeToString(defs[0].ranges[0].StartKey)
 	re.Equal(expectedStartHex, actualStartHex, "partition key range should use EncodeBytes encoding")
 }
+
+func TestOverrideGroupID(t *testing.T) {
+	re := require.New(t)
+
+	defs := []affinityGroupDefinition{{id: "auto"}}
+	updated, err := overrideGroupID(defs, "manual-1")
+	re.NoError(err)
+	re.Equal("manual-1", updated[0].id)
+
+	defs = []affinityGroupDefinition{{id: "p1"}, {id: "p2"}}
+	_, err = overrideGroupID(defs, "manual-2")
+	re.Error(err)
+
+	_, err = overrideGroupID([]affinityGroupDefinition{{id: "p1"}}, "invalid id")
+	re.Error(err)
+}

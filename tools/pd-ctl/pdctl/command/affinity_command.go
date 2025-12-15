@@ -32,6 +32,7 @@ import (
 
 	pd "github.com/tikv/pd/client/http"
 	"github.com/tikv/pd/pkg/codec"
+	"github.com/tikv/pd/pkg/schedule/affinity"
 	"github.com/tikv/pd/tools/pd-ctl/helper/topology"
 )
 
@@ -114,6 +115,7 @@ func NewAffinityCommand() *cobra.Command {
 		PersistentPreRunE: requirePDClient,
 	}
 	cmd.PersistentFlags().String("tidb-status-addr", "", "TiDB status address (e.g., http://127.0.0.1:10080)")
+	cmd.PersistentFlags().String("id", "", "affinity group ID (overrides the auto-generated ID)")
 	cmd.PersistentFlags().String("db", "", "database name of the target table")
 	cmd.PersistentFlags().String("table", "", "table name of the target table")
 	cmd.PersistentFlags().String("partition", "", "target partition name or ID when operating on a partitioned table")
@@ -289,11 +291,16 @@ func affinityUpdatePeersCommandFunc(cmd *cobra.Command, _ []string) {
 
 // loadAffinityGroupDefinitions loads table info and builds affinity group definitions.
 func loadAffinityGroupDefinitions(cmd *cobra.Command) ([]affinityGroupDefinition, error) {
+	manualID, _ := cmd.Flags().GetString("id")
 	info, partition, err := loadTableAffinityInfo(cmd)
 	if err != nil {
 		return nil, err
 	}
-	return buildAffinityGroupDefinitions(info, partition)
+	defs, err := buildAffinityGroupDefinitions(info, partition)
+	if err != nil {
+		return nil, err
+	}
+	return overrideGroupID(defs, manualID)
 }
 
 func loadTableAffinityInfo(cmd *cobra.Command) (tableAffinityInfo, string, error) {
@@ -466,6 +473,20 @@ func buildAffinityGroupDefinitions(info tableAffinityInfo, partition string) ([]
 			}},
 		})
 	}
+	return defs, nil
+}
+
+func overrideGroupID(defs []affinityGroupDefinition, manualID string) ([]affinityGroupDefinition, error) {
+	if manualID == "" {
+		return defs, nil
+	}
+	if err := affinity.ValidateGroupID(manualID); err != nil {
+		return nil, err
+	}
+	if len(defs) != 1 {
+		return nil, errors.New("--id can only be used when a single affinity group is targeted; specify --partition for partitioned tables")
+	}
+	defs[0].id = manualID
 	return defs, nil
 }
 
