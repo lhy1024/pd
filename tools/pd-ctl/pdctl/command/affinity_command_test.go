@@ -23,21 +23,24 @@ import (
 
 func TestParseRangeSpec(t *testing.T) {
 	re := require.New(t)
+	cmd := &cobra.Command{}
+	cmd.Flags().String("format", "hex", "")
 
-	kr, err := parseRangeSpec("a:b")
+	kr, err := parseRangeSpec(cmd.Flags(), "6162:6364") // hex
 	re.NoError(err)
-	re.Equal([]byte("a"), kr.StartKey)
-	re.Equal([]byte("b"), kr.EndKey)
+	re.Equal([]byte("ab"), kr.StartKey)
+	re.Equal([]byte("cd"), kr.EndKey)
 
-	kr, err = parseRangeSpec(":")
+	re.NoError(cmd.Flags().Set("format", "raw"))
+	kr, err = parseRangeSpec(cmd.Flags(), ":")
 	re.NoError(err)
 	re.Empty(kr.StartKey)
 	re.Empty(kr.EndKey)
 
-	_, err = parseRangeSpec("invalid")
+	_, err = parseRangeSpec(cmd.Flags(), "invalid")
 	re.Error(err)
 
-	_, err = parseRangeSpec("b:a")
+	_, err = parseRangeSpec(cmd.Flags(), "b:a")
 	re.Error(err)
 }
 
@@ -56,8 +59,10 @@ func TestLoadKeyRanges(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	cmd.Flags().StringArray("range", nil, "")
+	cmd.Flags().String("format", "hex", "")
 
 	re.NoError(cmd.Flags().Set("range", "a:b"))
+	re.NoError(cmd.Flags().Set("format", "raw"))
 	ranges, err := loadKeyRanges(cmd)
 	re.NoError(err)
 	re.Len(ranges, 1)
@@ -66,6 +71,7 @@ func TestLoadKeyRanges(t *testing.T) {
 
 	cmd = &cobra.Command{}
 	cmd.Flags().StringArray("range", nil, "")
+	cmd.Flags().String("format", "hex", "")
 	_, err = loadKeyRanges(cmd)
 	re.Error(err)
 }

@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/pingcap/errors"
 
@@ -54,6 +55,7 @@ func newAffinityCreateCommand() *cobra.Command {
 		Run:   affinityCreateCommandFunc,
 	}
 	cmd.Flags().StringArray("range", nil, "key range in format start:end; repeat to add multiple ranges; use ':' for entire key space")
+	cmd.Flags().String("format", "hex", "the key format (raw|encode|hex)")
 	return cmd
 }
 
@@ -207,7 +209,7 @@ func loadKeyRanges(cmd *cobra.Command) ([]pd.AffinityGroupKeyRange, error) {
 	}
 	ranges := make([]pd.AffinityGroupKeyRange, 0, len(specs))
 	for _, spec := range specs {
-		kr, err := parseRangeSpec(spec)
+		kr, err := parseRangeSpec(cmd.Flags(), spec)
 		if err != nil {
 			return nil, err
 		}
@@ -216,14 +218,22 @@ func loadKeyRanges(cmd *cobra.Command) ([]pd.AffinityGroupKeyRange, error) {
 	return ranges, nil
 }
 
-func parseRangeSpec(spec string) (pd.AffinityGroupKeyRange, error) {
+func parseRangeSpec(flags *pflag.FlagSet, spec string) (pd.AffinityGroupKeyRange, error) {
 	parts := strings.SplitN(strings.TrimSpace(spec), ":", 2)
 	if len(parts) != 2 {
 		return pd.AffinityGroupKeyRange{}, errors.New("invalid range format, expected start:end")
 	}
+	start, err := parseKey(flags, parts[0])
+	if err != nil {
+		return pd.AffinityGroupKeyRange{}, errors.Wrap(err, "failed to parse start key")
+	}
+	end, err := parseKey(flags, parts[1])
+	if err != nil {
+		return pd.AffinityGroupKeyRange{}, errors.Wrap(err, "failed to parse end key")
+	}
 	kr := pd.AffinityGroupKeyRange{
-		StartKey: []byte(parts[0]),
-		EndKey:   []byte(parts[1]),
+		StartKey: []byte(start),
+		EndKey:   []byte(end),
 	}
 	if err := validateKeyRange(kr.StartKey, kr.EndKey); err != nil {
 		return pd.AffinityGroupKeyRange{}, err
