@@ -16,7 +16,6 @@ package affinity_test
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"testing"
 
@@ -103,7 +102,7 @@ func TestAffinityCommands(t *testing.T) {
 	// delete the normal table group
 	out := tests.MustExec(re, cmd, []string{
 		"-u", pdAddr, "affinity", "delete",
-		"--table-id", fmt.Sprint(tableID),
+		"--table-id", strconv.FormatUint(tableID, 10),
 		"--partition-id", "0",
 	}, nil)
 	re.Contains(out, tableGroup)
