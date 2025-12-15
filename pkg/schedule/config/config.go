@@ -66,7 +66,6 @@ const (
 	defaultEnablePlacementRules            = true
 	defaultEnableWitness                   = false
 	defaultHaltScheduling                  = false
-	defaultEnableAffinityScheduling        = false
 
 	defaultRegionScoreFormulaVersion = "v2"
 	defaultLeaderSchedulePolicy      = "count"
@@ -329,8 +328,6 @@ type ScheduleConfig struct {
 	// PatrolRegionWorkerCount is the number of workers to patrol region.
 	PatrolRegionWorkerCount int `toml:"patrol-region-worker-count" json:"patrol-region-worker-count"`
 
-	// EnableAffinityScheduling is the option to enable affinity scheduling.
-	EnableAffinityScheduling bool `toml:"enable-affinity-scheduling" json:"enable-affinity-scheduling,string,omitempty"`
 	// If the size of region is smaller than MaxAffinityMergeRegionSize,
 	// and it is affinity, it will try to merge with adjacent regions.
 	// To avoid introducing a new configuration parameter, we derive the maximum number of keys
@@ -449,9 +446,6 @@ func (c *ScheduleConfig) Adjust(meta *configutil.ConfigMetaData, reloading bool)
 
 	if !meta.IsDefined("halt-scheduling") {
 		c.HaltScheduling = defaultHaltScheduling
-	}
-	if !meta.IsDefined("enable-affinity-scheduling") {
-		c.EnableAffinityScheduling = defaultEnableAffinityScheduling
 	}
 
 	adjustSchedulers(&c.Schedulers, DefaultSchedulers)
