@@ -43,6 +43,7 @@ const (
 	defaultReplicaScheduleLimit   = 64
 	defaultMergeScheduleLimit     = 8
 	defaultHotRegionScheduleLimit = 4
+	defaultAffinityScheduleLimit  = 0 // default to disable
 	defaultTolerantSizeRatio      = 0
 	defaultLowSpaceRatio          = 0.8
 	defaultHighSpaceRatio         = 0.7
@@ -115,6 +116,7 @@ const (
 	ReplicaRescheduleLimitKey      = "schedule.replica-schedule-limit"
 	MergeScheduleLimitKey          = "schedule.merge-schedule-limit"
 	HotRegionScheduleLimitKey      = "schedule.hot-region-schedule-limit"
+	AffinityScheduleLimitKey       = "schedule.affinity-schedule-limit"
 	SchedulerMaxWaitingOperatorKey = "schedule.scheduler-max-waiting-operator"
 	EnableLocationReplacement      = "schedule.enable-location-replacement"
 	DefaultAddPeer                 = "default-add-peer"
@@ -215,6 +217,8 @@ type ScheduleConfig struct {
 	MergeScheduleLimit uint64 `toml:"merge-schedule-limit" json:"merge-schedule-limit"`
 	// HotRegionScheduleLimit is the max coexist hot region schedules.
 	HotRegionScheduleLimit uint64 `toml:"hot-region-schedule-limit" json:"hot-region-schedule-limit"`
+	// AffinityScheduleLimit is the max coexist affinity schedules.
+	AffinityScheduleLimit uint64 `toml:"affinity-schedule-limit" json:"affinity-schedule-limit"`
 	// HotRegionCacheHitThreshold is the cache hits threshold of the hot region.
 	// If the number of times a region hits the hot cache is greater than this
 	// threshold, it is considered a hot region.
@@ -387,6 +391,9 @@ func (c *ScheduleConfig) Adjust(meta *configutil.ConfigMetaData, reloading bool)
 	}
 	if !meta.IsDefined("hot-region-schedule-limit") {
 		configutil.AdjustUint64(&c.HotRegionScheduleLimit, defaultHotRegionScheduleLimit)
+	}
+	if !meta.IsDefined("affinity-schedule-limit") {
+		configutil.AdjustUint64(&c.AffinityScheduleLimit, defaultAffinityScheduleLimit)
 	}
 	if !meta.IsDefined("hot-region-cache-hits-threshold") {
 		configutil.AdjustUint64(&c.HotRegionCacheHitsThreshold, defaultHotRegionCacheHitsThreshold)
