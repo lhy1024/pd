@@ -17,6 +17,7 @@ package affinity_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -75,20 +76,24 @@ func TestAffinityCommands(t *testing.T) {
 	var state pd.AffinityGroupState
 	tests.MustExec(re, cmd, []string{
 		"-u", pdAddr, "affinity", "show",
-		"--table-id", fmt.Sprint(tableID),
+		"--table-id", strconv.FormatUint(tableID, 10),
 		"--partition-id", "0",
 	}, &state)
 	re.Equal(tableGroup, state.ID)
 
 	// show partitioned table group
-	tests.MustExec(re, cmd, []string{"-u", pdAddr, "affinity", "show", "--table-id", fmt.Sprint(tableID), "--partition-id", fmt.Sprint(partitionID)}, &state)
+	tests.MustExec(re, cmd, []string{
+		"-u", pdAddr, "affinity", "show",
+		"--table-id", strconv.FormatUint(tableID, 10),
+		"--partition-id", strconv.FormatUint(partitionID, 10),
+	}, &state)
 	re.Equal(partitionGroup, state.ID)
 
 	// update peers for the partitioned table
 	tests.MustExec(re, cmd, []string{
 		"-u", pdAddr, "affinity", "update",
-		"--table-id", fmt.Sprint(tableID),
-		"--partition-id", fmt.Sprint(partitionID),
+		"--table-id", strconv.FormatUint(tableID, 10),
+		"--partition-id", strconv.FormatUint(partitionID, 10),
 		"--leader", "1",
 		"--voters", "1,2",
 	}, &state)
