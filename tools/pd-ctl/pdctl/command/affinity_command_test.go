@@ -74,17 +74,17 @@ func TestGetGroupID(t *testing.T) {
 	re := require.New(t)
 
 	cmd := &cobra.Command{}
-	cmd.Flags().String("id", "", "")
+	cmd.Flags().String("group-id", "", "")
 
 	_, err := getGroupID(cmd)
 	re.Error(err)
 
-	re.NoError(cmd.Flags().Set("id", "valid_id"))
+	re.NoError(cmd.Flags().Set("group-id", "valid_id"))
 	groupID, err := getGroupID(cmd)
 	re.NoError(err)
 	re.Equal("valid_id", groupID)
 
-	re.NoError(cmd.Flags().Set("id", "invalid id"))
+	re.NoError(cmd.Flags().Set("group-id", "invalid id"))
 	_, err = getGroupID(cmd)
 	re.Error(err)
 }

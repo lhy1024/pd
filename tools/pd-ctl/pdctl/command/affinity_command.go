@@ -35,7 +35,7 @@ func NewAffinityCommand() *cobra.Command {
 		Long:              `Manage affinity groups by manually specifying group IDs and key ranges.`,
 		PersistentPreRunE: requirePDClient,
 	}
-	cmd.PersistentFlags().String("id", "", "affinity group ID")
+	cmd.PersistentFlags().String("group-id", "", "affinity group ID")
 
 	cmd.AddCommand(
 		newAffinityCreateCommand(),
@@ -190,9 +190,9 @@ func affinityListCommandFunc(cmd *cobra.Command, _ []string) {
 }
 
 func getGroupID(cmd *cobra.Command) (string, error) {
-	groupID, _ := cmd.Flags().GetString("id")
+	groupID, _ := cmd.Flags().GetString("group-id")
 	if groupID == "" {
-		return "", errors.New("--id is required")
+		return "", errors.New("--group-id is required")
 	}
 	if err := affinity.ValidateGroupID(groupID); err != nil {
 		return "", err
