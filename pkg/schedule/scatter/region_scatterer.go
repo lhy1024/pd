@@ -52,6 +52,7 @@ var (
 	scatterSkipNoLeaderCounter      = scatterCounter.WithLabelValues("skip", "no-leader")
 	scatterSkipHotRegionCounter     = scatterCounter.WithLabelValues("skip", "hot")
 	scatterSkipNotReplicatedCounter = scatterCounter.WithLabelValues("skip", "not-replicated")
+	scatterSkipAffinityCounter      = scatterCounter.WithLabelValues("skip", "affinity")
 	scatterUnnecessaryCounter       = scatterCounter.WithLabelValues("unnecessary", "")
 	scatterFailCounter              = scatterCounter.WithLabelValues("fail", "")
 	scatterSuccessCounter           = scatterCounter.WithLabelValues("success", "")
@@ -297,6 +298,13 @@ func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipSto
 }
 
 func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
+	// Check if region is in an affinity group that doesn't allow regular scheduling
+	affinityFilter := filter.NewAffinityFilter(r.cluster)
+	if !affinityFilter.Select(region).IsOK() {
+		scatterSkipAffinityCounter.Inc()
+		return nil, errors.Errorf("region %d is in affinity group", region.GetID())
+	}
+
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
 	ordinaryPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
 	specialPeers := make(map[string]map[uint64]*metapb.Peer)
