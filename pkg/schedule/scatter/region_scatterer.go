@@ -127,6 +127,7 @@ type RegionScatterer struct {
 	specialEngines    sync.Map
 	opController      *operator.Controller
 	addSuspectRegions func(bool, ...uint64)
+	affinityFilter    filter.RegionFilter
 }
 
 // NewRegionScatterer creates a region scatterer.
@@ -138,6 +139,7 @@ func NewRegionScatterer(ctx context.Context, cluster sche.SharedCluster, opContr
 		cluster:           cluster,
 		opController:      opController,
 		addSuspectRegions: addSuspectRegions,
+		affinityFilter:    filter.NewAffinityFilter(cluster),
 		ordinaryEngine: newEngineContext(ctx, func() filter.Filter {
 			return filter.NewEngineFilter(regionScatterName, filter.NotSpecialEngines)
 		}),
@@ -299,8 +301,7 @@ func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipSto
 
 func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
 	// Check if region is in an affinity group that doesn't allow regular scheduling
-	affinityFilter := filter.NewAffinityFilter(r.cluster)
-	if !affinityFilter.Select(region).IsOK() {
+	if !r.affinityFilter.Select(region).IsOK() {
 		scatterSkipAffinityCounter.Inc()
 		return nil, errors.Errorf("region %d is in affinity group", region.GetID())
 	}
