@@ -309,8 +309,7 @@ func (oc *Controller) AddWaitingOperator(ops ...*Operator) int {
 				log.Error("orphan merge operators found", zap.String("desc", desc), errs.ZapError(errs.ErrMergeOperator.FastGenByArgs("orphan operator found")))
 				return added
 			}
-			nextOp := ops[i+1]
-			if !nextOp.HasRelatedMergeRegion() {
+			if !ops[i+1].HasRelatedMergeRegion() {
 				log.Error("merge operator should be paired", zap.String("desc",
 					ops[i+1].Desc()), errs.ZapError(errs.ErrMergeOperator.FastGenByArgs("operator should be paired")))
 				return added
