@@ -290,6 +290,12 @@ func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipSto
 		return nil, errors.Errorf("region %d has no leader", region.GetID())
 	}
 
+	// Check if region is in an affinity group that doesn't allow regular scheduling
+	if !r.affinityFilter.Select(region).IsOK() {
+		scatterSkipAffinityCounter.Inc()
+		return nil, errors.Errorf("region %d is in affinity group", region.GetID())
+	}
+
 	if r.cluster.IsRegionHot(region) {
 		scatterSkipHotRegionCounter.Inc()
 		log.Warn("region too hot during scatter", zap.Uint64("region-id", region.GetID()))
@@ -300,12 +306,6 @@ func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipSto
 }
 
 func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
-	// Check if region is in an affinity group that doesn't allow regular scheduling
-	if !r.affinityFilter.Select(region).IsOK() {
-		scatterSkipAffinityCounter.Inc()
-		return nil, errors.Errorf("region %d is in affinity group", region.GetID())
-	}
-
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
 	ordinaryPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
 	specialPeers := make(map[string]map[uint64]*metapb.Peer)
