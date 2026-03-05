@@ -37,6 +37,7 @@ import (
 	mcsutils "github.com/tikv/pd/pkg/mcs/utils"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/response"
+	"github.com/tikv/pd/pkg/schedule/affinity"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/handler"
 	"github.com/tikv/pd/pkg/schedule/operator"
@@ -81,6 +82,11 @@ type Service struct {
 
 type server struct {
 	*scheserver.Server
+}
+
+// AffinityGroupsResponse defines the response payload for listing affinity groups.
+type AffinityGroupsResponse struct {
+	AffinityGroups map[string]*affinity.GroupState `json:"affinity_groups"`
 }
 
 // GetCluster returns the cluster.
@@ -1575,9 +1581,6 @@ func transferPrimary(c *gin.Context) {
 	}
 	c.IndentedJSON(http.StatusOK, "success")
 }
-<<<<<<< HEAD
-=======
-
 func getAffinityManager(c *gin.Context) (*affinity.Manager, bool) {
 	svr := c.MustGet(multiservicesapi.ServiceContextKey).(*scheserver.Server)
 	if svr.IsClosed() {
@@ -1660,4 +1663,3 @@ func getAffinityGroup(c *gin.Context) {
 	}
 	c.IndentedJSON(http.StatusOK, groupState)
 }
->>>>>>> 4f5039d437 (affinity: add ids filtering and skip-exist create options (#10157))

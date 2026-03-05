@@ -405,14 +405,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityFirstRegionWins() {
 		re.Equal(uint64(0), group.LeaderStoreID)
 
 		// Add a store to the cluster.
-<<<<<<< HEAD
-		tests.MustHandleStoreHeartbeat(re, cluster, &pdpb.StoreHeartbeatRequest{
-			Header: testutil.NewRequestHeader(leader.GetClusterID()),
-			Stats:  &pdpb.StoreStats{StoreId: 1, Capacity: 100 * units.GiB, Available: 100 * units.GiB},
-		})
-=======
 		mustPutHealthyStore(re, cluster, &metapb.Store{Id: 1, State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving})
->>>>>>> 4f5039d437 (affinity: add ids filtering and skip-exist create options (#10157))
 
 		// Fake a healthy region that matches store 1.
 		region := core.NewRegionInfo(
@@ -566,14 +559,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityHandlersErrors() {
 
 		// Make sure the default store is healthy so UpdateAffinityGroupPeers reaches the
 		// "group not found" branch instead of failing on store availability.
-<<<<<<< HEAD
-		tests.MustHandleStoreHeartbeat(re, cluster, &pdpb.StoreHeartbeatRequest{
-			Header: testutil.NewRequestHeader(leader.GetClusterID()),
-			Stats:  &pdpb.StoreStats{StoreId: 1, Capacity: 100 * units.GiB, Available: 100 * units.GiB},
-		})
-=======
 		mustPutHealthyStore(re, cluster, &metapb.Store{Id: 1, State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving})
->>>>>>> 4f5039d437 (affinity: add ids filtering and skip-exist create options (#10157))
 
 		// Update peers for non-existent group.
 		updateReq := handlers.UpdateAffinityGroupPeersRequest{
@@ -645,7 +631,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityGroupDuplicateErrorMessage() 
 
 // TestAffinityGroupCreateSkipExistCheck verifies skip_exist_check ignores existing groups.
 func (suite *affinityHandlerTestSuite) TestAffinityGroupCreateSkipExistCheck() {
-	suite.env.RunTest(func(cluster *tests.TestCluster) {
+	suite.env.RunTestBasedOnMode(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
 		serverAddr := leader.GetAddr()
@@ -682,7 +668,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityGroupCreateSkipExistCheck() {
 
 // TestAffinityGroupCreateSkipExistCheckInvalidBool verifies invalid bool value is rejected.
 func (suite *affinityHandlerTestSuite) TestAffinityGroupCreateSkipExistCheckInvalidBool() {
-	suite.env.RunTest(func(cluster *tests.TestCluster) {
+	suite.env.RunTestBasedOnMode(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
 		serverAddr := leader.GetAddr()
@@ -855,7 +841,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityGetInvalidGroupID() {
 
 // TestAffinityListWithIDs verifies listing affinity groups with ids filter.
 func (suite *affinityHandlerTestSuite) TestAffinityListWithIDs() {
-	suite.env.RunTest(func(cluster *tests.TestCluster) {
+	suite.env.RunTestBasedOnMode(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
 		serverAddr := leader.GetAddr()
@@ -880,7 +866,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityListWithIDs() {
 
 // TestAffinityListWithInvalidIDs verifies invalid ID values are rejected.
 func (suite *affinityHandlerTestSuite) TestAffinityListWithInvalidIDs() {
-	suite.env.RunTest(func(cluster *tests.TestCluster) {
+	suite.env.RunTestBasedOnMode(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
 		serverAddr := leader.GetAddr()
@@ -900,7 +886,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityListWithInvalidIDs() {
 
 // TestAffinityListWithEmptyID verifies empty ID entries are ignored.
 func (suite *affinityHandlerTestSuite) TestAffinityListWithEmptyID() {
-	suite.env.RunTest(func(cluster *tests.TestCluster) {
+	suite.env.RunTestBasedOnMode(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
 		serverAddr := leader.GetAddr()
