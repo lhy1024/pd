@@ -35,7 +35,7 @@ type ReadyStatus struct {
 // Ready checks if the region is loaded.
 // @Summary  It will return whether pd follower is ready to became leader. This request is always served by the instance that receives it and never forwarded to the leader.
 // @Router   /ready [get]
-// @Param    verbose query  bool    false  "Whether to return details."
+// @Param    verbose  query  bool  false  "Whether to return details."
 // @Success  200
 // @Failure  500
 func Ready(c *gin.Context) {
