@@ -240,10 +240,11 @@ func checkSortResult(re *require.Assertions, regions []uint64, hotPeers []*stati
 }
 
 type maxZombieDurTestCase struct {
-	typ           resourceType
-	isTiFlash     bool
-	firstPriority int
-	maxZombieDur  int
+	typ            resourceType
+	isTiFlash      bool
+	firstPriority  int
+	secondPriority int
+	maxZombieDur   int
 }
 
 func TestMaxZombieDuration(t *testing.T) {
@@ -255,12 +256,28 @@ func TestMaxZombieDuration(t *testing.T) {
 	maxZombieDur := hb.(*hotScheduler).conf.getValidConf().MaxZombieRounds
 	testCases := []maxZombieDurTestCase{
 		{
-			typ:          readPeer,
-			maxZombieDur: maxZombieDur * utils.StoreHeartBeatReportInterval,
+			typ:            readPeer,
+			firstPriority:  utils.QueryDim,
+			secondPriority: utils.ByteDim,
+			maxZombieDur:   maxZombieDur * utils.StoreHeartBeatReportInterval,
 		},
 		{
-			typ:          readLeader,
-			maxZombieDur: maxZombieDur * utils.StoreHeartBeatReportInterval,
+			typ:            readLeader,
+			firstPriority:  utils.QueryDim,
+			secondPriority: utils.ByteDim,
+			maxZombieDur:   maxZombieDur * utils.StoreHeartBeatReportInterval,
+		},
+		{
+			typ:            readPeer,
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.ByteDim,
+			maxZombieDur:   2 * maxZombieDur * utils.StoreHeartBeatReportInterval,
+		},
+		{
+			typ:            readLeader,
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.ByteDim,
+			maxZombieDur:   2 * maxZombieDur * utils.StoreHeartBeatReportInterval,
 		},
 		{
 			typ:          writePeer,
@@ -297,10 +314,11 @@ func TestMaxZombieDuration(t *testing.T) {
 			}
 		}
 		bs := &balanceSolver{
-			sche:          hb.(*hotScheduler),
-			resourceTy:    testCase.typ,
-			firstPriority: testCase.firstPriority,
-			best:          &solution{srcStore: src},
+			sche:           hb.(*hotScheduler),
+			resourceTy:     testCase.typ,
+			firstPriority:  testCase.firstPriority,
+			secondPriority: testCase.secondPriority,
+			best:           &solution{srcStore: src},
 		}
 		re.Equal(time.Duration(testCase.maxZombieDur)*time.Second, bs.calcMaxZombieDur())
 	}

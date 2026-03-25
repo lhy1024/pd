@@ -388,11 +388,59 @@ func hotOperatorStoreSummaryFields(prefix string, summary *statistics.HotPeersSt
 	}
 }
 
+func hotOperatorFilteredPeerFields(prefix string, peers []*statistics.HotPeerStat) []zap.Field {
+	if len(peers) == 0 {
+		return []zap.Field{
+			zap.Int(prefix+"-count", 0),
+			zap.Float64(prefix+"-byte", 0),
+			zap.Float64(prefix+"-query", 0),
+			zap.Float64(prefix+"-cpu", 0),
+		}
+	}
+	var loads statistics.Loads
+	count := 0
+	for _, peer := range peers {
+		if peer == nil || peer.HotDegree <= 0 {
+			continue
+		}
+		count++
+		peerLoads := peer.GetLoads()
+		for i := range loads {
+			if i < len(peerLoads) {
+				loads[i] += peerLoads[i]
+			}
+		}
+	}
+	fields := []zap.Field{zap.Int(prefix+"-count", count)}
+	return append(fields, hotOperatorLoadFields(prefix, loads[:])...)
+}
+
+func (bs *balanceSolver) isReadCPUByte() bool {
+	if bs.firstPriority != utils.CPUDim || bs.secondPriority != utils.ByteDim {
+		return false
+	}
+	switch bs.resourceTy {
+	case readLeader, readPeer:
+		return true
+	default:
+		return bs.rwTy == utils.Read
+	}
+}
+
+func (bs *balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
+	if detail == nil || detail.LoadPred == nil {
+		return nil
+	}
+	return detail.LoadPred.Min()
+}
+
 func (bs *balanceSolver) logHotOperatorSnapshot() {
 	if bs.best == nil || len(bs.ops) == 0 || bs.best.mainPeerStat == nil || bs.best.srcStore == nil || bs.best.dstStore == nil {
 		return
 	}
 
+	srcID := bs.best.srcStore.GetID()
+	dstID := bs.best.dstStore.GetID()
 	srcSummary := bs.best.srcStore.ToHotPeersStat()
 	dstSummary := bs.best.dstStore.ToHotPeersStat()
 	fields := []zap.Field{
@@ -402,16 +450,22 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 		zap.String("dim", bs.rankToDimString()),
 		zap.Int64("progressive-rank", bs.best.progressiveRank),
 		zap.Bool("search-revert-regions", bs.sche.searchRevertRegions[bs.resourceTy]),
-		zap.Uint64("src-store", bs.best.srcStore.GetID()),
-		zap.Uint64("dst-store", bs.best.dstStore.GetID()),
+		zap.Uint64("src-store", srcID),
+		zap.Uint64("dst-store", dstID),
 		zap.Uint64("region-id", bs.best.region.GetID()),
 		zap.Bool("has-revert-region", bs.best.revertRegion != nil),
+		zap.Duration("max-zombie-dur", bs.calcMaxZombieDur()),
 	}
 	if bs.best.revertRegion != nil {
 		fields = append(fields, zap.Uint64("revert-region-id", bs.best.revertRegion.GetID()))
 	}
 	fields = append(fields, hotOperatorPeerFields("main-peer", bs.best.mainPeerStat)...)
 	fields = append(fields, hotOperatorPeerFields("revert-peer", bs.best.revertPeerStat)...)
+	fields = append(fields, hotOperatorLoadFields("src-source-check", bs.sourceLoadForQualification(bs.best.srcStore).Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("src-min", bs.best.srcStore.LoadPred.Min().Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("src-expect", bs.best.srcStore.LoadPred.Expect.Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("dst-source-check", bs.best.dstStore.LoadPred.Max().Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("dst-expect", bs.best.dstStore.LoadPred.Expect.Loads[:])...)
 	fields = append(fields, hotOperatorLoadFields("src-current", bs.best.srcStore.LoadPred.Current.Loads[:])...)
 	fields = append(fields, hotOperatorLoadFields("dst-current", bs.best.dstStore.LoadPred.Current.Loads[:])...)
 	fields = append(fields, hotOperatorLoadFields("src-pending", bs.best.srcStore.LoadPred.Pending().Loads[:])...)
@@ -420,6 +474,8 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 	fields = append(fields, hotOperatorLoadFields("dst-future", bs.best.dstStore.LoadPred.Future.Loads[:])...)
 	fields = append(fields, hotOperatorStoreSummaryFields("src-summary", srcSummary)...)
 	fields = append(fields, hotOperatorStoreSummaryFields("dst-summary", dstSummary)...)
+	fields = append(fields, hotOperatorFilteredPeerFields("src-filtered-hot", bs.filteredHotPeers[srcID])...)
+	fields = append(fields, hotOperatorFilteredPeerFields("dst-filtered-hot", bs.filteredHotPeers[dstID])...)
 	if len(bs.ops) > 0 {
 		fields = append(fields, zap.String("operator-0", bs.ops[0].Desc()))
 	}
@@ -461,7 +517,11 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 		}
 		return bs.sche.conf.getStoreStatZombieDuration()
 	default:
-		return bs.sche.conf.getStoreStatZombieDuration()
+		dur := bs.sche.conf.getStoreStatZombieDuration()
+		if bs.isReadCPUByte() {
+			return 2 * dur
+		}
+		return dur
 	}
 }
 
@@ -486,7 +546,7 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 			continue
 		}
 
-		if !bs.checkSrcByPriorityAndTolerance(detail.LoadPred.Min(), &detail.LoadPred.Expect, srcToleranceRatio) {
+		if !bs.checkSrcByPriorityAndTolerance(bs.sourceLoadForQualification(detail), &detail.LoadPred.Expect, srcToleranceRatio) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
