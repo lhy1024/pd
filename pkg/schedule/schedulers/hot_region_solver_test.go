@@ -737,3 +737,61 @@ func TestSortHotPeers(t *testing.T) {
 		})
 	}
 }
+
+func TestRankV2AvailabilityForReadCPURank1Inward(t *testing.T) {
+	re := require.New(t)
+
+	newStore := func(id uint64, currentCPU, futureCPU float64) *statistics.StoreLoadDetail {
+		var currentLoads statistics.Loads
+		currentLoads[utils.CPUDim] = currentCPU
+		var futureLoads statistics.Loads
+		futureLoads[utils.CPUDim] = futureCPU
+		return &statistics.StoreLoadDetail{
+			StoreSummaryInfo: &statistics.StoreSummaryInfo{
+				StoreInfo: core.NewStoreInfoWithLabel(id, nil),
+			},
+			LoadPred: &statistics.StoreLoadPred{
+				Current: statistics.StoreLoad{Loads: currentLoads},
+				Future:  statistics.StoreLoad{Loads: futureLoads},
+			},
+		}
+	}
+
+	rank := &rankV2{
+		balanceSolver: &balanceSolver{
+			rwTy:           utils.Read,
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.ByteDim,
+		},
+	}
+
+	re.False(rank.isAvailable(&solution{
+		progressiveRank: 1,
+		srcStore:        newStore(28, 208, 198),
+		dstStore:        newStore(1, 594, 418),
+	}))
+
+	re.True(rank.isAvailable(&solution{
+		progressiveRank: 1,
+		srcStore:        newStore(1, 594, 418),
+		dstStore:        newStore(28, 208, 198),
+	}))
+
+	re.True(rank.isAvailable(&solution{
+		progressiveRank: 2,
+		srcStore:        newStore(28, 208, 198),
+		dstStore:        newStore(1, 594, 418),
+	}))
+
+	re.True((&rankV2{
+		balanceSolver: &balanceSolver{
+			rwTy:           utils.Read,
+			firstPriority:  utils.QueryDim,
+			secondPriority: utils.ByteDim,
+		},
+	}).isAvailable(&solution{
+		progressiveRank: 1,
+		srcStore:        newStore(28, 208, 198),
+		dstStore:        newStore(1, 594, 418),
+	}))
+}

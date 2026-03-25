@@ -116,9 +116,28 @@ func initRankV2(bs *balanceSolver) *rankV2 {
 // isAvailable returns the solution is available.
 // If the solution has no revertRegion, progressiveRank should > 0.
 // If the solution has some revertRegion, progressiveRank should equal to 4 or 3.
-func (*rankV2) isAvailable(s *solution) bool {
+func (r *rankV2) isAvailable(s *solution) bool {
 	// TODO: Test if revert region can be enabled for 1.
+	if r.shouldBlockReadCPUByteRank1Inward(s) {
+		return false
+	}
 	return s.progressiveRank >= 3 || (s.progressiveRank > 0 && s.revertRegion == nil)
+}
+
+func (r *rankV2) shouldBlockReadCPUByteRank1Inward(s *solution) bool {
+	if s == nil || s.progressiveRank != 1 || s.revertRegion != nil {
+		return false
+	}
+	if r.rwTy != utils.Read || r.firstPriority != utils.CPUDim || r.secondPriority != utils.ByteDim {
+		return false
+	}
+	if s.srcStore == nil || s.dstStore == nil || s.srcStore.LoadPred == nil || s.dstStore.LoadPred == nil {
+		return false
+	}
+	srcCurrent, dstCurrent := s.getCurrentLoad(utils.CPUDim)
+	srcFuture := s.srcStore.LoadPred.Future.Loads[utils.CPUDim]
+	dstFuture := s.dstStore.LoadPred.Future.Loads[utils.CPUDim]
+	return dstCurrent > srcCurrent && dstFuture > srcFuture
 }
 
 func (r *rankV2) checkByPriorityAndTolerance(loads statistics.Loads, f func(int) bool) bool {
