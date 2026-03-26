@@ -422,10 +422,11 @@ func hotOperatorPeerSetFields(prefix string, peers []*statistics.HotPeerStat) []
 type hotPeerFilterReason string
 
 const (
-	hotPeerFilterKept     hotPeerFilterReason = "kept"
-	hotPeerFilterPending  hotPeerFilterReason = "pending"
-	hotPeerFilterCooldown hotPeerFilterReason = "cooldown"
-	hotPeerFilterTopN     hotPeerFilterReason = "topn"
+	readCPUByteTransferLeaderCooldown                     = 6 * time.Minute
+	hotPeerFilterKept                 hotPeerFilterReason = "kept"
+	hotPeerFilterPending              hotPeerFilterReason = "pending"
+	hotPeerFilterCooldown             hotPeerFilterReason = "cooldown"
+	hotPeerFilterTopN                 hotPeerFilterReason = "topn"
 )
 
 type hotPeerFilterDecision struct {
@@ -500,6 +501,21 @@ func (bs *balanceSolver) shouldRejectReadCPUDstHistory(detail *statistics.StoreL
 	return slice.AnyOf(cpuCurrentHistory, func(i int) bool {
 		return cpuCurrentHistory[i] >= cpuExpectHistory[i]
 	})
+}
+
+func (bs *balanceSolver) transferLeaderCooldownDuration() time.Duration {
+	base := time.Duration(bs.minHotDegree*bs.rwTy.ReportInterval()) * time.Second
+	if bs.isReadCPUByte() && base < readCPUByteTransferLeaderCooldown {
+		return readCPUByteTransferLeaderCooldown
+	}
+	return base
+}
+
+func (bs *balanceSolver) shouldCoolDownTransferLeader(item *statistics.HotPeerStat) bool {
+	if item == nil {
+		return false
+	}
+	return item.IsNeedCoolDownTransferLeaderWithDuration(bs.transferLeaderCooldownDuration())
 }
 
 func (bs *balanceSolver) logHotOperatorSnapshot() {
@@ -662,7 +678,7 @@ func (bs *balanceSolver) filterHotPeersWithDecisions(storeLoad *statistics.Store
 		if _, ok := bs.sche.regionPendings[item.ID()]; ok {
 			return hotPeerFilterPending
 		}
-		if item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy) {
+		if bs.shouldCoolDownTransferLeader(item) {
 			return hotPeerFilterCooldown
 		}
 		return hotPeerFilterKept

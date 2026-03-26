@@ -365,6 +365,22 @@ func TestMaxZombieDuration(t *testing.T) {
 	}
 }
 
+func TestReadCPUByteTransferLeaderCooldownDuration(t *testing.T) {
+	re := require.New(t)
+	bs := &balanceSolver{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+		minHotDegree:   3,
+	}
+
+	re.Equal(6*time.Minute, bs.transferLeaderCooldownDuration())
+
+	bs.firstPriority = utils.QueryDim
+	re.Equal(30*time.Second, bs.transferLeaderCooldownDuration())
+}
+
 func TestReadCPUDstPrefilter(t *testing.T) {
 	re := require.New(t)
 
