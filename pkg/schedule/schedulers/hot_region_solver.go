@@ -1020,34 +1020,45 @@ func (bs *balanceSolver) isTolerance(dim int, reverse bool) bool {
 	if srcRate <= dstRate {
 		return false
 	}
-	ampFactor := pendingAmpFactor
-	// For read+cpu,byte, scale the amplification factor by the number of in-flight ops
-	// from the same source store. This progressively throttles burst scheduling:
-	// 0 pending ops → factor=2 (unchanged), 1 → 4, 2 → 6, 3 → 8, etc.
-	if bs.isReadCPUByte() {
-		srcStoreID := bs.cur.srcStore.GetID()
-		if reverse {
-			srcStoreID = bs.cur.dstStore.GetID()
-		}
-		srcPendingCount := bs.countPendingOpsFromStore(srcStoreID)
-		ampFactor = pendingAmpFactor * float64(1+srcPendingCount)
+	if bs.shouldRejectReadCPUByteByErrorReduction() {
+		return false
 	}
+	ampFactor := pendingAmpFactor
 	pendingAmp := 1 + ampFactor*srcRate/(srcRate-dstRate)
 	return srcRate-pendingAmp*srcPending > dstRate+pendingAmp*dstPending
 }
 
-// countPendingOpsFromStore counts how many pending ops originate from the given store.
-func (bs *balanceSolver) countPendingOpsFromStore(storeID uint64) int {
-	count := 0
-	for _, p := range bs.sche.regionPendings {
-		for _, from := range p.froms {
-			if from == storeID {
-				count++
-				break
-			}
-		}
+// shouldRejectReadCPUByteByErrorReduction only allows ops that strictly reduce the first-priority CPU error.
+// The second-priority byte dimension still participates in the existing rank/score comparison,
+// but it must not rescue an op whose CPU error does not improve.
+func (bs *balanceSolver) shouldRejectReadCPUByteByErrorReduction() bool {
+	if !bs.isReadCPUByte() || bs.cur == nil || bs.cur.srcStore == nil || bs.cur.dstStore == nil {
+		return false
 	}
-	return count
+	if len(bs.cur.cachedPeersRate) != utils.DimLen {
+		if bs.cur.mainPeerStat == nil {
+			return false
+		}
+		bs.cur.calcPeersRate(bs.firstPriority, bs.secondPriority)
+	}
+	return bs.compareTotalErrorAfterPeer(bs.firstPriority) >= 0
+}
+
+func (bs *balanceSolver) compareTotalErrorAfterPeer(dim int) int {
+	srcRate, dstRate := bs.cur.getExtremeLoad(dim)
+	peerRate := bs.cur.getPeersRateFromCache(dim)
+	srcExpect := bs.cur.srcStore.LoadPred.Expect.Loads[dim]
+	dstExpect := bs.cur.dstStore.LoadPred.Expect.Loads[dim]
+	before := math.Abs(srcRate-srcExpect) + math.Abs(dstRate-dstExpect)
+	after := math.Abs(srcRate-peerRate-srcExpect) + math.Abs(dstRate+peerRate-dstExpect)
+	switch {
+	case after < before-1e-6:
+		return -1
+	case after > before+1e-6:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (bs *balanceSolver) getMinRate(dim int) float64 {
