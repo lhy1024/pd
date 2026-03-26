@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -80,6 +81,69 @@ func clearPendingInfluence(h *hotScheduler) {
 func newTestRegion(id uint64) *core.RegionInfo {
 	peers := []*metapb.Peer{{Id: id*100 + 1, StoreId: 1}, {Id: id*100 + 2, StoreId: 2}, {Id: id*100 + 3, StoreId: 3}}
 	return core.NewRegionInfo(&metapb.Region{Id: id, Peers: peers}, peers[0])
+}
+
+func getHotDirectionCounterValue(t *testing.T, labels map[string]string) (float64, bool) {
+	t.Helper()
+	re := require.New(t)
+	metricFamilies, err := prometheus.DefaultGatherer.Gather()
+	re.NoError(err)
+	for _, family := range metricFamilies {
+		if family.GetName() != "pd_scheduler_hot_region_direction" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			matched := true
+			for name, value := range labels {
+				found := false
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == name && label.GetValue() == value {
+						found = true
+						break
+					}
+				}
+				if !found {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				return metric.GetCounter().GetValue(), true
+			}
+		}
+	}
+	return 0, false
+}
+
+func TestPreInitializeHotDirectionCounters(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+
+	const storeID = uint64(12345)
+	tc.AddLeaderStore(storeID, 1)
+
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+
+	labels := []map[string]string{
+		{"type": "move-leader", "rw": "read", "store": "12345", "direction": "in", "dim": "cpu-only"},
+		{"type": "transfer-leader", "rw": "read", "store": "12345", "direction": "out", "dim": "cpu"},
+		{"type": "move-peer", "rw": "write", "store": "12345", "direction": "out-for-revert", "dim": "all"},
+	}
+	for _, metricLabels := range labels {
+		_, ok := getHotDirectionCounterValue(t, metricLabels)
+		re.False(ok)
+	}
+
+	hb.prepareForBalance(readLeader, tc)
+
+	for _, metricLabels := range labels {
+		value, ok := getHotDirectionCounterValue(t, metricLabels)
+		re.True(ok, "metric labels=%v should exist after pre-initialization", metricLabels)
+		re.Zero(value)
+	}
 }
 
 func TestUpgrade(t *testing.T) {
