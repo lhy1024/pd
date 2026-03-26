@@ -434,6 +434,32 @@ func (bs *balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoad
 	return detail.LoadPred.Min()
 }
 
+func (bs *balanceSolver) shouldRejectReadCPUDst(detail *statistics.StoreLoadDetail) bool {
+	if !bs.isReadCPUByte() || detail == nil || detail.LoadPred == nil {
+		return false
+	}
+	return detail.LoadPred.Future.Loads[utils.CPUDim] >= detail.LoadPred.Expect.Loads[utils.CPUDim]
+}
+
+func (bs *balanceSolver) shouldRejectReadCPUDstHistory(detail *statistics.StoreLoadDetail) bool {
+	if !bs.isReadCPUByte() || detail == nil || detail.LoadPred == nil {
+		return false
+	}
+	current := detail.LoadPred.Current.HistoryLoads
+	expect := detail.LoadPred.Expect.HistoryLoads
+	if len(current) <= utils.CPUDim || len(expect) <= utils.CPUDim {
+		return false
+	}
+	cpuCurrentHistory := current[utils.CPUDim]
+	cpuExpectHistory := expect[utils.CPUDim]
+	if len(cpuCurrentHistory) == 0 || len(cpuCurrentHistory) != len(cpuExpectHistory) {
+		return false
+	}
+	return slice.AnyOf(cpuCurrentHistory, func(i int) bool {
+		return cpuCurrentHistory[i] >= cpuExpectHistory[i]
+	})
+}
+
 func (bs *balanceSolver) logHotOperatorSnapshot() {
 	if bs.best == nil || len(bs.ops) == 0 || bs.best.mainPeerStat == nil || bs.best.srcStore == nil || bs.best.dstStore == nil {
 		return
@@ -787,8 +813,16 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		}
 		if filter.Target(bs.GetSchedulerConfig(), store, filters) {
 			id := store.GetID()
+			if bs.shouldRejectReadCPUDst(detail) {
+				hotSchedulerResultCounter.WithLabelValues("dst-store-cpu-prefilter-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+				continue
+			}
 			if !bs.checkDstByPriorityAndTolerance(detail.LoadPred.Max(), &detail.LoadPred.Expect, dstToleranceRatio) {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+				continue
+			}
+			if bs.shouldRejectReadCPUDstHistory(detail) {
+				hotSchedulerResultCounter.WithLabelValues("dst-store-history-cpu-prefilter-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 				continue
 			}
 			if !bs.checkDstHistoryLoadsByPriorityAndTolerance(&detail.LoadPred.Current, &detail.LoadPred.Expect, dstToleranceRatio) {
