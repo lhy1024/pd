@@ -63,13 +63,3 @@ func TestHotPeerStatIsHotSkipsNilRollingLoads(t *testing.T) {
 	}
 	re.True(stat.isHot(thresholds))
 }
-
-func TestTransferLeaderCooldownWithDuration(t *testing.T) {
-	re := require.New(t)
-	item := &HotPeerStat{
-		lastTransferLeaderTime: time.Now().Add(-2 * time.Minute),
-	}
-
-	re.False(item.IsNeedCoolDownTransferLeader(3, utils.Read))
-	re.True(item.IsNeedCoolDownTransferLeaderWithDuration(6 * time.Minute))
-}

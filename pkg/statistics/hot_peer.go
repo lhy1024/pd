@@ -148,12 +148,7 @@ func (stat *HotPeerStat) Log(str string) {
 
 // IsNeedCoolDownTransferLeader use cooldown time after transfer leader to avoid unnecessary schedule
 func (stat *HotPeerStat) IsNeedCoolDownTransferLeader(minHotDegree int, rwTy utils.RWType) bool {
-	return stat.IsNeedCoolDownTransferLeaderWithDuration(time.Duration(minHotDegree*rwTy.ReportInterval()) * time.Second)
-}
-
-// IsNeedCoolDownTransferLeaderWithDuration uses a caller-provided cooldown duration after transfer leader.
-func (stat *HotPeerStat) IsNeedCoolDownTransferLeaderWithDuration(cooldown time.Duration) bool {
-	return time.Since(stat.lastTransferLeaderTime) < cooldown
+	return time.Since(stat.lastTransferLeaderTime).Seconds() < float64(minHotDegree*rwTy.ReportInterval())
 }
 
 // IsLeader indicates the item belong to the leader.
