@@ -1148,6 +1148,35 @@ type sourceHeartbeatRegionCPUSummary struct {
 	leaderRegionNum int
 }
 
+const readCPUHeartbeatDebugStoreID uint64 = 1
+
+type readCPUHeartbeatPeerDump struct {
+	RegionID               uint64  `json:"region_id"`
+	ReadCPU                float64 `json:"read_cpu"`
+	CurrentLeaderStoreID   uint64  `json:"current_leader_store_id"`
+	CurrentPeerID          uint64  `json:"current_peer_id"`
+	IsCurrentLeaderOnStore bool    `json:"is_current_leader_on_store"`
+	InVisibleHotSet        bool    `json:"in_visible_hot_set"`
+	InSchedulerFilteredSet bool    `json:"in_scheduler_filtered_set"`
+	HotCachePresent        bool    `json:"hot_cache_present"`
+	HotCacheLeader         bool    `json:"hot_cache_leader"`
+	HotCacheCPU            float64 `json:"hot_cache_cpu"`
+	HotDegree              int     `json:"hot_degree"`
+	AntiCount              int     `json:"anti_count"`
+	PDVisibleReason        string  `json:"pd_visible_reason"`
+	SchedulerFilterReason  string  `json:"scheduler_filter_reason"`
+}
+
+type readCPUVisibleHotPeerDump struct {
+	RegionID               uint64  `json:"region_id"`
+	ReadCPU                float64 `json:"read_cpu"`
+	HotDegree              int     `json:"hot_degree"`
+	AntiCount              int     `json:"anti_count"`
+	IsLeader               bool    `json:"is_leader"`
+	InSchedulerFilteredSet bool    `json:"in_scheduler_filtered_set"`
+	SchedulerFilterReason  string  `json:"scheduler_filter_reason"`
+}
+
 func (s sourceHeartbeatRegionCPUSummary) nonLeaderCPU() float64 {
 	return math.Max(0, s.totalCPU-s.leaderOnlyCPU)
 }
@@ -1168,6 +1197,12 @@ func (bs *balanceSolver) usesHeartbeatNonLeaderReadCPUFilter() bool {
 
 func (bs *balanceSolver) heartbeatNonLeaderReadCPUDeadband() float64 {
 	return bs.sche.conf.getMinHotCPURate()
+}
+
+func (bs *balanceSolver) shouldLogReadCPUHeartbeatFullDump(detail *statistics.StoreLoadDetail) bool {
+	return bs.usesHeartbeatNonLeaderReadCPUFilter() &&
+		detail != nil &&
+		detail.GetID() == readCPUHeartbeatDebugStoreID
 }
 
 func (bs *balanceSolver) sourceHeartbeatLeaderOnlyRegionCPUSummary(detail *statistics.StoreLoadDetail) sourceHeartbeatRegionCPUSummary {
@@ -1200,6 +1235,194 @@ func (bs *balanceSolver) shouldRejectReadCPUSourceByHeartbeatNonLeaderCPU(summar
 	return summary.nonLeaderCPU() > bs.heartbeatNonLeaderReadCPUDeadband()
 }
 
+func (bs *balanceSolver) pdVisibleReasonForHeartbeatCPU(cachePeer *statistics.HotPeerStat, inVisibleHotSet bool) string {
+	if inVisibleHotSet {
+		return "visible"
+	}
+	if cachePeer == nil {
+		return "missing-hot-cache"
+	}
+	if !cachePeer.IsLeader() {
+		return "hot-cache-non-leader"
+	}
+	if cachePeer.HotDegree <= 0 {
+		return "hot-degree-not-positive"
+	}
+	return "not-in-visible-hot-set"
+}
+
+func (bs *balanceSolver) schedulerVisibleHotPeerUnion(detail *statistics.StoreLoadDetail) map[uint64]struct{} {
+	union := make(map[uint64]struct{}, len(detail.HotPeers))
+	hotPeers := detail.HotPeers
+	if len(hotPeers) > bs.maxPeerNum {
+		firstSort := make([]*statistics.HotPeerStat, len(hotPeers))
+		copy(firstSort, hotPeers)
+		sort.Slice(firstSort, func(i, j int) bool {
+			return firstSort[i].GetLoad(bs.firstPriority) > firstSort[j].GetLoad(bs.firstPriority)
+		})
+		secondSort := make([]*statistics.HotPeerStat, len(hotPeers))
+		copy(secondSort, hotPeers)
+		sort.Slice(secondSort, func(i, j int) bool {
+			return secondSort[i].GetLoad(bs.secondPriority) > secondSort[j].GetLoad(bs.secondPriority)
+		})
+		for peer := range sortHotPeers(firstSort, secondSort, bs.maxPeerNum) {
+			union[peer.ID()] = struct{}{}
+		}
+		return union
+	}
+	for _, peer := range hotPeers {
+		union[peer.ID()] = struct{}{}
+	}
+	return union
+}
+
+func (bs *balanceSolver) schedulerFilterReasonForVisibleHotPeer(
+	detail *statistics.StoreLoadDetail,
+	peer *statistics.HotPeerStat,
+	union map[uint64]struct{},
+) string {
+	if detail == nil || peer == nil {
+		return ""
+	}
+	if _, ok := bs.sche.regionPendings[peer.ID()]; ok {
+		return "pending-operator"
+	}
+	if peer.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy) {
+		return "cooldown-transfer-leader"
+	}
+	if len(detail.HotPeers) > bs.maxPeerNum {
+		if _, ok := union[peer.ID()]; !ok {
+			return "out-of-scheduler-topn-union"
+		}
+	}
+	return "kept"
+}
+
+func sortReadCPUHeartbeatPeerDumps(peers []readCPUHeartbeatPeerDump) {
+	sort.Slice(peers, func(i, j int) bool {
+		if peers[i].ReadCPU == peers[j].ReadCPU {
+			return peers[i].RegionID < peers[j].RegionID
+		}
+		return peers[i].ReadCPU > peers[j].ReadCPU
+	})
+}
+
+func sortReadCPUVisibleHotPeerDumps(peers []readCPUVisibleHotPeerDump) {
+	sort.Slice(peers, func(i, j int) bool {
+		if peers[i].ReadCPU == peers[j].ReadCPU {
+			return peers[i].RegionID < peers[j].RegionID
+		}
+		return peers[i].ReadCPU > peers[j].ReadCPU
+	})
+}
+
+func (bs *balanceSolver) buildReadCPUHeartbeatFullDump(detail *statistics.StoreLoadDetail) (
+	heartbeatPeers []readCPUHeartbeatPeerDump,
+	visibleHotPeers []readCPUVisibleHotPeerDump,
+	leaderOnlyButNotVisible []readCPUHeartbeatPeerDump,
+	visibleButNotLeaderOnly []readCPUVisibleHotPeerDump,
+	heartbeatNonLeader []readCPUHeartbeatPeerDump,
+) {
+	if detail == nil || detail.GetStoreStats() == nil {
+		return nil, nil, nil, nil, nil
+	}
+
+	storeID := detail.GetID()
+	visibleHotByRegion := make(map[uint64]*statistics.HotPeerStat, len(detail.HotPeers))
+	for _, peer := range detail.HotPeers {
+		visibleHotByRegion[peer.ID()] = peer
+	}
+	filteredHotByRegion := make(map[uint64]*statistics.HotPeerStat, len(bs.filteredHotPeers[storeID]))
+	for _, peer := range bs.filteredHotPeers[storeID] {
+		filteredHotByRegion[peer.ID()] = peer
+	}
+	schedulerUnion := bs.schedulerVisibleHotPeerUnion(detail)
+	heartbeatLeaderOnlyRegions := make(map[uint64]struct{})
+
+	for _, peerStat := range detail.GetStoreStats().GetPeerStats() {
+		readCPU := statistics.RegionReadCPUUsage(peerStat)
+		if readCPU <= 0 {
+			continue
+		}
+		regionID := peerStat.GetRegionId()
+		region := bs.GetRegion(regionID)
+		var (
+			currentLeaderStoreID   uint64
+			currentPeerID          uint64
+			isCurrentLeaderOnStore bool
+		)
+		if region != nil {
+			if region.GetLeader() != nil {
+				currentLeaderStoreID = region.GetLeader().GetStoreId()
+				isCurrentLeaderOnStore = currentLeaderStoreID == storeID
+			}
+			if peer := region.GetStorePeer(storeID); peer != nil {
+				currentPeerID = peer.GetId()
+			}
+		}
+		cachePeer := bs.GetHotPeerStat(bs.rwTy, regionID, storeID)
+		_, inVisibleHotSet := visibleHotByRegion[regionID]
+		_, inSchedulerFilteredSet := filteredHotByRegion[regionID]
+		pdVisibleReason := bs.pdVisibleReasonForHeartbeatCPU(cachePeer, inVisibleHotSet)
+		schedulerFilterReason := ""
+		if visiblePeer, ok := visibleHotByRegion[regionID]; ok {
+			schedulerFilterReason = bs.schedulerFilterReasonForVisibleHotPeer(detail, visiblePeer, schedulerUnion)
+		}
+		dump := readCPUHeartbeatPeerDump{
+			RegionID:               regionID,
+			ReadCPU:                readCPU,
+			CurrentLeaderStoreID:   currentLeaderStoreID,
+			CurrentPeerID:          currentPeerID,
+			IsCurrentLeaderOnStore: isCurrentLeaderOnStore,
+			InVisibleHotSet:        inVisibleHotSet,
+			InSchedulerFilteredSet: inSchedulerFilteredSet,
+			HotCachePresent:        cachePeer != nil,
+			PDVisibleReason:        pdVisibleReason,
+			SchedulerFilterReason:  schedulerFilterReason,
+		}
+		if cachePeer != nil {
+			dump.HotCacheLeader = cachePeer.IsLeader()
+			dump.HotCacheCPU = cachePeer.GetLoad(utils.CPUDim)
+			dump.HotDegree = cachePeer.HotDegree
+			dump.AntiCount = cachePeer.AntiCount
+		}
+		heartbeatPeers = append(heartbeatPeers, dump)
+		if isCurrentLeaderOnStore {
+			heartbeatLeaderOnlyRegions[regionID] = struct{}{}
+			if !inVisibleHotSet {
+				leaderOnlyButNotVisible = append(leaderOnlyButNotVisible, dump)
+			}
+			continue
+		}
+		heartbeatNonLeader = append(heartbeatNonLeader, dump)
+	}
+
+	for _, peer := range detail.HotPeers {
+		filterReason := bs.schedulerFilterReasonForVisibleHotPeer(detail, peer, schedulerUnion)
+		_, inSchedulerFilteredSet := filteredHotByRegion[peer.ID()]
+		dump := readCPUVisibleHotPeerDump{
+			RegionID:               peer.ID(),
+			ReadCPU:                peer.GetLoad(utils.CPUDim),
+			HotDegree:              peer.HotDegree,
+			AntiCount:              peer.AntiCount,
+			IsLeader:               peer.IsLeader(),
+			InSchedulerFilteredSet: inSchedulerFilteredSet,
+			SchedulerFilterReason:  filterReason,
+		}
+		visibleHotPeers = append(visibleHotPeers, dump)
+		if _, ok := heartbeatLeaderOnlyRegions[peer.ID()]; !ok {
+			visibleButNotLeaderOnly = append(visibleButNotLeaderOnly, dump)
+		}
+	}
+
+	sortReadCPUHeartbeatPeerDumps(heartbeatPeers)
+	sortReadCPUVisibleHotPeerDumps(visibleHotPeers)
+	sortReadCPUHeartbeatPeerDumps(leaderOnlyButNotVisible)
+	sortReadCPUVisibleHotPeerDumps(visibleButNotLeaderOnly)
+	sortReadCPUHeartbeatPeerDumps(heartbeatNonLeader)
+	return heartbeatPeers, visibleHotPeers, leaderOnlyButNotVisible, visibleButNotLeaderOnly, heartbeatNonLeader
+}
+
 func (bs *balanceSolver) logReadCPUHeartbeatSourceFilter(detail *statistics.StoreLoadDetail, summary sourceHeartbeatRegionCPUSummary, result string) {
 	if !bs.usesHeartbeatNonLeaderReadCPUFilter() || detail == nil || detail.LoadPred == nil {
 		return
@@ -1223,6 +1446,17 @@ func (bs *balanceSolver) logReadCPUHeartbeatSourceFilter(detail *statistics.Stor
 		zap.Float64("src-heartbeat-non-leader-cpu-deadband", bs.heartbeatNonLeaderReadCPUDeadband()),
 		zap.Int("visible-hot-peer-count", visible.Count),
 		zap.Float64("visible-total-hot-cpu", visible.TotalCPURate),
+	}
+	if bs.shouldLogReadCPUHeartbeatFullDump(detail) {
+		heartbeatPeers, visibleHotPeers, leaderOnlyButNotVisible, visibleButNotLeaderOnly, heartbeatNonLeader :=
+			bs.buildReadCPUHeartbeatFullDump(detail)
+		fields = append(fields,
+			zap.Any("heartbeat-full-peers", heartbeatPeers),
+			zap.Any("visible-hot-peers", visibleHotPeers),
+			zap.Any("heartbeat-leader-only-but-not-visible", leaderOnlyButNotVisible),
+			zap.Any("visible-but-not-heartbeat-leader-only", visibleButNotLeaderOnly),
+			zap.Any("heartbeat-non-leader-peers", heartbeatNonLeader),
+		)
 	}
 	log.Info("read cpu source heartbeat filter", fields...)
 }
