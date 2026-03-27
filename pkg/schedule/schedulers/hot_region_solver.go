@@ -1151,20 +1151,24 @@ type sourceHeartbeatRegionCPUSummary struct {
 const readCPUHeartbeatDebugStoreID uint64 = 1
 
 type readCPUHeartbeatPeerDump struct {
-	RegionID               uint64  `json:"region_id"`
-	ReadCPU                float64 `json:"read_cpu"`
-	CurrentLeaderStoreID   uint64  `json:"current_leader_store_id"`
-	CurrentPeerID          uint64  `json:"current_peer_id"`
-	IsCurrentLeaderOnStore bool    `json:"is_current_leader_on_store"`
-	InVisibleHotSet        bool    `json:"in_visible_hot_set"`
-	InSchedulerFilteredSet bool    `json:"in_scheduler_filtered_set"`
-	HotCachePresent        bool    `json:"hot_cache_present"`
-	HotCacheLeader         bool    `json:"hot_cache_leader"`
-	HotCacheCPU            float64 `json:"hot_cache_cpu"`
-	HotDegree              int     `json:"hot_degree"`
-	AntiCount              int     `json:"anti_count"`
-	PDVisibleReason        string  `json:"pd_visible_reason"`
-	SchedulerFilterReason  string  `json:"scheduler_filter_reason"`
+	RegionID                        uint64  `json:"region_id"`
+	ReadCPU                         float64 `json:"read_cpu"`
+	CurrentLeaderStoreID            uint64  `json:"current_leader_store_id"`
+	CurrentPeerID                   uint64  `json:"current_peer_id"`
+	IsCurrentLeaderOnStore          bool    `json:"is_current_leader_on_store"`
+	InVisibleHotSet                 bool    `json:"in_visible_hot_set"`
+	InSchedulerFilteredSet          bool    `json:"in_scheduler_filtered_set"`
+	HotCachePresent                 bool    `json:"hot_cache_present"`
+	HotCacheLeader                  bool    `json:"hot_cache_leader"`
+	HotCacheCPU                     float64 `json:"hot_cache_cpu"`
+	HotDegree                       int     `json:"hot_degree"`
+	AntiCount                       int     `json:"anti_count"`
+	VisibleHotDegreeThreshold       int     `json:"visible_hot_degree_threshold"`
+	VisibleDefaultAntiCount         int     `json:"visible_default_anti_count"`
+	PassesVisibleHotDegreeThreshold bool    `json:"passes_visible_hot_degree_threshold"`
+	PassesVisibleDefaultAntiCount   bool    `json:"passes_visible_default_anti_count"`
+	PDVisibleReason                 string  `json:"pd_visible_reason"`
+	SchedulerFilterReason           string  `json:"scheduler_filter_reason"`
 }
 
 type readCPUVisibleHotPeerDump struct {
@@ -1197,6 +1201,18 @@ func (bs *balanceSolver) usesHeartbeatNonLeaderReadCPUFilter() bool {
 
 func (bs *balanceSolver) heartbeatNonLeaderReadCPUDeadband() float64 {
 	return bs.sche.conf.getMinHotCPURate()
+}
+
+func (bs *balanceSolver) pdVisibleReadHotDegreeThreshold() int {
+	threshold := bs.minHotDegree
+	if bs.rwTy == utils.Read {
+		threshold *= utils.RegionHeartBeatReportInterval / utils.StoreHeartBeatReportInterval
+	}
+	return threshold
+}
+
+func (bs *balanceSolver) pdVisibleDefaultAntiCount() int {
+	return bs.rwTy.DefaultAntiCount()
 }
 
 func (bs *balanceSolver) shouldLogReadCPUHeartbeatFullDump(detail *statistics.StoreLoadDetail) bool {
@@ -1247,6 +1263,12 @@ func (bs *balanceSolver) pdVisibleReasonForHeartbeatCPU(cachePeer *statistics.Ho
 	}
 	if cachePeer.HotDegree <= 0 {
 		return "hot-degree-not-positive"
+	}
+	if cachePeer.AntiCount != bs.pdVisibleDefaultAntiCount() {
+		return "anti-count-not-default"
+	}
+	if cachePeer.HotDegree < bs.pdVisibleReadHotDegreeThreshold() {
+		return "hot-degree-below-visible-threshold"
 	}
 	return "not-in-visible-hot-set"
 }
@@ -1338,6 +1360,8 @@ func (bs *balanceSolver) buildReadCPUHeartbeatFullDump(detail *statistics.StoreL
 	}
 	schedulerUnion := bs.schedulerVisibleHotPeerUnion(detail)
 	heartbeatLeaderOnlyRegions := make(map[uint64]struct{})
+	visibleThreshold := bs.pdVisibleReadHotDegreeThreshold()
+	defaultAntiCount := bs.pdVisibleDefaultAntiCount()
 
 	for _, peerStat := range detail.GetStoreStats().GetPeerStats() {
 		readCPU := statistics.RegionReadCPUUsage(peerStat)
@@ -1369,22 +1393,26 @@ func (bs *balanceSolver) buildReadCPUHeartbeatFullDump(detail *statistics.StoreL
 			schedulerFilterReason = bs.schedulerFilterReasonForVisibleHotPeer(detail, visiblePeer, schedulerUnion)
 		}
 		dump := readCPUHeartbeatPeerDump{
-			RegionID:               regionID,
-			ReadCPU:                readCPU,
-			CurrentLeaderStoreID:   currentLeaderStoreID,
-			CurrentPeerID:          currentPeerID,
-			IsCurrentLeaderOnStore: isCurrentLeaderOnStore,
-			InVisibleHotSet:        inVisibleHotSet,
-			InSchedulerFilteredSet: inSchedulerFilteredSet,
-			HotCachePresent:        cachePeer != nil,
-			PDVisibleReason:        pdVisibleReason,
-			SchedulerFilterReason:  schedulerFilterReason,
+			RegionID:                  regionID,
+			ReadCPU:                   readCPU,
+			CurrentLeaderStoreID:      currentLeaderStoreID,
+			CurrentPeerID:             currentPeerID,
+			IsCurrentLeaderOnStore:    isCurrentLeaderOnStore,
+			InVisibleHotSet:           inVisibleHotSet,
+			InSchedulerFilteredSet:    inSchedulerFilteredSet,
+			HotCachePresent:           cachePeer != nil,
+			VisibleHotDegreeThreshold: visibleThreshold,
+			VisibleDefaultAntiCount:   defaultAntiCount,
+			PDVisibleReason:           pdVisibleReason,
+			SchedulerFilterReason:     schedulerFilterReason,
 		}
 		if cachePeer != nil {
 			dump.HotCacheLeader = cachePeer.IsLeader()
 			dump.HotCacheCPU = cachePeer.GetLoad(utils.CPUDim)
 			dump.HotDegree = cachePeer.HotDegree
 			dump.AntiCount = cachePeer.AntiCount
+			dump.PassesVisibleHotDegreeThreshold = cachePeer.HotDegree >= visibleThreshold
+			dump.PassesVisibleDefaultAntiCount = cachePeer.AntiCount == defaultAntiCount
 		}
 		heartbeatPeers = append(heartbeatPeers, dump)
 		if isCurrentLeaderOnStore {
@@ -1444,6 +1472,8 @@ func (bs *balanceSolver) logReadCPUHeartbeatSourceFilter(detail *statistics.Stor
 		zap.Int("src-heartbeat-region-sum-leader-only-count", summary.leaderRegionNum),
 		zap.Int("src-heartbeat-region-sum-non-leader-count", summary.nonLeaderRegionNum()),
 		zap.Float64("src-heartbeat-non-leader-cpu-deadband", bs.heartbeatNonLeaderReadCPUDeadband()),
+		zap.Int("pd-visible-read-hot-degree-threshold", bs.pdVisibleReadHotDegreeThreshold()),
+		zap.Int("pd-visible-default-anti-count", bs.pdVisibleDefaultAntiCount()),
 		zap.Int("visible-hot-peer-count", visible.Count),
 		zap.Float64("visible-total-hot-cpu", visible.TotalCPURate),
 	}
