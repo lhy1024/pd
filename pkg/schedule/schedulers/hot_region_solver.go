@@ -335,6 +335,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 			return false
 		}
 	}
+	bs.logHotOperatorSnapshot()
 	bs.logBestSolution()
 	return true
 }
@@ -395,15 +396,27 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 			continue
 		}
 
+		sourceSummary := sourceHeartbeatRegionCPUSummary{}
+		if bs.usesHeartbeatNonLeaderReadCPUFilter() {
+			sourceSummary = bs.sourceHeartbeatLeaderOnlyRegionCPUSummary(detail)
+		}
 		if !bs.checkSrcByPriorityAndTolerance(detail.LoadPred.Min(), &detail.LoadPred.Expect, srcToleranceRatio) {
+			bs.logReadCPUHeartbeatSourceFilter(detail, sourceSummary, "reject-source-check")
 			hotSchedulerResultCounter.WithLabelValues("src-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
 		if !bs.checkSrcHistoryLoadsByPriorityAndTolerance(&detail.LoadPred.Current, &detail.LoadPred.Expect, srcToleranceRatio) {
+			bs.logReadCPUHeartbeatSourceFilter(detail, sourceSummary, "reject-history-check")
 			hotSchedulerResultCounter.WithLabelValues("src-store-history-loads-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
+		if bs.shouldRejectReadCPUSourceByHeartbeatNonLeaderCPU(sourceSummary) {
+			bs.logReadCPUHeartbeatSourceFilter(detail, sourceSummary, "reject-heartbeat-non-leader-cpu")
+			hotSchedulerResultCounter.WithLabelValues("src-store-heartbeat-non-leader-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+			continue
+		}
 
+		bs.logReadCPUHeartbeatSourceFilter(detail, sourceSummary, "selected")
 		ret[id] = detail
 		hotSchedulerResultCounter.WithLabelValues("src-store-succ-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 	}
@@ -1126,6 +1139,127 @@ func opCounter(typ string) prometheus.Counter {
 	default: // transfer-leader
 		return hotSchedulerTransferLeaderCounter
 	}
+}
+
+type sourceHeartbeatRegionCPUSummary struct {
+	totalCPU        float64
+	leaderOnlyCPU   float64
+	totalRegionNum  int
+	leaderRegionNum int
+}
+
+func (s sourceHeartbeatRegionCPUSummary) nonLeaderCPU() float64 {
+	return math.Max(0, s.totalCPU-s.leaderOnlyCPU)
+}
+
+func (s sourceHeartbeatRegionCPUSummary) nonLeaderRegionNum() int {
+	if s.totalRegionNum <= s.leaderRegionNum {
+		return 0
+	}
+	return s.totalRegionNum - s.leaderRegionNum
+}
+
+func (bs *balanceSolver) usesHeartbeatNonLeaderReadCPUFilter() bool {
+	return bs.rwTy == utils.Read &&
+		bs.resourceTy == readLeader &&
+		bs.firstPriority == utils.CPUDim &&
+		bs.secondPriority == utils.ByteDim
+}
+
+func (bs *balanceSolver) heartbeatNonLeaderReadCPUDeadband() float64 {
+	return bs.sche.conf.getMinHotCPURate()
+}
+
+func (bs *balanceSolver) sourceHeartbeatLeaderOnlyRegionCPUSummary(detail *statistics.StoreLoadDetail) sourceHeartbeatRegionCPUSummary {
+	if detail == nil || detail.StoreInfo == nil || detail.GetStoreStats() == nil {
+		return sourceHeartbeatRegionCPUSummary{}
+	}
+	storeID := detail.GetID()
+	summary := sourceHeartbeatRegionCPUSummary{}
+	for _, peerStat := range detail.GetStoreStats().GetPeerStats() {
+		cpu := statistics.RegionReadCPUUsage(peerStat)
+		if cpu <= 0 {
+			continue
+		}
+		summary.totalCPU += cpu
+		summary.totalRegionNum++
+		region := bs.GetRegion(peerStat.GetRegionId())
+		if region == nil || region.GetLeader() == nil || region.GetLeader().GetStoreId() != storeID {
+			continue
+		}
+		summary.leaderOnlyCPU += cpu
+		summary.leaderRegionNum++
+	}
+	return summary
+}
+
+func (bs *balanceSolver) shouldRejectReadCPUSourceByHeartbeatNonLeaderCPU(summary sourceHeartbeatRegionCPUSummary) bool {
+	if !bs.usesHeartbeatNonLeaderReadCPUFilter() {
+		return false
+	}
+	return summary.nonLeaderCPU() > bs.heartbeatNonLeaderReadCPUDeadband()
+}
+
+func (bs *balanceSolver) logReadCPUHeartbeatSourceFilter(detail *statistics.StoreLoadDetail, summary sourceHeartbeatRegionCPUSummary, result string) {
+	if !bs.usesHeartbeatNonLeaderReadCPUFilter() || detail == nil || detail.LoadPred == nil {
+		return
+	}
+	visible := detail.ToHotPeersStat()
+	fields := []zap.Field{
+		zap.String("rw", bs.rwTy.String()),
+		zap.String("resource", bs.resourceTy.String()),
+		zap.String("result", result),
+		zap.Uint64("store-id", detail.GetID()),
+		zap.String("source-cpu-filter", "heartbeat-region-sum-non-leader-veto"),
+		zap.Float64("src-store-level-current-cpu", detail.LoadPred.Current.Loads[utils.CPUDim]),
+		zap.Float64("src-store-level-min-cpu", detail.LoadPred.Min().Loads[utils.CPUDim]),
+		zap.Float64("src-store-level-expect-cpu", detail.LoadPred.Expect.Loads[utils.CPUDim]),
+		zap.Float64("src-heartbeat-region-sum-total-cpu", summary.totalCPU),
+		zap.Float64("src-heartbeat-region-sum-leader-only-cpu", summary.leaderOnlyCPU),
+		zap.Float64("src-heartbeat-region-sum-non-leader-cpu", summary.nonLeaderCPU()),
+		zap.Int("src-heartbeat-region-sum-total-count", summary.totalRegionNum),
+		zap.Int("src-heartbeat-region-sum-leader-only-count", summary.leaderRegionNum),
+		zap.Int("src-heartbeat-region-sum-non-leader-count", summary.nonLeaderRegionNum()),
+		zap.Float64("src-heartbeat-non-leader-cpu-deadband", bs.heartbeatNonLeaderReadCPUDeadband()),
+		zap.Int("visible-hot-peer-count", visible.Count),
+		zap.Float64("visible-total-hot-cpu", visible.TotalCPURate),
+	}
+	log.Info("read cpu source heartbeat filter", fields...)
+}
+
+func (bs *balanceSolver) logHotOperatorSnapshot() {
+	if !bs.usesHeartbeatNonLeaderReadCPUFilter() || bs.best == nil || len(bs.ops) == 0 || bs.best.mainPeerStat == nil || bs.best.srcStore == nil || bs.best.dstStore == nil {
+		return
+	}
+	srcSummary := bs.sourceHeartbeatLeaderOnlyRegionCPUSummary(bs.best.srcStore)
+	fields := []zap.Field{
+		zap.Stringer("rw-type", bs.rwTy),
+		zap.Stringer("op-type", bs.opTy),
+		zap.Stringer("resource-type", bs.resourceTy),
+		zap.String("source-cpu-filter", "heartbeat-region-sum-non-leader-veto"),
+		zap.Uint64("src-store", bs.best.srcStore.GetID()),
+		zap.Uint64("dst-store", bs.best.dstStore.GetID()),
+		zap.Uint64("region-id", bs.best.region.GetID()),
+		zap.Float64("main-peer-cpu", bs.best.mainPeerStat.GetLoad(utils.CPUDim)),
+		zap.Int("main-peer-hot-degree", bs.best.mainPeerStat.HotDegree),
+		zap.Float64("src-store-level-current-cpu", bs.best.srcStore.LoadPred.Current.Loads[utils.CPUDim]),
+		zap.Float64("src-store-level-min-cpu", bs.best.srcStore.LoadPred.Min().Loads[utils.CPUDim]),
+		zap.Float64("src-store-level-pending-cpu", bs.best.srcStore.LoadPred.Pending().Loads[utils.CPUDim]),
+		zap.Float64("src-store-level-future-cpu", bs.best.srcStore.LoadPred.Future.Loads[utils.CPUDim]),
+		zap.Float64("src-store-level-expect-cpu", bs.best.srcStore.LoadPred.Expect.Loads[utils.CPUDim]),
+		zap.Float64("src-heartbeat-region-sum-total-cpu", srcSummary.totalCPU),
+		zap.Float64("src-heartbeat-region-sum-leader-only-cpu", srcSummary.leaderOnlyCPU),
+		zap.Float64("src-heartbeat-region-sum-non-leader-cpu", srcSummary.nonLeaderCPU()),
+		zap.Int("src-heartbeat-region-sum-total-count", srcSummary.totalRegionNum),
+		zap.Int("src-heartbeat-region-sum-leader-only-count", srcSummary.leaderRegionNum),
+		zap.Int("src-heartbeat-region-sum-non-leader-count", srcSummary.nonLeaderRegionNum()),
+		zap.Float64("src-heartbeat-non-leader-cpu-deadband", bs.heartbeatNonLeaderReadCPUDeadband()),
+		zap.Float64("dst-store-level-current-cpu", bs.best.dstStore.LoadPred.Current.Loads[utils.CPUDim]),
+		zap.Float64("dst-store-level-pending-cpu", bs.best.dstStore.LoadPred.Pending().Loads[utils.CPUDim]),
+		zap.Float64("dst-store-level-future-cpu", bs.best.dstStore.LoadPred.Future.Loads[utils.CPUDim]),
+		zap.Float64("dst-store-level-expect-cpu", bs.best.dstStore.LoadPred.Expect.Loads[utils.CPUDim]),
+	}
+	log.Info("dispatch hot operator snapshot", fields...)
 }
 
 func (bs *balanceSolver) logBestSolution() {
