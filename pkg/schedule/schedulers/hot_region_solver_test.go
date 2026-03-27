@@ -306,6 +306,133 @@ func TestMaxZombieDuration(t *testing.T) {
 	}
 }
 
+func TestSourceHeartbeatLeaderOnlyRegionCPUSummary(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	tc.SetClusterVersion(versioninfo.MustParseVersion("8.5.7"))
+
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	scheduler := hb.(*hotScheduler)
+	scheduler.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+
+	tc.AddLeaderStore(1, 1)
+	tc.AddLeaderStore(2, 1)
+	tc.AddLeaderStore(3, 1)
+	tc.AddLeaderRegion(1, 1, 2, 3)
+	tc.AddLeaderRegion(2, 2, 1, 3)
+
+	stats := &pdpb.StoreStats{
+		StoreId: 1,
+		PeerStats: []*pdpb.PeerStat{
+			{RegionId: 1, CpuStats: &pdpb.CPUStats{UnifiedRead: 250}},
+			{RegionId: 2, CpuStats: &pdpb.CPUStats{UnifiedRead: 400}},
+		},
+	}
+	store := tc.GetStore(1).Clone(core.SetStoreStats(stats))
+	current := statistics.StoreLoad{
+		Loads: statistics.Loads{
+			utils.ByteDim: 50,
+			utils.CPUDim:  594,
+		},
+	}
+	detail := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: store},
+		LoadPred:         current.ToLoadPred(utils.Read, nil),
+		HotPeers: []*statistics.HotPeerStat{{
+			StoreID:   1,
+			RegionID:  1,
+			HotDegree: 1,
+			Loads: []float64{
+				utils.ByteDim: 40,
+				utils.CPUDim:  250,
+			},
+		}},
+	}
+
+	solver := newBalanceSolver(scheduler, tc, utils.Read, transferLeader)
+	summary := solver.sourceHeartbeatLeaderOnlyRegionCPUSummary(detail)
+	re.Equal(650.0, summary.totalCPU)
+	re.Equal(250.0, summary.leaderOnlyCPU)
+	re.Equal(2, summary.totalRegionNum)
+	re.Equal(1, summary.leaderRegionNum)
+
+	sourceLoad, sourceSummary := solver.sourceLoadForQualification(detail)
+	re.NotNil(sourceLoad)
+	re.Equal(summary, sourceSummary)
+	re.Equal(250.0, sourceLoad.Loads[utils.CPUDim])
+	re.Equal(50.0, sourceLoad.Loads[utils.ByteDim])
+}
+
+func TestFilterSrcStoresUsesHeartbeatLeaderOnlyRegionCPU(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	tc.SetClusterVersion(versioninfo.MustParseVersion("8.5.7"))
+
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	scheduler := hb.(*hotScheduler)
+	scheduler.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+
+	tc.AddLeaderStore(1, 1)
+	tc.AddLeaderStore(2, 1)
+	tc.AddLeaderStore(3, 1)
+	tc.AddLeaderRegion(1, 1, 2, 3)
+	tc.AddLeaderRegion(2, 2, 1, 3)
+
+	stats := &pdpb.StoreStats{
+		StoreId: 1,
+		PeerStats: []*pdpb.PeerStat{
+			{RegionId: 1, CpuStats: &pdpb.CPUStats{UnifiedRead: 250}},
+			{RegionId: 2, CpuStats: &pdpb.CPUStats{UnifiedRead: 400}},
+		},
+	}
+	store := tc.GetStore(1).Clone(core.SetStoreStats(stats))
+	current := statistics.StoreLoad{
+		Loads: statistics.Loads{
+			utils.ByteDim: 50,
+			utils.CPUDim:  594,
+		},
+	}
+	expect := statistics.StoreLoad{
+		Loads: statistics.Loads{
+			utils.ByteDim: 100,
+			utils.CPUDim:  300,
+		},
+	}
+	detail := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: store},
+		LoadPred:         current.ToLoadPred(utils.Read, nil),
+		HotPeers: []*statistics.HotPeerStat{{
+			StoreID:   1,
+			RegionID:  1,
+			HotDegree: 1,
+			Loads: []float64{
+				utils.ByteDim: 40,
+				utils.CPUDim:  250,
+			},
+		}},
+	}
+	detail.LoadPred.Expect = expect
+	scheduler.stLoadInfos[readLeader] = map[uint64]*statistics.StoreLoadDetail{
+		1: detail,
+	}
+
+	solver := newBalanceSolver(scheduler, tc, utils.Read, transferLeader)
+	sourceLoad, _ := solver.sourceLoadForQualification(detail)
+	re.NotNil(sourceLoad)
+	re.False(solver.checkSrcByPriorityAndTolerance(sourceLoad, &detail.LoadPred.Expect, 1.0))
+	re.True(solver.checkSrcByPriorityAndTolerance(&statistics.StoreLoad{
+		Loads: statistics.Loads{
+			utils.ByteDim: 50,
+			utils.CPUDim:  650,
+		},
+	}, &detail.LoadPred.Expect, 1.0))
+	re.Empty(solver.filterSrcStores())
+}
+
 func TestExpect(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
