@@ -59,7 +59,9 @@ func (tikvCollector) getLoads(storeLoads StoreKindLoads, peerLoadSum Loads, rwTy
 		loads[utils.ByteDim] = storeLoads[utils.StoreReadBytes]
 		loads[utils.KeyDim] = storeLoads[utils.StoreReadKeys]
 		loads[utils.QueryDim] = storeLoads[utils.StoreReadQuery]
-		loads[utils.CPUDim] = storeLoads[utils.StoreReadCPU]
+		// For the read hot scheduler probe, replace the CPU dimension with the
+		// region-aggregated hot CPU signal so CPU feedback is closer to operator-level changes.
+		loads[utils.CPUDim] = peerLoadSum[utils.CPUDim]
 	case utils.Write:
 		switch kind {
 		case constant.LeaderKind:

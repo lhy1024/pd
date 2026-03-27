@@ -158,6 +158,96 @@ func TestSummaryStoreInfos(t *testing.T) {
 	}
 }
 
+func TestTiKVReadUsesPeerLoadSumCPU(t *testing.T) {
+	re := require.New(t)
+	rw := utils.Read
+	kind := constant.LeaderKind
+	collector := newTikvCollector()
+	storeInfos := make(map[uint64]*StoreSummaryInfo)
+	storeLoads := make(map[uint64]StoreKindLoads)
+	storeHotPeers := make(map[uint64][]*HotPeerStat)
+
+	for _, storeID := range []uint64{1, 2} {
+		storeInfos[storeID] = &StoreSummaryInfo{
+			StoreInfo: core.NewStoreInfo(
+				&metapb.Store{
+					Id:      storeID,
+					Address: fmt.Sprintf("mock://tikv-%d:%d", storeID, storeID),
+				},
+				core.SetLastHeartbeatTS(time.Now()),
+			),
+		}
+	}
+
+	storeLoads[1] = StoreKindLoads{
+		utils.StoreReadBytes: 1000,
+		utils.StoreReadKeys:  2000,
+		utils.StoreReadQuery: 3000,
+		utils.StoreReadCPU:   4000,
+	}
+	storeLoads[2] = StoreKindLoads{
+		utils.StoreReadBytes: 5000,
+		utils.StoreReadKeys:  6000,
+		utils.StoreReadQuery: 7000,
+		utils.StoreReadCPU:   8000,
+	}
+
+	storeHotPeers[1] = []*HotPeerStat{
+		{
+			StoreID:  1,
+			RegionID: 101,
+			Loads:    []float64{10, 20, 30, 40},
+			isLeader: true,
+		},
+		{
+			StoreID:  1,
+			RegionID: 102,
+			Loads:    []float64{1, 2, 3, 4},
+			isLeader: true,
+		},
+	}
+	storeHotPeers[2] = []*HotPeerStat{
+		{
+			StoreID:  2,
+			RegionID: 201,
+			Loads:    []float64{5, 6, 7, 8},
+			isLeader: true,
+		},
+	}
+
+	details := summaryStoresLoadByEngine(storeInfos, storeLoads, nil, storeHotPeers, rw, kind, collector)
+	re.Len(details, 2)
+
+	var store1, store2 *StoreLoadDetail
+	for _, detail := range details {
+		switch detail.GetID() {
+		case 1:
+			store1 = detail
+		case 2:
+			store2 = detail
+		}
+	}
+
+	re.NotNil(store1)
+	re.NotNil(store2)
+
+	re.Equal(1000.0, store1.LoadPred.Current.Loads[utils.ByteDim])
+	re.Equal(2000.0, store1.LoadPred.Current.Loads[utils.KeyDim])
+	re.Equal(3000.0, store1.LoadPred.Current.Loads[utils.QueryDim])
+	re.Equal(44.0, store1.LoadPred.Current.Loads[utils.CPUDim])
+
+	re.Equal(5000.0, store2.LoadPred.Current.Loads[utils.ByteDim])
+	re.Equal(6000.0, store2.LoadPred.Current.Loads[utils.KeyDim])
+	re.Equal(7000.0, store2.LoadPred.Current.Loads[utils.QueryDim])
+	re.Equal(8.0, store2.LoadPred.Current.Loads[utils.CPUDim])
+
+	re.Equal(3000.0, store1.LoadPred.Expect.Loads[utils.ByteDim])
+	re.Equal(4000.0, store1.LoadPred.Expect.Loads[utils.KeyDim])
+	re.Equal(5000.0, store1.LoadPred.Expect.Loads[utils.QueryDim])
+	re.Equal(26.0, store1.LoadPred.Expect.Loads[utils.CPUDim])
+	re.Equal(store1.LoadPred.Expect.Loads, store2.LoadPred.Expect.Loads)
+}
+
 func TestTiFlashComputeExcludedFromExpectation(t *testing.T) {
 	re := require.New(t)
 	rw := utils.Write
