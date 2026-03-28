@@ -424,6 +424,147 @@ func TestReadCPUDstPrefilter(t *testing.T) {
 	}
 }
 
+func TestReadLeaderCPUByteSourceEmitWindow(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
+	re.NoError(err)
+	sche := hb.(*hotScheduler)
+	scope := hotScheduleScopeKey{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+	key := sourceEmitWindowKey{
+		scope:      scope,
+		srcStoreID: 1,
+	}
+	now := time.Now()
+	sche.sourceEmitWindows[key] = []sourceEmitRecord{
+		{at: now.Add(-readLeaderCPUByteSourceEmitWindow - time.Second), regionID: 10},
+		{at: now.Add(-60 * time.Second), regionID: 11},
+		{at: now.Add(-10 * time.Second), regionID: 12},
+	}
+
+	re.True(sche.shouldSkipSourceEmitWindow(scope, 1))
+	re.Len(sche.sourceEmitWindows[key], 2)
+	re.Equal([]uint64{11, 12}, sourceEmitRegionIDs(sche.sourceEmitWindows[key]))
+
+	sche.recordSourceEmit(scope, 1, 15)
+	re.Len(sche.sourceEmitWindows[key], 3)
+	re.Equal(uint64(15), sche.sourceEmitWindows[key][2].regionID)
+}
+
+func TestReadLeaderCPUByteSourceEmitWindowScopeIsolation(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
+	re.NoError(err)
+	sche := hb.(*hotScheduler)
+
+	scope := hotScheduleScopeKey{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+	key := sourceEmitWindowKey{
+		scope:      scope,
+		srcStoreID: 1,
+	}
+	now := time.Now()
+	sche.sourceEmitWindows[key] = []sourceEmitRecord{
+		{at: now.Add(-10 * time.Second), regionID: 10},
+		{at: now.Add(-20 * time.Second), regionID: 11},
+	}
+
+	readPeerScope := hotScheduleScopeKey{
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+	re.False(sche.shouldSkipSourceEmitWindow(readPeerScope, 1))
+	sche.recordSourceEmit(readPeerScope, 1, 99)
+	_, ok := sche.sourceEmitWindows[sourceEmitWindowKey{scope: readPeerScope, srcStoreID: 1}]
+	re.False(ok)
+}
+
+func TestFilterSrcStoresRejectsByReadLeaderCPUByteSourceEmitWindow(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
+	re.NoError(err)
+	sche := hb.(*hotScheduler)
+
+	newDetail := func(id uint64) *statistics.StoreLoadDetail {
+		return &statistics.StoreLoadDetail{
+			StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: core.NewStoreInfoWithLabel(id, map[string]string{})},
+			LoadPred: &statistics.StoreLoadPred{
+				Current: statistics.StoreLoad{Loads: statistics.Loads{
+					utils.ByteDim: 10,
+					utils.CPUDim:  594,
+				}},
+				Future: statistics.StoreLoad{Loads: statistics.Loads{
+					utils.ByteDim: 10,
+					utils.CPUDim:  594,
+				}},
+				Expect: statistics.StoreLoad{Loads: statistics.Loads{
+					utils.ByteDim: 100,
+					utils.CPUDim:  162,
+				}},
+			},
+			HotPeers: []*statistics.HotPeerStat{{
+				RegionID:  100,
+				StoreID:   id,
+				HotDegree: 10,
+				Loads: []float64{
+					utils.ByteDim: 10,
+					utils.CPUDim:  120,
+				},
+			}},
+		}
+	}
+
+	readLeaderSolver := &balanceSolver{
+		sche:           sche,
+		rwTy:           utils.Read,
+		opTy:           transferLeader,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+		stLoadDetail:   map[uint64]*statistics.StoreLoadDetail{1: newDetail(1)},
+	}
+	readLeaderSolver.rank = initRankV2(readLeaderSolver)
+	scope := readLeaderSolver.hotScheduleScopeKey()
+	key := sourceEmitWindowKey{
+		scope:      scope,
+		srcStoreID: 1,
+	}
+	now := time.Now()
+	sche.sourceEmitWindows[key] = []sourceEmitRecord{
+		{at: now.Add(-10 * time.Second), regionID: 10},
+		{at: now.Add(-20 * time.Second), regionID: 11},
+	}
+	re.Empty(readLeaderSolver.filterSrcStores())
+
+	readPeerSolver := &balanceSolver{
+		sche:           sche,
+		rwTy:           utils.Read,
+		opTy:           movePeer,
+		resourceTy:     readPeer,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+		stLoadDetail:   map[uint64]*statistics.StoreLoadDetail{1: newDetail(1)},
+	}
+	readPeerSolver.rank = initRankV2(readPeerSolver)
+	re.Len(readPeerSolver.filterSrcStores(), 1)
+}
+
 func TestExpect(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
