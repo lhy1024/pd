@@ -46,7 +46,7 @@ const (
 	defaultStddevThreshold            = 0.1
 	defaultTopnPosition               = 10
 	readLeaderCPUByteSourceEmitWindow = 120 * time.Second
-	readLeaderCPUByteSourceEmitCap    = 4
+	readLeaderCPUByteSourceEmitCap    = 2
 )
 
 var (
@@ -86,6 +86,13 @@ type sourceEmitRecord struct {
 	regionID    uint64
 	dstStoreID  uint64
 	mainPeerCPU float64
+}
+
+type sourceEmitCPUState struct {
+	current float64
+	pending float64
+	future  float64
+	expect  float64
 }
 
 type baseHotScheduler struct {
@@ -252,7 +259,7 @@ func (s *hotScheduler) pruneSourceEmitRecords(key sourceEmitWindowKey, now time.
 	}
 }
 
-func (s *hotScheduler) shouldSkipSourceEmitWindow(scope hotScheduleScopeKey, srcStoreID uint64, srcCurrentCPU, srcExpectCPU float64) bool {
+func (s *hotScheduler) shouldSkipSourceEmitWindow(scope hotScheduleScopeKey, srcStoreID uint64, cpuState sourceEmitCPUState) bool {
 	window, cap, ok := s.sourceEmitWindowConfig(scope)
 	if !ok {
 		return false
@@ -273,8 +280,11 @@ func (s *hotScheduler) shouldSkipSourceEmitWindow(scope hotScheduleScopeKey, src
 		zap.Duration("window", window),
 		zap.Int("cap", cap),
 		zap.Int("recent-emit-count", recentCount),
-		zap.Float64("src-current-cpu", srcCurrentCPU),
-		zap.Float64("src-expect-cpu", srcExpectCPU),
+		zap.Float64("src-current-cpu", cpuState.current),
+		zap.Float64("src-pending-cpu", cpuState.pending),
+		zap.Float64("src-future-cpu", cpuState.future),
+		zap.Float64("src-expect-cpu", cpuState.expect),
+		zap.Float64("src-future-minus-expect-cpu", cpuState.future-cpuState.expect),
 		zap.String("decision", decision),
 		zap.Uint64s("recent-region-ids", sourceEmitRegionIDs(records)),
 	}
@@ -291,6 +301,7 @@ func (s *hotScheduler) recordSourceEmit(
 	dstStoreID uint64,
 	regionID uint64,
 	mainPeerCPU float64,
+	cpuState sourceEmitCPUState,
 ) {
 	window, cap, ok := s.sourceEmitWindowConfig(scope)
 	if !ok {
@@ -315,6 +326,11 @@ func (s *hotScheduler) recordSourceEmit(
 		zap.Uint64("dst-store-id", dstStoreID),
 		zap.Uint64("region-id", regionID),
 		zap.Float64("main-peer-cpu", mainPeerCPU),
+		zap.Float64("src-current-cpu", cpuState.current),
+		zap.Float64("src-pending-cpu", cpuState.pending),
+		zap.Float64("src-future-cpu", cpuState.future),
+		zap.Float64("src-expect-cpu", cpuState.expect),
+		zap.Float64("src-future-minus-expect-cpu", cpuState.future-cpuState.expect),
 		zap.Duration("window", window),
 		zap.Int("cap", cap),
 		zap.Int("recent-emit-count-before", before),

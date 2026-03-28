@@ -341,6 +341,12 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		dstStoreID,
 		bs.best.region.GetID(),
 		bs.best.mainPeerStat.GetLoad(utils.CPUDim),
+		sourceEmitCPUState{
+			current: bs.best.srcStore.LoadPred.Current.Loads[utils.CPUDim],
+			pending: bs.best.srcStore.LoadPred.Pending().Loads[utils.CPUDim],
+			future:  bs.best.srcStore.LoadPred.Future.Loads[utils.CPUDim],
+			expect:  bs.best.srcStore.LoadPred.Expect.Loads[utils.CPUDim],
+		},
 	)
 	bs.logHotOperatorSnapshot()
 	bs.logBestSolution()
@@ -664,8 +670,12 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 		if bs.sche.shouldSkipSourceEmitWindow(
 			scope,
 			id,
-			detail.LoadPred.Current.Loads[utils.CPUDim],
-			detail.LoadPred.Expect.Loads[utils.CPUDim],
+			sourceEmitCPUState{
+				current: detail.LoadPred.Current.Loads[utils.CPUDim],
+				pending: detail.LoadPred.Pending().Loads[utils.CPUDim],
+				future:  detail.LoadPred.Future.Loads[utils.CPUDim],
+				expect:  detail.LoadPred.Expect.Loads[utils.CPUDim],
+			},
 		) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-emit-window-capped-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue

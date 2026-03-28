@@ -473,19 +473,17 @@ func TestReadLeaderCPUByteSourceEmitWindow(t *testing.T) {
 	now := time.Now()
 	sche.sourceEmitWindows[key] = []sourceEmitRecord{
 		{at: now.Add(-readLeaderCPUByteSourceEmitWindow - time.Second), regionID: 10},
-		{at: now.Add(-90 * time.Second), regionID: 11},
-		{at: now.Add(-60 * time.Second), regionID: 12},
-		{at: now.Add(-30 * time.Second), regionID: 13},
-		{at: now.Add(-10 * time.Second), regionID: 14},
+		{at: now.Add(-60 * time.Second), regionID: 11},
+		{at: now.Add(-10 * time.Second), regionID: 12},
 	}
 
-	re.True(sche.shouldSkipSourceEmitWindow(scope, 1, 594, 162))
-	re.Len(sche.sourceEmitWindows[key], 4)
-	re.Equal([]uint64{11, 12, 13, 14}, sourceEmitRegionIDs(sche.sourceEmitWindows[key]))
+	re.True(sche.shouldSkipSourceEmitWindow(scope, 1, sourceEmitCPUState{current: 594, pending: 220, future: 374, expect: 162}))
+	re.Len(sche.sourceEmitWindows[key], 2)
+	re.Equal([]uint64{11, 12}, sourceEmitRegionIDs(sche.sourceEmitWindows[key]))
 
-	sche.recordSourceEmit(scope, 1, 2, 15, 88)
-	re.Len(sche.sourceEmitWindows[key], 5)
-	re.Equal(uint64(15), sche.sourceEmitWindows[key][4].regionID)
+	sche.recordSourceEmit(scope, 1, 2, 15, 88, sourceEmitCPUState{current: 594, pending: 220, future: 374, expect: 162})
+	re.Len(sche.sourceEmitWindows[key], 3)
+	re.Equal(uint64(15), sche.sourceEmitWindows[key][2].regionID)
 }
 
 func TestReadLeaderCPUByteSourceEmitWindowScopeIsolation(t *testing.T) {
@@ -510,8 +508,6 @@ func TestReadLeaderCPUByteSourceEmitWindowScopeIsolation(t *testing.T) {
 	sche.sourceEmitWindows[key] = []sourceEmitRecord{
 		{at: now.Add(-10 * time.Second), regionID: 10},
 		{at: now.Add(-20 * time.Second), regionID: 11},
-		{at: now.Add(-30 * time.Second), regionID: 12},
-		{at: now.Add(-40 * time.Second), regionID: 13},
 	}
 
 	readPeerScope := hotScheduleScopeKey{
@@ -520,8 +516,8 @@ func TestReadLeaderCPUByteSourceEmitWindowScopeIsolation(t *testing.T) {
 		firstPriority:  utils.CPUDim,
 		secondPriority: utils.ByteDim,
 	}
-	re.False(sche.shouldSkipSourceEmitWindow(readPeerScope, 1, 594, 162))
-	sche.recordSourceEmit(readPeerScope, 1, 2, 99, 33)
+	re.False(sche.shouldSkipSourceEmitWindow(readPeerScope, 1, sourceEmitCPUState{current: 594, pending: 220, future: 374, expect: 162}))
+	sche.recordSourceEmit(readPeerScope, 1, 2, 99, 33, sourceEmitCPUState{current: 594, pending: 220, future: 374, expect: 162})
 	_, ok := sche.sourceEmitWindows[sourceEmitWindowKey{scope: readPeerScope, srcStoreID: 1}]
 	re.False(ok)
 }
@@ -582,8 +578,6 @@ func TestFilterSrcStoresRejectsByReadLeaderCPUByteSourceEmitWindow(t *testing.T)
 	sche.sourceEmitWindows[key] = []sourceEmitRecord{
 		{at: now.Add(-10 * time.Second), regionID: 10},
 		{at: now.Add(-20 * time.Second), regionID: 11},
-		{at: now.Add(-30 * time.Second), regionID: 12},
-		{at: now.Add(-40 * time.Second), regionID: 13},
 	}
 	re.Empty(readLeaderSolver.filterSrcStores())
 
