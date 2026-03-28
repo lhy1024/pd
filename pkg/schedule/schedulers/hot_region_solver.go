@@ -322,7 +322,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		dstStoreID = bs.best.dstStore.GetID()
 	}
 	infl := bs.collectPendingInfluence(bs.best.mainPeerStat)
-	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.hotScheduleScopeKey()) {
+	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
 		return false
 	}
 	if isSplit {
@@ -331,23 +331,10 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	// revert peers
 	if bs.best.revertPeerStat != nil && len(bs.ops) > 1 {
 		infl := bs.collectPendingInfluence(bs.best.revertPeerStat)
-		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.hotScheduleScopeKey()) {
+		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
 			return false
 		}
 	}
-	bs.sche.recordSourceEmit(
-		bs.hotScheduleScopeKey(),
-		bs.best.srcStore.GetID(),
-		dstStoreID,
-		bs.best.region.GetID(),
-		bs.best.mainPeerStat.GetLoad(utils.CPUDim),
-		sourceEmitCPUState{
-			current: bs.best.srcStore.LoadPred.Current.Loads[utils.CPUDim],
-			pending: bs.best.srcStore.LoadPred.Pending().Loads[utils.CPUDim],
-			future:  bs.best.srcStore.LoadPred.Future.Loads[utils.CPUDim],
-			expect:  bs.best.srcStore.LoadPred.Expect.Loads[utils.CPUDim],
-		},
-	)
 	bs.logHotOperatorSnapshot()
 	bs.logBestSolution()
 	return true
@@ -436,7 +423,6 @@ type hotPeerFilterReason string
 
 const (
 	readCPUByteRejectedDecisionLogLimitPerReason                     = 5
-	readCPUByteTransferLeaderCooldownHits                            = 12
 	hotPeerFilterKept                            hotPeerFilterReason = "kept"
 	hotPeerFilterPending                         hotPeerFilterReason = "pending"
 	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
@@ -508,15 +494,6 @@ func (bs *balanceSolver) isReadCPUByte() bool {
 	}
 }
 
-func (bs *balanceSolver) hotScheduleScopeKey() hotScheduleScopeKey {
-	return hotScheduleScopeKey{
-		rwTy:           bs.rwTy,
-		resourceTy:     bs.resourceTy,
-		firstPriority:  bs.firstPriority,
-		secondPriority: bs.secondPriority,
-	}
-}
-
 func (bs *balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
 	if detail == nil || detail.LoadPred == nil {
 		return nil
@@ -531,18 +508,11 @@ func (bs *balanceSolver) shouldRejectReadCPUDst(detail *statistics.StoreLoadDeta
 	return detail.LoadPred.Future.Loads[utils.CPUDim] >= detail.LoadPred.Expect.Loads[utils.CPUDim]
 }
 
-func (bs *balanceSolver) transferLeaderCooldownHits() int {
-	if bs.isReadCPUByte() && bs.minHotDegree < readCPUByteTransferLeaderCooldownHits {
-		return readCPUByteTransferLeaderCooldownHits
-	}
-	return bs.minHotDegree
-}
-
 func (bs *balanceSolver) shouldCoolDownTransferLeader(item *statistics.HotPeerStat) bool {
 	if item == nil {
 		return false
 	}
-	return item.IsNeedCoolDownTransferLeader(bs.transferLeaderCooldownHits(), bs.rwTy)
+	return item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy)
 }
 
 func (bs *balanceSolver) logHotOperatorSnapshot() {
@@ -630,11 +600,7 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 		}
 		return bs.sche.conf.getStoreStatZombieDuration()
 	default:
-		dur := bs.sche.conf.getStoreStatZombieDuration()
-		if bs.isReadCPUByte() {
-			return 2 * dur
-		}
-		return dur
+		return bs.sche.conf.getStoreStatZombieDuration()
 	}
 }
 
@@ -644,7 +610,6 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 	ret := make(map[uint64]*statistics.StoreLoadDetail)
 	confSrcToleranceRatio := bs.sche.conf.getSrcToleranceRatio()
 	confEnableForTiFlash := bs.sche.conf.getEnableForTiFlash()
-	scope := bs.hotScheduleScopeKey()
 	for id, detail := range bs.stLoadDetail {
 		srcToleranceRatio := confSrcToleranceRatio
 		if !detail.IsTiKV() {
@@ -665,19 +630,6 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 		}
 		if !bs.checkSrcHistoryLoadsByPriorityAndTolerance(&detail.LoadPred.Current, &detail.LoadPred.Expect, srcToleranceRatio) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-history-loads-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
-			continue
-		}
-		if bs.sche.shouldSkipSourceEmitWindow(
-			scope,
-			id,
-			sourceEmitCPUState{
-				current: detail.LoadPred.Current.Loads[utils.CPUDim],
-				pending: detail.LoadPred.Pending().Loads[utils.CPUDim],
-				future:  detail.LoadPred.Future.Loads[utils.CPUDim],
-				expect:  detail.LoadPred.Expect.Loads[utils.CPUDim],
-			},
-		) {
-			hotSchedulerResultCounter.WithLabelValues("src-store-emit-window-capped-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
 

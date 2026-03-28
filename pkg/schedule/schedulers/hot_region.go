@@ -16,7 +16,6 @@ package schedulers
 
 import (
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -42,11 +41,9 @@ const (
 	splitProgressiveRank              = 5
 	minHotScheduleInterval            = time.Second
 	maxHotScheduleInterval            = 20 * time.Second
-	defaultPendingAmpFactor           = 2.0
-	defaultStddevThreshold            = 0.1
-	defaultTopnPosition               = 10
-	readLeaderCPUByteSourceEmitWindow = 120 * time.Second
-	readLeaderCPUByteSourceEmitCPUCap = 300.0
+	defaultPendingAmpFactor = 2.0
+	defaultStddevThreshold  = 0.1
+	defaultTopnPosition     = 10
 )
 
 var (
@@ -61,39 +58,6 @@ var (
 	// statisticsInterval is the interval to update statistics information.
 	statisticsInterval = time.Second
 )
-
-type hotScheduleScopeKey struct {
-	rwTy           utils.RWType
-	resourceTy     resourceType
-	firstPriority  int
-	secondPriority int
-}
-
-func (k hotScheduleScopeKey) isReadLeaderCPUByte() bool {
-	return k.rwTy == utils.Read &&
-		k.resourceTy == readLeader &&
-		k.firstPriority == utils.CPUDim &&
-		k.secondPriority == utils.ByteDim
-}
-
-type sourceEmitWindowKey struct {
-	scope      hotScheduleScopeKey
-	srcStoreID uint64
-}
-
-type sourceEmitRecord struct {
-	at          time.Time
-	regionID    uint64
-	dstStoreID  uint64
-	mainPeerCPU float64
-}
-
-type sourceEmitCPUState struct {
-	current float64
-	pending float64
-	future  float64
-	expect  float64
-}
 
 type baseHotScheduler struct {
 	*BaseScheduler
@@ -213,143 +177,8 @@ func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statis
 	}
 }
 
-func normalizeHotLoadSignature(load float64) float64 {
-	return math.Round(load*1000) / 1000
-}
-
 func (s *baseHotScheduler) randomType() resourceType {
 	return s.types[rand.Int()%len(s.types)]
-}
-
-func sourceEmitRegionIDs(records []sourceEmitRecord) []uint64 {
-	ids := make([]uint64, 0, len(records))
-	for _, record := range records {
-		ids = append(ids, record.regionID)
-	}
-	return ids
-}
-
-func sourceEmitMainPeerCPUSum(records []sourceEmitRecord) float64 {
-	sum := 0.0
-	for _, record := range records {
-		sum += record.mainPeerCPU
-	}
-	return normalizeHotLoadSignature(sum)
-}
-
-func (s *hotScheduler) sourceEmitWindowConfig(scope hotScheduleScopeKey) (time.Duration, float64, bool) {
-	if !scope.isReadLeaderCPUByte() {
-		return 0, 0, false
-	}
-	return readLeaderCPUByteSourceEmitWindow, readLeaderCPUByteSourceEmitCPUCap, true
-}
-
-func (s *hotScheduler) pruneSourceEmitRecords(key sourceEmitWindowKey, now time.Time, window time.Duration) []sourceEmitRecord {
-	records := s.sourceEmitWindows[key]
-	if len(records) == 0 {
-		return nil
-	}
-	cutoff := now.Add(-window)
-	keepFrom := 0
-	for keepFrom < len(records) && records[keepFrom].at.Before(cutoff) {
-		keepFrom++
-	}
-	switch {
-	case keepFrom == 0:
-		return records
-	case keepFrom >= len(records):
-		delete(s.sourceEmitWindows, key)
-		return nil
-	default:
-		records = append([]sourceEmitRecord(nil), records[keepFrom:]...)
-		s.sourceEmitWindows[key] = records
-		return records
-	}
-}
-
-func (s *hotScheduler) shouldSkipSourceEmitWindow(scope hotScheduleScopeKey, srcStoreID uint64, cpuState sourceEmitCPUState) bool {
-	window, cap, ok := s.sourceEmitWindowConfig(scope)
-	if !ok {
-		return false
-	}
-	now := time.Now()
-	key := sourceEmitWindowKey{
-		scope:      scope,
-		srcStoreID: srcStoreID,
-	}
-	records := s.pruneSourceEmitRecords(key, now, window)
-	recentCount := len(records)
-	recentMainPeerCPUSum := sourceEmitMainPeerCPUSum(records)
-	decision := "allow"
-	if recentMainPeerCPUSum >= cap {
-		decision = "skip"
-	}
-	fields := []zap.Field{
-		zap.Uint64("src-store-id", srcStoreID),
-		zap.Duration("window", window),
-		zap.Float64("main-peer-cpu-cap", cap),
-		zap.Int("recent-emit-count", recentCount),
-		zap.Float64("recent-main-peer-cpu-sum", recentMainPeerCPUSum),
-		zap.Float64("src-current-cpu", cpuState.current),
-		zap.Float64("src-pending-cpu", cpuState.pending),
-		zap.Float64("src-future-cpu", cpuState.future),
-		zap.Float64("src-expect-cpu", cpuState.expect),
-		zap.Float64("src-future-minus-expect-cpu", cpuState.future-cpuState.expect),
-		zap.String("decision", decision),
-		zap.Uint64s("recent-region-ids", sourceEmitRegionIDs(records)),
-	}
-	if recentCount > 0 {
-		fields = append(fields, zap.Float64("oldest-emit-age-sec", now.Sub(records[0].at).Seconds()))
-	}
-	log.Info("read cpu source emit cap check", fields...)
-	return recentMainPeerCPUSum >= cap
-}
-
-func (s *hotScheduler) recordSourceEmit(
-	scope hotScheduleScopeKey,
-	srcStoreID uint64,
-	dstStoreID uint64,
-	regionID uint64,
-	mainPeerCPU float64,
-	cpuState sourceEmitCPUState,
-) {
-	window, cap, ok := s.sourceEmitWindowConfig(scope)
-	if !ok {
-		return
-	}
-	now := time.Now()
-	key := sourceEmitWindowKey{
-		scope:      scope,
-		srcStoreID: srcStoreID,
-	}
-	records := s.pruneSourceEmitRecords(key, now, window)
-	before := len(records)
-	beforeSum := sourceEmitMainPeerCPUSum(records)
-	records = append(records, sourceEmitRecord{
-		at:          now,
-		regionID:    regionID,
-		dstStoreID:  dstStoreID,
-		mainPeerCPU: mainPeerCPU,
-	})
-	s.sourceEmitWindows[key] = records
-	log.Info("read cpu source emit record",
-		zap.Uint64("src-store-id", srcStoreID),
-		zap.Uint64("dst-store-id", dstStoreID),
-		zap.Uint64("region-id", regionID),
-		zap.Float64("main-peer-cpu", mainPeerCPU),
-		zap.Float64("src-current-cpu", cpuState.current),
-		zap.Float64("src-pending-cpu", cpuState.pending),
-		zap.Float64("src-future-cpu", cpuState.future),
-		zap.Float64("src-expect-cpu", cpuState.expect),
-		zap.Float64("src-future-minus-expect-cpu", cpuState.future-cpuState.expect),
-		zap.Duration("window", window),
-		zap.Float64("main-peer-cpu-cap", cap),
-		zap.Int("recent-emit-count-before", before),
-		zap.Int("recent-emit-count-after", len(records)),
-		zap.Float64("recent-main-peer-cpu-sum-before", beforeSum),
-		zap.Float64("recent-main-peer-cpu-sum-after", sourceEmitMainPeerCPUSum(records)),
-		zap.Uint64s("recent-region-ids", sourceEmitRegionIDs(records)),
-	)
 }
 
 type hotScheduler struct {
@@ -358,16 +187,14 @@ type hotScheduler struct {
 	// config of hot scheduler
 	conf                *hotRegionSchedulerConfig
 	searchRevertRegions [resourceTypeLen]bool // Whether to search revert regions.
-	sourceEmitWindows   map[sourceEmitWindowKey][]sourceEmitRecord
 }
 
 func newHotScheduler(opController *operator.Controller, conf *hotRegionSchedulerConfig) *hotScheduler {
 	base := newBaseHotScheduler(opController, conf.getHistorySampleDuration(),
 		conf.getHistorySampleInterval(), conf)
 	ret := &hotScheduler{
-		baseHotScheduler:  base,
-		conf:              conf,
-		sourceEmitWindows: make(map[sourceEmitWindowKey][]sourceEmitRecord),
+		baseHotScheduler: base,
+		conf:             conf,
 	}
 	for ty := resourceType(0); ty < resourceTypeLen; ty++ {
 		ret.searchRevertRegions[ty] = false
@@ -483,7 +310,6 @@ func (s *hotScheduler) tryAddPendingInfluence(
 	dstStore uint64,
 	infl statistics.Influence,
 	maxZombieDur time.Duration,
-	scope hotScheduleScopeKey,
 ) bool {
 	regionID := op.RegionID()
 	_, ok := s.regionPendings[regionID]
@@ -492,7 +318,7 @@ func (s *hotScheduler) tryAddPendingInfluence(
 		return false
 	}
 
-	influence := newPendingInfluence(op, srcStore, dstStore, infl, maxZombieDur, scope)
+	influence := newPendingInfluence(op, srcStore, dstStore, infl, maxZombieDur)
 	s.regionPendings[regionID] = influence
 
 	utils.ForeachRegionStats(func(rwTy utils.RWType, dim int, kind utils.RegionStatKind) {
