@@ -46,7 +46,7 @@ const (
 	defaultStddevThreshold            = 0.1
 	defaultTopnPosition               = 10
 	readLeaderCPUByteSourceEmitWindow = 120 * time.Second
-	readLeaderCPUByteSourceEmitCap    = 2
+	readLeaderCPUByteSourceEmitCPUCap = 300.0
 )
 
 var (
@@ -229,11 +229,19 @@ func sourceEmitRegionIDs(records []sourceEmitRecord) []uint64 {
 	return ids
 }
 
-func (s *hotScheduler) sourceEmitWindowConfig(scope hotScheduleScopeKey) (time.Duration, int, bool) {
+func sourceEmitMainPeerCPUSum(records []sourceEmitRecord) float64 {
+	sum := 0.0
+	for _, record := range records {
+		sum += record.mainPeerCPU
+	}
+	return normalizeHotLoadSignature(sum)
+}
+
+func (s *hotScheduler) sourceEmitWindowConfig(scope hotScheduleScopeKey) (time.Duration, float64, bool) {
 	if !scope.isReadLeaderCPUByte() {
 		return 0, 0, false
 	}
-	return readLeaderCPUByteSourceEmitWindow, readLeaderCPUByteSourceEmitCap, true
+	return readLeaderCPUByteSourceEmitWindow, readLeaderCPUByteSourceEmitCPUCap, true
 }
 
 func (s *hotScheduler) pruneSourceEmitRecords(key sourceEmitWindowKey, now time.Time, window time.Duration) []sourceEmitRecord {
@@ -271,15 +279,17 @@ func (s *hotScheduler) shouldSkipSourceEmitWindow(scope hotScheduleScopeKey, src
 	}
 	records := s.pruneSourceEmitRecords(key, now, window)
 	recentCount := len(records)
+	recentMainPeerCPUSum := sourceEmitMainPeerCPUSum(records)
 	decision := "allow"
-	if recentCount >= cap {
+	if recentMainPeerCPUSum >= cap {
 		decision = "skip"
 	}
 	fields := []zap.Field{
 		zap.Uint64("src-store-id", srcStoreID),
 		zap.Duration("window", window),
-		zap.Int("cap", cap),
+		zap.Float64("main-peer-cpu-cap", cap),
 		zap.Int("recent-emit-count", recentCount),
+		zap.Float64("recent-main-peer-cpu-sum", recentMainPeerCPUSum),
 		zap.Float64("src-current-cpu", cpuState.current),
 		zap.Float64("src-pending-cpu", cpuState.pending),
 		zap.Float64("src-future-cpu", cpuState.future),
@@ -292,7 +302,7 @@ func (s *hotScheduler) shouldSkipSourceEmitWindow(scope hotScheduleScopeKey, src
 		fields = append(fields, zap.Float64("oldest-emit-age-sec", now.Sub(records[0].at).Seconds()))
 	}
 	log.Info("read cpu source emit cap check", fields...)
-	return recentCount >= cap
+	return recentMainPeerCPUSum >= cap
 }
 
 func (s *hotScheduler) recordSourceEmit(
@@ -314,6 +324,7 @@ func (s *hotScheduler) recordSourceEmit(
 	}
 	records := s.pruneSourceEmitRecords(key, now, window)
 	before := len(records)
+	beforeSum := sourceEmitMainPeerCPUSum(records)
 	records = append(records, sourceEmitRecord{
 		at:          now,
 		regionID:    regionID,
@@ -332,9 +343,11 @@ func (s *hotScheduler) recordSourceEmit(
 		zap.Float64("src-expect-cpu", cpuState.expect),
 		zap.Float64("src-future-minus-expect-cpu", cpuState.future-cpuState.expect),
 		zap.Duration("window", window),
-		zap.Int("cap", cap),
+		zap.Float64("main-peer-cpu-cap", cap),
 		zap.Int("recent-emit-count-before", before),
 		zap.Int("recent-emit-count-after", len(records)),
+		zap.Float64("recent-main-peer-cpu-sum-before", beforeSum),
+		zap.Float64("recent-main-peer-cpu-sum-after", sourceEmitMainPeerCPUSum(records)),
 		zap.Uint64s("recent-region-ids", sourceEmitRegionIDs(records)),
 	)
 }

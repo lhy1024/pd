@@ -472,18 +472,47 @@ func TestReadLeaderCPUByteSourceEmitWindow(t *testing.T) {
 	}
 	now := time.Now()
 	sche.sourceEmitWindows[key] = []sourceEmitRecord{
-		{at: now.Add(-readLeaderCPUByteSourceEmitWindow - time.Second), regionID: 10},
-		{at: now.Add(-60 * time.Second), regionID: 11},
-		{at: now.Add(-10 * time.Second), regionID: 12},
+		{at: now.Add(-readLeaderCPUByteSourceEmitWindow - time.Second), regionID: 10, mainPeerCPU: 500},
+		{at: now.Add(-60 * time.Second), regionID: 11, mainPeerCPU: 190},
+		{at: now.Add(-10 * time.Second), regionID: 12, mainPeerCPU: 120},
 	}
 
 	re.True(sche.shouldSkipSourceEmitWindow(scope, 1, sourceEmitCPUState{current: 594, pending: 220, future: 374, expect: 162}))
 	re.Len(sche.sourceEmitWindows[key], 2)
 	re.Equal([]uint64{11, 12}, sourceEmitRegionIDs(sche.sourceEmitWindows[key]))
+	re.Equal(310.0, sourceEmitMainPeerCPUSum(sche.sourceEmitWindows[key]))
 
 	sche.recordSourceEmit(scope, 1, 2, 15, 88, sourceEmitCPUState{current: 594, pending: 220, future: 374, expect: 162})
 	re.Len(sche.sourceEmitWindows[key], 3)
 	re.Equal(uint64(15), sche.sourceEmitWindows[key][2].regionID)
+	re.Equal(398.0, sourceEmitMainPeerCPUSum(sche.sourceEmitWindows[key]))
+}
+
+func TestReadLeaderCPUByteSourceEmitWindowIgnoresLowMainPeerCPUSum(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
+	re.NoError(err)
+	sche := hb.(*hotScheduler)
+	scope := hotScheduleScopeKey{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+	key := sourceEmitWindowKey{
+		scope:      scope,
+		srcStoreID: 1,
+	}
+	now := time.Now()
+	sche.sourceEmitWindows[key] = []sourceEmitRecord{
+		{at: now.Add(-60 * time.Second), regionID: 11, mainPeerCPU: 120},
+		{at: now.Add(-10 * time.Second), regionID: 12, mainPeerCPU: 100},
+	}
+
+	re.False(sche.shouldSkipSourceEmitWindow(scope, 1, sourceEmitCPUState{current: 594, pending: 220, future: 374, expect: 162}))
+	re.Equal(220.0, sourceEmitMainPeerCPUSum(sche.sourceEmitWindows[key]))
 }
 
 func TestReadLeaderCPUByteSourceEmitWindowScopeIsolation(t *testing.T) {
@@ -506,8 +535,8 @@ func TestReadLeaderCPUByteSourceEmitWindowScopeIsolation(t *testing.T) {
 	}
 	now := time.Now()
 	sche.sourceEmitWindows[key] = []sourceEmitRecord{
-		{at: now.Add(-10 * time.Second), regionID: 10},
-		{at: now.Add(-20 * time.Second), regionID: 11},
+		{at: now.Add(-10 * time.Second), regionID: 10, mainPeerCPU: 40},
+		{at: now.Add(-20 * time.Second), regionID: 11, mainPeerCPU: 30},
 	}
 
 	readPeerScope := hotScheduleScopeKey{
@@ -576,8 +605,8 @@ func TestFilterSrcStoresRejectsByReadLeaderCPUByteSourceEmitWindow(t *testing.T)
 	}
 	now := time.Now()
 	sche.sourceEmitWindows[key] = []sourceEmitRecord{
-		{at: now.Add(-10 * time.Second), regionID: 10},
-		{at: now.Add(-20 * time.Second), regionID: 11},
+		{at: now.Add(-10 * time.Second), regionID: 10, mainPeerCPU: 170},
+		{at: now.Add(-20 * time.Second), regionID: 11, mainPeerCPU: 150},
 	}
 	re.Empty(readLeaderSolver.filterSrcStores())
 
