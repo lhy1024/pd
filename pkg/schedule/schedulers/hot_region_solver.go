@@ -600,7 +600,11 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 		}
 		return bs.sche.conf.getStoreStatZombieDuration()
 	default:
-		return bs.sche.conf.getStoreStatZombieDuration()
+		dur := bs.sche.conf.getStoreStatZombieDuration()
+		if bs.isReadCPUByte() {
+			return 2 * dur
+		}
+		return dur
 	}
 }
 
