@@ -370,6 +370,27 @@ func TestMaxZombieDuration(t *testing.T) {
 	}
 }
 
+func TestReadCPUTransferLeaderCooldownHits(t *testing.T) {
+	re := require.New(t)
+	bs := &balanceSolver{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+		minHotDegree:   3,
+	}
+	re.Equal(readCPUByteTransferLeaderCooldownHits, bs.transferLeaderCooldownHits())
+
+	other := &balanceSolver{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.QueryDim,
+		secondPriority: utils.ByteDim,
+		minHotDegree:   3,
+	}
+	re.Equal(3, other.transferLeaderCooldownHits())
+}
+
 func TestReadCPUDstPrefilter(t *testing.T) {
 	re := require.New(t)
 

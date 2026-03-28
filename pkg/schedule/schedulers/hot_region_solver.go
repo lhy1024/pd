@@ -423,6 +423,7 @@ type hotPeerFilterReason string
 
 const (
 	readCPUByteRejectedDecisionLogLimitPerReason                     = 5
+	readCPUByteTransferLeaderCooldownHits                            = 12
 	hotPeerFilterKept                            hotPeerFilterReason = "kept"
 	hotPeerFilterPending                         hotPeerFilterReason = "pending"
 	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
@@ -508,11 +509,18 @@ func (bs *balanceSolver) shouldRejectReadCPUDst(detail *statistics.StoreLoadDeta
 	return detail.LoadPred.Future.Loads[utils.CPUDim] >= detail.LoadPred.Expect.Loads[utils.CPUDim]
 }
 
+func (bs *balanceSolver) transferLeaderCooldownHits() int {
+	if bs.isReadCPUByte() && bs.minHotDegree < readCPUByteTransferLeaderCooldownHits {
+		return readCPUByteTransferLeaderCooldownHits
+	}
+	return bs.minHotDegree
+}
+
 func (bs *balanceSolver) shouldCoolDownTransferLeader(item *statistics.HotPeerStat) bool {
 	if item == nil {
 		return false
 	}
-	return item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy)
+	return item.IsNeedCoolDownTransferLeader(bs.transferLeaderCooldownHits(), bs.rwTy)
 }
 
 func (bs *balanceSolver) logHotOperatorSnapshot() {
