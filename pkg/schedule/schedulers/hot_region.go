@@ -37,14 +37,16 @@ import (
 )
 
 const (
-	splitHotReadBuckets     = "split-hot-read-region"
-	splitHotWriteBuckets    = "split-hot-write-region"
-	splitProgressiveRank    = 5
-	minHotScheduleInterval  = time.Second
-	maxHotScheduleInterval  = 20 * time.Second
-	defaultPendingAmpFactor = 2.0
-	defaultStddevThreshold  = 0.1
-	defaultTopnPosition     = 10
+	splitHotReadBuckets               = "split-hot-read-region"
+	splitHotWriteBuckets              = "split-hot-write-region"
+	splitProgressiveRank              = 5
+	minHotScheduleInterval            = time.Second
+	maxHotScheduleInterval            = 20 * time.Second
+	defaultPendingAmpFactor           = 2.0
+	defaultStddevThreshold            = 0.1
+	defaultTopnPosition               = 10
+	readLeaderCPUByteSourceEmitWindow = 120 * time.Second
+	readLeaderCPUByteSourceEmitCap    = 4
 )
 
 var (
@@ -65,6 +67,25 @@ type hotScheduleScopeKey struct {
 	resourceTy     resourceType
 	firstPriority  int
 	secondPriority int
+}
+
+func (k hotScheduleScopeKey) isReadLeaderCPUByte() bool {
+	return k.rwTy == utils.Read &&
+		k.resourceTy == readLeader &&
+		k.firstPriority == utils.CPUDim &&
+		k.secondPriority == utils.ByteDim
+}
+
+type sourceEmitWindowKey struct {
+	scope      hotScheduleScopeKey
+	srcStoreID uint64
+}
+
+type sourceEmitRecord struct {
+	at          time.Time
+	regionID    uint64
+	dstStoreID  uint64
+	mainPeerCPU float64
 }
 
 type baseHotScheduler struct {
@@ -193,20 +214,131 @@ func (s *baseHotScheduler) randomType() resourceType {
 	return s.types[rand.Int()%len(s.types)]
 }
 
+func sourceEmitRegionIDs(records []sourceEmitRecord) []uint64 {
+	ids := make([]uint64, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.regionID)
+	}
+	return ids
+}
+
+func (s *hotScheduler) sourceEmitWindowConfig(scope hotScheduleScopeKey) (time.Duration, int, bool) {
+	if !scope.isReadLeaderCPUByte() {
+		return 0, 0, false
+	}
+	return readLeaderCPUByteSourceEmitWindow, readLeaderCPUByteSourceEmitCap, true
+}
+
+func (s *hotScheduler) pruneSourceEmitRecords(key sourceEmitWindowKey, now time.Time, window time.Duration) []sourceEmitRecord {
+	records := s.sourceEmitWindows[key]
+	if len(records) == 0 {
+		return nil
+	}
+	cutoff := now.Add(-window)
+	keepFrom := 0
+	for keepFrom < len(records) && records[keepFrom].at.Before(cutoff) {
+		keepFrom++
+	}
+	switch {
+	case keepFrom == 0:
+		return records
+	case keepFrom >= len(records):
+		delete(s.sourceEmitWindows, key)
+		return nil
+	default:
+		records = append([]sourceEmitRecord(nil), records[keepFrom:]...)
+		s.sourceEmitWindows[key] = records
+		return records
+	}
+}
+
+func (s *hotScheduler) shouldSkipSourceEmitWindow(scope hotScheduleScopeKey, srcStoreID uint64, srcCurrentCPU, srcExpectCPU float64) bool {
+	window, cap, ok := s.sourceEmitWindowConfig(scope)
+	if !ok {
+		return false
+	}
+	now := time.Now()
+	key := sourceEmitWindowKey{
+		scope:      scope,
+		srcStoreID: srcStoreID,
+	}
+	records := s.pruneSourceEmitRecords(key, now, window)
+	recentCount := len(records)
+	decision := "allow"
+	if recentCount >= cap {
+		decision = "skip"
+	}
+	fields := []zap.Field{
+		zap.Uint64("src-store-id", srcStoreID),
+		zap.Duration("window", window),
+		zap.Int("cap", cap),
+		zap.Int("recent-emit-count", recentCount),
+		zap.Float64("src-current-cpu", srcCurrentCPU),
+		zap.Float64("src-expect-cpu", srcExpectCPU),
+		zap.String("decision", decision),
+		zap.Uint64s("recent-region-ids", sourceEmitRegionIDs(records)),
+	}
+	if recentCount > 0 {
+		fields = append(fields, zap.Float64("oldest-emit-age-sec", now.Sub(records[0].at).Seconds()))
+	}
+	log.Info("read cpu source emit cap check", fields...)
+	return recentCount >= cap
+}
+
+func (s *hotScheduler) recordSourceEmit(
+	scope hotScheduleScopeKey,
+	srcStoreID uint64,
+	dstStoreID uint64,
+	regionID uint64,
+	mainPeerCPU float64,
+) {
+	window, cap, ok := s.sourceEmitWindowConfig(scope)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	key := sourceEmitWindowKey{
+		scope:      scope,
+		srcStoreID: srcStoreID,
+	}
+	records := s.pruneSourceEmitRecords(key, now, window)
+	before := len(records)
+	records = append(records, sourceEmitRecord{
+		at:          now,
+		regionID:    regionID,
+		dstStoreID:  dstStoreID,
+		mainPeerCPU: mainPeerCPU,
+	})
+	s.sourceEmitWindows[key] = records
+	log.Info("read cpu source emit record",
+		zap.Uint64("src-store-id", srcStoreID),
+		zap.Uint64("dst-store-id", dstStoreID),
+		zap.Uint64("region-id", regionID),
+		zap.Float64("main-peer-cpu", mainPeerCPU),
+		zap.Duration("window", window),
+		zap.Int("cap", cap),
+		zap.Int("recent-emit-count-before", before),
+		zap.Int("recent-emit-count-after", len(records)),
+		zap.Uint64s("recent-region-ids", sourceEmitRegionIDs(records)),
+	)
+}
+
 type hotScheduler struct {
 	*baseHotScheduler
 	syncutil.RWMutex
 	// config of hot scheduler
 	conf                *hotRegionSchedulerConfig
 	searchRevertRegions [resourceTypeLen]bool // Whether to search revert regions.
+	sourceEmitWindows   map[sourceEmitWindowKey][]sourceEmitRecord
 }
 
 func newHotScheduler(opController *operator.Controller, conf *hotRegionSchedulerConfig) *hotScheduler {
 	base := newBaseHotScheduler(opController, conf.getHistorySampleDuration(),
 		conf.getHistorySampleInterval(), conf)
 	ret := &hotScheduler{
-		baseHotScheduler: base,
-		conf:             conf,
+		baseHotScheduler:  base,
+		conf:              conf,
+		sourceEmitWindows: make(map[sourceEmitWindowKey][]sourceEmitRecord),
 	}
 	for ty := resourceType(0); ty < resourceTypeLen; ty++ {
 		ret.searchRevertRegions[ty] = false

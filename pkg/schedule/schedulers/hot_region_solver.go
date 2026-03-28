@@ -335,6 +335,13 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 			return false
 		}
 	}
+	bs.sche.recordSourceEmit(
+		bs.hotScheduleScopeKey(),
+		bs.best.srcStore.GetID(),
+		dstStoreID,
+		bs.best.region.GetID(),
+		bs.best.mainPeerStat.GetLoad(utils.CPUDim),
+	)
 	bs.logHotOperatorSnapshot()
 	bs.logBestSolution()
 	return true
@@ -631,6 +638,7 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 	ret := make(map[uint64]*statistics.StoreLoadDetail)
 	confSrcToleranceRatio := bs.sche.conf.getSrcToleranceRatio()
 	confEnableForTiFlash := bs.sche.conf.getEnableForTiFlash()
+	scope := bs.hotScheduleScopeKey()
 	for id, detail := range bs.stLoadDetail {
 		srcToleranceRatio := confSrcToleranceRatio
 		if !detail.IsTiKV() {
@@ -651,6 +659,15 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 		}
 		if !bs.checkSrcHistoryLoadsByPriorityAndTolerance(&detail.LoadPred.Current, &detail.LoadPred.Expect, srcToleranceRatio) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-history-loads-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+			continue
+		}
+		if bs.sche.shouldSkipSourceEmitWindow(
+			scope,
+			id,
+			detail.LoadPred.Current.Loads[utils.CPUDim],
+			detail.LoadPred.Expect.Loads[utils.CPUDim],
+		) {
+			hotSchedulerResultCounter.WithLabelValues("src-store-emit-window-capped-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
 
