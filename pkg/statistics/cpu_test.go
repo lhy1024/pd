@@ -29,16 +29,18 @@ func TestStoreReadCPUUsage(t *testing.T) {
 		{Key: "grpc-server-0", Value: 20},
 		{Key: "other", Value: 30},
 	}
-	re.Equal(80.0, StoreReadCPUUsage(cpuUsages))
+	re.Equal(90.0, StoreReadCPUUsage(cpuUsages, 5, 10))
+	re.Equal(80.0, StoreReadCPUUsage(cpuUsages, 0, 10))
+	re.Equal(uint64(20), StoreGRPCCPUUsage(cpuUsages))
 }
 
 func TestRegionReadCPUUsage(t *testing.T) {
 	re := require.New(t)
 	peerStat := &pdpb.PeerStat{}
-	re.Equal(0.0, RegionReadCPUUsage(peerStat))
+	re.Equal(10.0, RegionReadCPUUsage(peerStat, 20, 5, 10))
 
 	cpuStats := &pdpb.CPUStats{}
 	cpuStats.UnifiedRead = 80
 	peerStat.CpuStats = cpuStats
-	re.Equal(80.0, RegionReadCPUUsage(peerStat))
+	re.Equal(90.0, RegionReadCPUUsage(peerStat, 20, 5, 10))
 }
