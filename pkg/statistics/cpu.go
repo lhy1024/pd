@@ -21,6 +21,7 @@ import (
 )
 
 const (
+	grpcServerThreadPrefix = "grpc-server"
 	// unifiedReadPoolThreadPrefix matches TiKV's unified-read thread prefix:
 	// https://github.com/tikv/tikv/blob/master/components/tikv_util/src/thread_name_prefix.rs#L60
 	unifiedReadPoolThreadPrefix = "unified-read"
@@ -41,20 +42,38 @@ func storeUnifiedReadCPUUsage(cpuUsages []*pdpb.RecordPair) uint64 {
 	return sumCPUUsageByPrefix(cpuUsages, unifiedReadPoolThreadPrefix)
 }
 
-// StoreReadCPUUsage returns the store-level read CPU usage derived from unified-read threads.
-func StoreReadCPUUsage(cpuUsages []*pdpb.RecordPair) float64 {
-	return float64(storeUnifiedReadCPUUsage(cpuUsages))
+// StoreGRPCCPUUsage returns the store-level gRPC CPU usage derived from gRPC server threads.
+func StoreGRPCCPUUsage(cpuUsages []*pdpb.RecordPair) uint64 {
+	return sumCPUUsageByPrefix(cpuUsages, grpcServerThreadPrefix)
 }
 
-// RegionReadCPUUsage returns the region-level read CPU usage based on unified-read CPU.
-// If cpu_stats is missing, return 0.
-func RegionReadCPUUsage(peerStat *pdpb.PeerStat) float64 {
+// StoreReadCPUUsage returns the store-level read CPU usage derived from unified-read and gRPC threads.
+func StoreReadCPUUsage(cpuUsages []*pdpb.RecordPair, readQuery, totalQuery uint64) float64 {
+	unifiedReadCPU := float64(storeUnifiedReadCPUUsage(cpuUsages))
+	if totalQuery == 0 || readQuery == 0 {
+		return unifiedReadCPU
+	}
+	grpcCPU := float64(StoreGRPCCPUUsage(cpuUsages))
+	return unifiedReadCPU + grpcCPU*float64(readQuery)/float64(totalQuery)
+}
+
+// RegionReadCPUUsage returns the region-level read CPU usage based on unified-read CPU
+// and the store's gRPC CPU apportioned by read query ratio. If cpu_stats is missing,
+// return only the apportioned gRPC part or 0 when the store has no read queries.
+func RegionReadCPUUsage(peerStat *pdpb.PeerStat, storeGRPCCPU, readQuery, totalQuery uint64) float64 {
+	regionCPU := 0.0
 	if peerStat == nil {
-		return 0
+		if totalQuery == 0 || readQuery == 0 {
+			return 0
+		}
+		return float64(storeGRPCCPU) * float64(readQuery) / float64(totalQuery)
 	}
 	cpuStats := peerStat.GetCpuStats()
-	if cpuStats == nil {
-		return 0
+	if cpuStats != nil {
+		regionCPU = float64(cpuStats.GetUnifiedRead())
 	}
-	return float64(cpuStats.GetUnifiedRead())
+	if totalQuery == 0 || readQuery == 0 {
+		return regionCPU
+	}
+	return regionCPU + float64(storeGRPCCPU)*float64(readQuery)/float64(totalQuery)
 }
