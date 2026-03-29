@@ -370,6 +370,103 @@ func TestMaxZombieDuration(t *testing.T) {
 	}
 }
 
+func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigSliceDecoder(types.BalanceHotRegionScheduler, nil))
+	re.NoError(err)
+
+	newDetail := func(id uint64, currentCPU float64) *statistics.StoreLoadDetail {
+		return &statistics.StoreLoadDetail{
+			StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: core.NewStoreInfoWithLabel(id, map[string]string{})},
+			LoadPred: &statistics.StoreLoadPred{
+				Current: statistics.StoreLoad{Loads: statistics.Loads{0, 0, 0, currentCPU}},
+			},
+		}
+	}
+	newPeer := func(cpu float64) *statistics.HotPeerStat {
+		return &statistics.HotPeerStat{Loads: []float64{0, 0, 0, cpu}}
+	}
+
+	baseZombieDur := hb.(*hotScheduler).conf.getStoreStatZombieDuration()
+	testCases := []struct {
+		name           string
+		firstPriority  int
+		secondPriority int
+		sourceCPU      float64
+		peerCPU        float64
+		expectedDur    time.Duration
+		expectedShare  float64
+		expectedBucket string
+	}{
+		{
+			name:           "heavy peer keeps three minute zombie",
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.ByteDim,
+			sourceCPU:      1000,
+			peerCPU:        298,
+			expectedDur:    readCPUByteHeavyZombieDuration,
+			expectedShare:  0.298,
+			expectedBucket: "heavy",
+		},
+		{
+			name:           "medium peer keeps two minute zombie",
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.ByteDim,
+			sourceCPU:      1000,
+			peerCPU:        150,
+			expectedDur:    readCPUByteMediumZombieDuration,
+			expectedShare:  0.15,
+			expectedBucket: "medium",
+		},
+		{
+			name:           "light peer keeps one minute zombie",
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.ByteDim,
+			sourceCPU:      1000,
+			peerCPU:        90,
+			expectedDur:    readCPUByteLightZombieDuration,
+			expectedShare:  0.09,
+			expectedBucket: "light",
+		},
+		{
+			name:           "non cpu-byte path falls back to base zombie",
+			firstPriority:  utils.QueryDim,
+			secondPriority: utils.ByteDim,
+			sourceCPU:      1000,
+			peerCPU:        298,
+			expectedDur:    baseZombieDur,
+			expectedShare:  0,
+			expectedBucket: "base",
+		},
+		{
+			name:           "zero source cpu falls back to base zombie",
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.ByteDim,
+			sourceCPU:      0,
+			peerCPU:        298,
+			expectedDur:    baseZombieDur,
+			expectedShare:  0,
+			expectedBucket: "base",
+		},
+	}
+
+	for _, testCase := range testCases {
+		bs := &balanceSolver{
+			sche:           hb.(*hotScheduler),
+			rwTy:           utils.Read,
+			resourceTy:     readPeer,
+			firstPriority:  testCase.firstPriority,
+			secondPriority: testCase.secondPriority,
+		}
+		gotDur, gotShare, gotBucket := bs.calcPendingMaxZombieDurWithBucket(newPeer(testCase.peerCPU), newDetail(1, testCase.sourceCPU))
+		re.Equal(testCase.expectedDur, gotDur, testCase.name)
+		re.InDelta(testCase.expectedShare, gotShare, 1e-9, testCase.name)
+		re.Equal(testCase.expectedBucket, gotBucket, testCase.name)
+	}
+}
+
 func TestReadCPUDstPrefilter(t *testing.T) {
 	re := require.New(t)
 

@@ -302,8 +302,6 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 			return false
 		}
 	}
-	maxZombieDur := bs.calcMaxZombieDur()
-
 	// TODO: Process operators atomically.
 	// main peer
 
@@ -321,6 +319,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		srcStoreIDs = append(srcStoreIDs, bs.best.srcStore.GetID())
 		dstStoreID = bs.best.dstStore.GetID()
 	}
+	maxZombieDur := bs.calcPendingMaxZombieDur(bs.best.mainPeerStat, bs.best.srcStore)
 	infl := bs.collectPendingInfluence(bs.best.mainPeerStat)
 	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
 		return false
@@ -330,8 +329,9 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	}
 	// revert peers
 	if bs.best.revertPeerStat != nil && len(bs.ops) > 1 {
+		revertZombieDur := bs.calcPendingMaxZombieDur(bs.best.revertPeerStat, bs.best.dstStore)
 		infl := bs.collectPendingInfluence(bs.best.revertPeerStat)
-		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
+		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, revertZombieDur) {
 			return false
 		}
 	}
@@ -423,6 +423,11 @@ type hotPeerFilterReason string
 
 const (
 	readCPUByteRejectedDecisionLogLimitPerReason                     = 5
+	readCPUByteLightZombieDuration                                   = time.Minute
+	readCPUByteMediumZombieDuration                                  = 2 * time.Minute
+	readCPUByteHeavyZombieDuration                                   = 3 * time.Minute
+	readCPUByteMediumZombieShare                                     = 0.10
+	readCPUByteHeavyZombieShare                                      = 0.25
 	hotPeerFilterKept                            hotPeerFilterReason = "kept"
 	hotPeerFilterPending                         hotPeerFilterReason = "pending"
 	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
@@ -524,6 +529,7 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 	dstID := bs.best.dstStore.GetID()
 	srcSummary := bs.best.srcStore.ToHotPeersStat()
 	dstSummary := bs.best.dstStore.ToHotPeersStat()
+	maxZombieDur, mainPeerCPUShare, zombieBucket := bs.calcPendingMaxZombieDurWithBucket(bs.best.mainPeerStat, bs.best.srcStore)
 	fields := []zap.Field{
 		zap.Stringer("rw-type", bs.rwTy),
 		zap.Stringer("op-type", bs.opTy),
@@ -535,10 +541,20 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 		zap.Uint64("dst-store", dstID),
 		zap.Uint64("region-id", bs.best.region.GetID()),
 		zap.Bool("has-revert-region", bs.best.revertRegion != nil),
-		zap.Duration("max-zombie-dur", bs.calcMaxZombieDur()),
+		zap.Duration("max-zombie-dur", maxZombieDur),
+		zap.Float64("main-peer-cpu-share", mainPeerCPUShare),
+		zap.String("main-peer-zombie-bucket", zombieBucket),
 	}
 	if bs.best.revertRegion != nil {
 		fields = append(fields, zap.Uint64("revert-region-id", bs.best.revertRegion.GetID()))
+	}
+	if bs.best.revertPeerStat != nil && bs.best.dstStore != nil {
+		revertZombieDur, revertPeerCPUShare, revertZombieBucket := bs.calcPendingMaxZombieDurWithBucket(bs.best.revertPeerStat, bs.best.dstStore)
+		fields = append(fields,
+			zap.Duration("revert-max-zombie-dur", revertZombieDur),
+			zap.Float64("revert-peer-cpu-share", revertPeerCPUShare),
+			zap.String("revert-peer-zombie-bucket", revertZombieBucket),
+		)
 	}
 	fields = append(fields, hotOperatorPeerFields("main-peer", bs.best.mainPeerStat)...)
 	fields = append(fields, hotOperatorPeerFields("revert-peer", bs.best.revertPeerStat)...)
@@ -601,6 +617,33 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 		return bs.sche.conf.getStoreStatZombieDuration()
 	default:
 		return bs.sche.conf.getStoreStatZombieDuration()
+	}
+}
+
+func (bs *balanceSolver) calcPendingMaxZombieDur(peer *statistics.HotPeerStat, srcStore *statistics.StoreLoadDetail) time.Duration {
+	maxZombieDur, _, _ := bs.calcPendingMaxZombieDurWithBucket(peer, srcStore)
+	return maxZombieDur
+}
+
+func (bs *balanceSolver) calcPendingMaxZombieDurWithBucket(peer *statistics.HotPeerStat, srcStore *statistics.StoreLoadDetail) (time.Duration, float64, string) {
+	baseZombieDur := bs.calcMaxZombieDur()
+	if !bs.isReadCPUByte() || peer == nil || srcStore == nil || srcStore.LoadPred == nil {
+		return baseZombieDur, 0, "base"
+	}
+	sourceCPU := srcStore.LoadPred.Current.Loads[utils.CPUDim]
+	peerCPU := peer.GetLoad(utils.CPUDim)
+	if sourceCPU <= 0 || peerCPU <= 0 {
+		return baseZombieDur, 0, "base"
+	}
+
+	share := peerCPU / sourceCPU
+	switch {
+	case share >= readCPUByteHeavyZombieShare:
+		return readCPUByteHeavyZombieDuration, share, "heavy"
+	case share >= readCPUByteMediumZombieShare:
+		return readCPUByteMediumZombieDuration, share, "medium"
+	default:
+		return readCPUByteLightZombieDuration, share, "light"
 	}
 }
 
