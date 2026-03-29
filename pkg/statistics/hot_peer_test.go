@@ -49,7 +49,7 @@ func TestHotPeerStatIsHotSkipsNilRollingLoads(t *testing.T) {
 	re := require.New(t)
 	interval := time.Second
 
-	hotStat := newDimStat(interval)
+	hotStat := newDimStat(interval, rollingWindowsSize)
 	hotStat.add(10, interval)
 
 	rollingLoads := make([]*dimStat, utils.DimLen)
