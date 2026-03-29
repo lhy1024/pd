@@ -411,9 +411,26 @@ func TestFilterSrcStoresRejectsReadCPUSourcePendingBrake(t *testing.T) {
 	}
 	bs.stLoadDetail = map[uint64]*statistics.StoreLoadDetail{1: srcDetail}
 	bs.filteredHotPeers = map[uint64][]*statistics.HotPeerStat{1: srcDetail.HotPeers}
+	hb.(*hotScheduler).addReadCPUSourceLedger([]uint64{1}, 4, time.Now())
 
 	filtered := bs.filterSrcStores()
 	re.Empty(filtered)
+}
+
+func TestReadCPUSourceLedgerDecays(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+
+	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
+	re.NoError(err)
+	tc.SetClusterVersion(versioninfo.MustParseVersion("8.5.7"))
+	hb.(*hotScheduler).conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+
+	now := time.Unix(1_700_000_000, 0)
+	hb.(*hotScheduler).addReadCPUSourceLedger([]uint64{1}, 8, now)
+	re.InDelta(8, hb.(*hotScheduler).getReadCPUSourceLedger(1, now), 0.001)
+	re.InDelta(4, hb.(*hotScheduler).getReadCPUSourceLedger(1, now.Add(readCPUSourceLedgerHalfLife)), 0.05)
 }
 
 func TestFilterSrcStoresKeepsNonCPUBytePathWithoutSourcePendingBrake(t *testing.T) {

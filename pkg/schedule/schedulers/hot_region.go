@@ -16,6 +16,7 @@ package schedulers
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -44,6 +45,11 @@ const (
 	defaultPendingAmpFactor = 2.0
 	defaultStddevThreshold  = 0.1
 	defaultTopnPosition     = 10
+	// Half-life for the independent read cpu source ledger. With a 90s half-life
+	// the ledger keeps a multi-minute tail without behaving like a hard several-minute veto.
+	defaultReadCPUSourceLedgerHalfLife              = 90 * time.Second
+	defaultReadCPUSourceLedgerReentryThresholdRatio = 0.5
+	defaultReadCPUSourceLedgerGCThreshold           = 0.01
 )
 
 var (
@@ -55,9 +61,32 @@ var (
 	// topnPosition is the position of the topn peer in the hot peer list.
 	// We use it to judge whether to schedule the hot peer in some cases.
 	topnPosition = defaultTopnPosition
+	// readCPUSourceLedgerHalfLife controls the decay speed of the independent read-cpu source ledger.
+	readCPUSourceLedgerHalfLife = defaultReadCPUSourceLedgerHalfLife
+	// readCPUSourceLedgerReentryThresholdRatio gates source re-entry once roughly half of a peer-sized debit remains.
+	readCPUSourceLedgerReentryThresholdRatio = defaultReadCPUSourceLedgerReentryThresholdRatio
+	readCPUSourceLedgerGCThreshold           = defaultReadCPUSourceLedgerGCThreshold
 	// statisticsInterval is the interval to update statistics information.
 	statisticsInterval = time.Second
 )
+
+type sourceCPULedger struct {
+	amount    float64
+	updatedAt time.Time
+}
+
+func decayReadCPUSourceLedger(amount float64, elapsed time.Duration) float64 {
+	if amount <= 0 {
+		return 0
+	}
+	if elapsed <= 0 {
+		return amount
+	}
+	if readCPUSourceLedgerHalfLife <= 0 {
+		return 0
+	}
+	return amount * math.Exp(-math.Ln2*elapsed.Seconds()/readCPUSourceLedgerHalfLife.Seconds())
+}
 
 type baseHotScheduler struct {
 	*BaseScheduler
@@ -187,14 +216,18 @@ type hotScheduler struct {
 	// config of hot scheduler
 	conf                *hotRegionSchedulerConfig
 	searchRevertRegions [resourceTypeLen]bool // Whether to search revert regions.
+	// readCPUSourceLedgers tracks recent read cpu hot-flow debits per source store.
+	// It is only consumed by the source brake path for read cpu,byte.
+	readCPUSourceLedgers map[uint64]*sourceCPULedger
 }
 
 func newHotScheduler(opController *operator.Controller, conf *hotRegionSchedulerConfig) *hotScheduler {
 	base := newBaseHotScheduler(opController, conf.getHistorySampleDuration(),
 		conf.getHistorySampleInterval(), conf)
 	ret := &hotScheduler{
-		baseHotScheduler: base,
-		conf:             conf,
+		baseHotScheduler:     base,
+		conf:                 conf,
+		readCPUSourceLedgers: make(map[uint64]*sourceCPULedger),
 	}
 	for ty := resourceType(0); ty < resourceTypeLen; ty++ {
 		ret.searchRevertRegions[ty] = false
@@ -319,6 +352,50 @@ func (s *hotScheduler) tryAddPendingInfluence(op *operator.Operator, srcStore []
 		hotPeerHist.WithLabelValues(s.GetName(), rwTy.String(), utils.DimToString(dim)).Observe(infl.Loads[kind])
 	})
 	return true
+}
+
+func (s *hotScheduler) addReadCPUSourceLedger(storeIDs []uint64, debit float64, now time.Time) {
+	if debit <= 0 || len(storeIDs) == 0 {
+		return
+	}
+	s.Lock()
+	defer s.Unlock()
+	for _, storeID := range storeIDs {
+		if storeID == 0 {
+			continue
+		}
+		ledger := s.readCPUSourceLedgers[storeID]
+		if ledger == nil {
+			ledger = &sourceCPULedger{}
+			s.readCPUSourceLedgers[storeID] = ledger
+		}
+		if !ledger.updatedAt.IsZero() {
+			ledger.amount = decayReadCPUSourceLedger(ledger.amount, now.Sub(ledger.updatedAt))
+		}
+		ledger.amount += debit
+		ledger.updatedAt = now
+	}
+}
+
+func (s *hotScheduler) getReadCPUSourceLedger(storeID uint64, now time.Time) float64 {
+	if storeID == 0 {
+		return 0
+	}
+	s.Lock()
+	defer s.Unlock()
+	ledger := s.readCPUSourceLedgers[storeID]
+	if ledger == nil {
+		return 0
+	}
+	if !ledger.updatedAt.IsZero() && now.After(ledger.updatedAt) {
+		ledger.amount = decayReadCPUSourceLedger(ledger.amount, now.Sub(ledger.updatedAt))
+		ledger.updatedAt = now
+	}
+	if ledger.amount <= readCPUSourceLedgerGCThreshold {
+		delete(s.readCPUSourceLedgers, storeID)
+		return 0
+	}
+	return ledger.amount
 }
 
 func (s *hotScheduler) balanceHotReadRegions(cluster sche.SchedulerCluster) []*operator.Operator {

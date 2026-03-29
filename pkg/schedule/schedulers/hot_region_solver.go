@@ -325,6 +325,9 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
 		return false
 	}
+	if !isSplit && bs.isReadCPUByte() {
+		bs.sche.addReadCPUSourceLedger(srcStoreIDs, bs.sourceBrakeMainPeerCPU(bs.best.mainPeerStat), time.Now())
+	}
 	if isSplit {
 		return true
 	}
@@ -333,6 +336,9 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		infl := bs.collectPendingInfluence(bs.best.revertPeerStat)
 		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
 			return false
+		}
+		if bs.isReadCPUByte() {
+			bs.sche.addReadCPUSourceLedger(srcStoreIDs, bs.sourceBrakeMainPeerCPU(bs.best.revertPeerStat), time.Now())
 		}
 	}
 	bs.logHotOperatorSnapshot()
@@ -530,6 +536,9 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 		zap.Bool("has-revert-region", bs.best.revertRegion != nil),
 		zap.Duration("max-zombie-dur", bs.calcMaxZombieDur()),
 	}
+	if bs.isReadCPUByte() {
+		fields = append(fields, zap.Float64("src-source-ledger-cpu", bs.sche.getReadCPUSourceLedger(srcID, time.Now())))
+	}
 	if bs.best.revertRegion != nil {
 		fields = append(fields, zap.Uint64("revert-region-id", bs.best.revertRegion.GetID()))
 	}
@@ -565,9 +574,6 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 func (bs *balanceSolver) collectPendingInfluence(peer *statistics.HotPeerStat) statistics.Influence {
 	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), HotPeerCount: 1}
 	bs.rwTy.SetFullLoadRates(infl.Loads, peer.GetLoads())
-	if bs.isReadCPUByte() {
-		infl.Loads[utils.RegionReadCPU] = bs.sourceBrakeMainPeerCPU(peer)
-	}
 	inverse := bs.rwTy.Inverse()
 	another := bs.GetHotPeerStat(inverse, peer.RegionID, peer.StoreID)
 	if another != nil {
@@ -644,13 +650,13 @@ func (bs *balanceSolver) checkReadCPUSourcePendingBrake(storeID uint64, detail *
 	if !bs.isReadCPUByte() {
 		return true
 	}
-	pendingCPU := detail.LoadPred.Pending().Loads[utils.CPUDim]
-	if pendingCPU <= 0 {
+	ledgerCPU := bs.sche.getReadCPUSourceLedger(storeID, time.Now())
+	if ledgerCPU <= 0 {
 		return true
 	}
-	// Use the hottest candidate peer CPU as the relay brake budget. Once a store already
-	// carries roughly one hot peer's worth of pending CPU influence, hold it out of the
-	// source set until the pending/zombie influence settles.
+	// Use the hottest candidate peer CPU as the re-entry budget. The independent source
+	// ledger decays over time, so we only hold a source out while a meaningful fraction of
+	// a peer-sized debit still remains on its ledger.
 	var maxMainPeerCPU float64
 	for _, peer := range bs.filteredHotPeers[storeID] {
 		if peer == nil {
@@ -661,7 +667,7 @@ func (bs *balanceSolver) checkReadCPUSourcePendingBrake(storeID uint64, detail *
 	if maxMainPeerCPU <= 0 {
 		return true
 	}
-	return pendingCPU < maxMainPeerCPU
+	return ledgerCPU < readCPUSourceLedgerReentryThresholdRatio*maxMainPeerCPU
 }
 
 func (bs *balanceSolver) sourceBrakeMainPeerCPU(peer *statistics.HotPeerStat) float64 {
@@ -778,6 +784,9 @@ func (bs *balanceSolver) logReadCPUByteHotPeerFiltering(storeLoad *statistics.St
 		zap.Int("max-peer-num", bs.maxPeerNum),
 		zap.Int("topn-position", topnPosition),
 		zap.Int("min-hot-degree", bs.minHotDegree),
+	}
+	if bs.isReadCPUByte() {
+		baseFields = append(baseFields, zap.Float64("source-ledger-cpu", bs.sche.getReadCPUSourceLedger(storeID, time.Now())))
 	}
 	if summary := storeLoad.ToHotPeersStat(); summary != nil {
 		baseFields = append(baseFields, hotOperatorStoreSummaryFields("summary", summary)...)
