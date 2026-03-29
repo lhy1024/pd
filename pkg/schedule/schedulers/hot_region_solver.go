@@ -302,8 +302,6 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 			return false
 		}
 	}
-	maxZombieDur := bs.calcMaxZombieDur()
-
 	// TODO: Process operators atomically.
 	// main peer
 
@@ -321,6 +319,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		srcStoreIDs = append(srcStoreIDs, bs.best.srcStore.GetID())
 		dstStoreID = bs.best.dstStore.GetID()
 	}
+	maxZombieDur := bs.calcPendingMaxZombieDur(bs.best.mainPeerStat, bs.best.srcStore)
 	infl := bs.collectPendingInfluence(bs.best.mainPeerStat)
 	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
 		return false
@@ -330,13 +329,253 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	}
 	// revert peers
 	if bs.best.revertPeerStat != nil && len(bs.ops) > 1 {
+		revertZombieDur := bs.calcPendingMaxZombieDur(bs.best.revertPeerStat, bs.best.dstStore)
 		infl := bs.collectPendingInfluence(bs.best.revertPeerStat)
-		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
+		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, revertZombieDur) {
 			return false
 		}
 	}
+	bs.logHotOperatorSnapshot()
 	bs.logBestSolution()
 	return true
+}
+
+func hotOperatorLoadFields(prefix string, loads []float64) []zap.Field {
+	byteLoad, queryLoad, cpuLoad := 0.0, 0.0, 0.0
+	if len(loads) > utils.ByteDim {
+		byteLoad = loads[utils.ByteDim]
+	}
+	if len(loads) > utils.QueryDim {
+		queryLoad = loads[utils.QueryDim]
+	}
+	if len(loads) > utils.CPUDim {
+		cpuLoad = loads[utils.CPUDim]
+	}
+	return []zap.Field{
+		zap.Float64(prefix+"-byte", byteLoad),
+		zap.Float64(prefix+"-query", queryLoad),
+		zap.Float64(prefix+"-cpu", cpuLoad),
+	}
+}
+
+func hotOperatorPeerFields(prefix string, peer *statistics.HotPeerStat) []zap.Field {
+	if peer == nil {
+		return nil
+	}
+	loads := peer.GetLoads()
+	fields := []zap.Field{
+		zap.Uint64(prefix+"-store", peer.StoreID),
+		zap.Uint64(prefix+"-region", peer.RegionID),
+		zap.Int(prefix+"-hot-degree", peer.HotDegree),
+		zap.Int(prefix+"-anti-count", peer.AntiCount),
+		zap.Bool(prefix+"-is-leader", peer.IsLeader()),
+	}
+	return append(fields, hotOperatorLoadFields(prefix, loads)...)
+}
+
+func hotOperatorStoreSummaryFields(prefix string, summary *statistics.HotPeersStat) []zap.Field {
+	if summary == nil {
+		return nil
+	}
+	return []zap.Field{
+		zap.Int(prefix+"-hot-peer-count", summary.Count),
+		zap.Float64(prefix+"-store-byte", summary.StoreByteRate),
+		zap.Float64(prefix+"-store-query", summary.StoreQueryRate),
+		zap.Float64(prefix+"-store-cpu", summary.StoreCPURate),
+		zap.Float64(prefix+"-total-hot-byte", summary.TotalBytesRate),
+		zap.Float64(prefix+"-total-hot-query", summary.TotalQueryRate),
+		zap.Float64(prefix+"-total-hot-cpu", summary.TotalCPURate),
+	}
+}
+
+func hotOperatorFilteredPeerFields(prefix string, peers []*statistics.HotPeerStat) []zap.Field {
+	return hotOperatorPeerSetFields(prefix, peers)
+}
+
+func hotOperatorPeerSetFields(prefix string, peers []*statistics.HotPeerStat) []zap.Field {
+	if len(peers) == 0 {
+		return []zap.Field{
+			zap.Int(prefix+"-count", 0),
+			zap.Float64(prefix+"-byte", 0),
+			zap.Float64(prefix+"-query", 0),
+			zap.Float64(prefix+"-cpu", 0),
+		}
+	}
+	var loads statistics.Loads
+	count := 0
+	for _, peer := range peers {
+		if peer == nil || peer.HotDegree <= 0 {
+			continue
+		}
+		count++
+		peerLoads := peer.GetLoads()
+		for i := range loads {
+			if i < len(peerLoads) {
+				loads[i] += peerLoads[i]
+			}
+		}
+	}
+	fields := []zap.Field{zap.Int(prefix+"-count", count)}
+	return append(fields, hotOperatorLoadFields(prefix, loads[:])...)
+}
+
+type hotPeerFilterReason string
+
+const (
+	readCPUByteRejectedDecisionLogLimitPerReason                     = 5
+	readCPUByteLightZombieDuration                                   = time.Minute
+	readCPUByteMediumZombieDuration                                  = 2 * time.Minute
+	readCPUByteHeavyZombieDuration                                   = 3 * time.Minute
+	readCPUByteMediumZombieShare                                     = 0.10
+	readCPUByteHeavyZombieShare                                      = 0.25
+	hotPeerFilterKept                            hotPeerFilterReason = "kept"
+	hotPeerFilterPending                         hotPeerFilterReason = "pending"
+	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
+	hotPeerFilterTopN                            hotPeerFilterReason = "topn"
+)
+
+type hotPeerFilterDecision struct {
+	peer   *statistics.HotPeerStat
+	reason hotPeerFilterReason
+}
+
+func hotPeerFilterDecisionFields(prefix string, decision hotPeerFilterDecision) []zap.Field {
+	if decision.peer == nil {
+		return nil
+	}
+	fields := []zap.Field{
+		zap.Bool(prefix+"-kept", decision.reason == hotPeerFilterKept),
+	}
+	if decision.reason != hotPeerFilterKept {
+		fields = append(fields, zap.String(prefix+"-reject-reason", string(decision.reason)))
+	}
+	fields = append(fields, hotOperatorPeerFields(prefix, decision.peer)...)
+	return fields
+}
+
+func hotPeerFilterReasonFields(prefix string, decisions []hotPeerFilterDecision, reason hotPeerFilterReason) []zap.Field {
+	peers := make([]*statistics.HotPeerStat, 0, len(decisions))
+	for _, decision := range decisions {
+		if decision.reason == reason {
+			peers = append(peers, decision.peer)
+		}
+	}
+	return hotOperatorPeerSetFields(prefix, peers)
+}
+
+func selectRejectedHotPeerFilterDecisions(decisions []hotPeerFilterDecision, limitPerReason int) []hotPeerFilterDecision {
+	if limitPerReason <= 0 || len(decisions) == 0 {
+		return nil
+	}
+	counts := map[hotPeerFilterReason]int{
+		hotPeerFilterPending:  0,
+		hotPeerFilterCooldown: 0,
+		hotPeerFilterTopN:     0,
+	}
+	selected := make([]hotPeerFilterDecision, 0, len(decisions))
+	for _, decision := range decisions {
+		if decision.reason == hotPeerFilterKept {
+			continue
+		}
+		count, ok := counts[decision.reason]
+		if !ok || count >= limitPerReason {
+			continue
+		}
+		selected = append(selected, decision)
+		counts[decision.reason] = count + 1
+	}
+	return selected
+}
+
+func (bs *balanceSolver) isReadCPUByte() bool {
+	if bs.firstPriority != utils.CPUDim || bs.secondPriority != utils.ByteDim {
+		return false
+	}
+	switch bs.resourceTy {
+	case readLeader, readPeer:
+		return true
+	default:
+		return bs.rwTy == utils.Read
+	}
+}
+
+func (bs *balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
+	if detail == nil || detail.LoadPred == nil {
+		return nil
+	}
+	return detail.LoadPred.Min()
+}
+
+func (bs *balanceSolver) shouldCoolDownTransferLeader(item *statistics.HotPeerStat) bool {
+	if item == nil {
+		return false
+	}
+	return item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy)
+}
+
+func (bs *balanceSolver) logHotOperatorSnapshot() {
+	if bs.best == nil || len(bs.ops) == 0 || bs.best.mainPeerStat == nil || bs.best.srcStore == nil || bs.best.dstStore == nil {
+		return
+	}
+
+	srcID := bs.best.srcStore.GetID()
+	dstID := bs.best.dstStore.GetID()
+	srcSummary := bs.best.srcStore.ToHotPeersStat()
+	dstSummary := bs.best.dstStore.ToHotPeersStat()
+	maxZombieDur, mainPeerCPUShare, zombieBucket := bs.calcPendingMaxZombieDurWithBucket(bs.best.mainPeerStat, bs.best.srcStore)
+	fields := []zap.Field{
+		zap.Stringer("rw-type", bs.rwTy),
+		zap.Stringer("op-type", bs.opTy),
+		zap.Stringer("resource-type", bs.resourceTy),
+		zap.String("dim", bs.rankToDimString()),
+		zap.Int64("progressive-rank", bs.best.progressiveRank),
+		zap.Bool("search-revert-regions", bs.sche.searchRevertRegions[bs.resourceTy]),
+		zap.Uint64("src-store", srcID),
+		zap.Uint64("dst-store", dstID),
+		zap.Uint64("region-id", bs.best.region.GetID()),
+		zap.Bool("has-revert-region", bs.best.revertRegion != nil),
+		zap.Duration("max-zombie-dur", maxZombieDur),
+		zap.Float64("main-peer-cpu-share", mainPeerCPUShare),
+		zap.String("main-peer-zombie-bucket", zombieBucket),
+	}
+	if bs.best.revertRegion != nil {
+		fields = append(fields, zap.Uint64("revert-region-id", bs.best.revertRegion.GetID()))
+	}
+	if bs.best.revertPeerStat != nil && bs.best.dstStore != nil {
+		revertZombieDur, revertPeerCPUShare, revertZombieBucket := bs.calcPendingMaxZombieDurWithBucket(bs.best.revertPeerStat, bs.best.dstStore)
+		fields = append(fields,
+			zap.Duration("revert-max-zombie-dur", revertZombieDur),
+			zap.Float64("revert-peer-cpu-share", revertPeerCPUShare),
+			zap.String("revert-peer-zombie-bucket", revertZombieBucket),
+		)
+	}
+	fields = append(fields, hotOperatorPeerFields("main-peer", bs.best.mainPeerStat)...)
+	fields = append(fields, hotOperatorPeerFields("revert-peer", bs.best.revertPeerStat)...)
+	fields = append(fields, hotOperatorLoadFields("src-source-check", bs.sourceLoadForQualification(bs.best.srcStore).Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("src-min", bs.best.srcStore.LoadPred.Min().Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("src-expect", bs.best.srcStore.LoadPred.Expect.Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("dst-source-check", bs.best.dstStore.LoadPred.Max().Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("dst-expect", bs.best.dstStore.LoadPred.Expect.Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("src-current", bs.best.srcStore.LoadPred.Current.Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("dst-current", bs.best.dstStore.LoadPred.Current.Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("src-pending", bs.best.srcStore.LoadPred.Pending().Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("dst-pending", bs.best.dstStore.LoadPred.Pending().Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("src-future", bs.best.srcStore.LoadPred.Future.Loads[:])...)
+	fields = append(fields, hotOperatorLoadFields("dst-future", bs.best.dstStore.LoadPred.Future.Loads[:])...)
+	fields = append(fields, zap.Float64("src-future-minus-expect-cpu",
+		bs.best.srcStore.LoadPred.Future.Loads[utils.CPUDim]-bs.best.srcStore.LoadPred.Expect.Loads[utils.CPUDim]))
+	fields = append(fields, hotOperatorStoreSummaryFields("src-summary", srcSummary)...)
+	fields = append(fields, hotOperatorStoreSummaryFields("dst-summary", dstSummary)...)
+	fields = append(fields, hotOperatorFilteredPeerFields("src-filtered-hot", bs.filteredHotPeers[srcID])...)
+	fields = append(fields, hotOperatorFilteredPeerFields("dst-filtered-hot", bs.filteredHotPeers[dstID])...)
+	if len(bs.ops) > 0 {
+		fields = append(fields, zap.String("operator-0", bs.ops[0].Desc()))
+	}
+	if len(bs.ops) > 1 {
+		fields = append(fields, zap.String("operator-1", bs.ops[1].Desc()))
+	}
+
+	log.Info("dispatch hot operator snapshot", fields...)
 }
 
 func (bs *balanceSolver) collectPendingInfluence(peer *statistics.HotPeerStat) statistics.Influence {
@@ -374,6 +613,33 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 	}
 }
 
+func (bs *balanceSolver) calcPendingMaxZombieDur(peer *statistics.HotPeerStat, srcStore *statistics.StoreLoadDetail) time.Duration {
+	maxZombieDur, _, _ := bs.calcPendingMaxZombieDurWithBucket(peer, srcStore)
+	return maxZombieDur
+}
+
+func (bs *balanceSolver) calcPendingMaxZombieDurWithBucket(peer *statistics.HotPeerStat, srcStore *statistics.StoreLoadDetail) (time.Duration, float64, string) {
+	baseZombieDur := bs.calcMaxZombieDur()
+	if !bs.isReadCPUByte() || peer == nil || srcStore == nil || srcStore.LoadPred == nil {
+		return baseZombieDur, 0, "base"
+	}
+	sourceCPU := srcStore.LoadPred.Current.Loads[utils.CPUDim]
+	peerCPU := peer.GetLoad(utils.CPUDim)
+	if sourceCPU <= 0 || peerCPU <= 0 {
+		return baseZombieDur, 0, "base"
+	}
+
+	share := peerCPU / sourceCPU
+	switch {
+	case share >= readCPUByteHeavyZombieShare:
+		return readCPUByteHeavyZombieDuration, share, "heavy"
+	case share >= readCPUByteMediumZombieShare:
+		return readCPUByteMediumZombieDuration, share, "medium"
+	default:
+		return readCPUByteLightZombieDuration, share, "light"
+	}
+}
+
 // filterSrcStores compare the min rate and the ratio * expectation rate, if two dim rate is greater than
 // its expectation * ratio, the store would be selected as hot source store
 func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetail {
@@ -394,7 +660,6 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 		if len(detail.HotPeers) == 0 {
 			continue
 		}
-
 		if !bs.checkSrcByPriorityAndTolerance(detail.LoadPred.Min(), &detail.LoadPred.Expect, srcToleranceRatio) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
@@ -430,13 +695,23 @@ func (bs *balanceSolver) checkSrcHistoryLoadsByPriorityAndTolerance(current, exp
 // filterHotPeers filtered hot peers from statistics.HotPeerStat and deleted the peer if its region is in pending status.
 // The returned hotPeer count in controlled by `max-peer-number`.
 func (bs *balanceSolver) filterHotPeers(storeLoad *statistics.StoreLoadDetail) []*statistics.HotPeerStat {
+	ret, decisions := bs.filterHotPeersWithDecisions(storeLoad)
+	bs.logReadCPUByteHotPeerFiltering(storeLoad, decisions, ret)
+	return ret
+}
+
+func (bs *balanceSolver) filterHotPeersWithDecisions(storeLoad *statistics.StoreLoadDetail) ([]*statistics.HotPeerStat, []hotPeerFilterDecision) {
 	hotPeers := storeLoad.HotPeers
 	ret := make([]*statistics.HotPeerStat, 0, len(hotPeers))
-	appendItem := func(item *statistics.HotPeerStat) {
-		if _, ok := bs.sche.regionPendings[item.ID()]; !ok && !item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy) {
-			// no in pending operator and no need cool down after transfer leader
-			ret = append(ret, item)
+	decisions := make([]hotPeerFilterDecision, 0, len(hotPeers))
+	classify := func(item *statistics.HotPeerStat) hotPeerFilterReason {
+		if _, ok := bs.sche.regionPendings[item.ID()]; ok {
+			return hotPeerFilterPending
 		}
+		if bs.shouldCoolDownTransferLeader(item) {
+			return hotPeerFilterCooldown
+		}
+		return hotPeerFilterKept
 	}
 
 	var firstSort, secondSort []*statistics.HotPeerStat
@@ -459,17 +734,68 @@ func (bs *balanceSolver) filterHotPeers(storeLoad *statistics.StoreLoadDetail) [
 	}
 	if len(hotPeers) > bs.maxPeerNum {
 		union := sortHotPeers(firstSort, secondSort, bs.maxPeerNum)
+		reasons := make(map[*statistics.HotPeerStat]hotPeerFilterReason, len(hotPeers))
+		for _, peer := range hotPeers {
+			reason := hotPeerFilterTopN
+			if _, ok := union[peer]; ok {
+				reason = classify(peer)
+			}
+			reasons[peer] = reason
+			decisions = append(decisions, hotPeerFilterDecision{peer: peer, reason: reason})
+		}
 		ret = make([]*statistics.HotPeerStat, 0, len(union))
 		for peer := range union {
-			appendItem(peer)
+			if reasons[peer] == hotPeerFilterKept {
+				ret = append(ret, peer)
+			}
 		}
-		return ret
+		return ret, decisions
 	}
 
 	for _, peer := range hotPeers {
-		appendItem(peer)
+		reason := classify(peer)
+		decisions = append(decisions, hotPeerFilterDecision{peer: peer, reason: reason})
+		if reason == hotPeerFilterKept {
+			ret = append(ret, peer)
+		}
 	}
-	return ret
+	return ret, decisions
+}
+
+func (bs *balanceSolver) logReadCPUByteHotPeerFiltering(storeLoad *statistics.StoreLoadDetail, decisions []hotPeerFilterDecision, filtered []*statistics.HotPeerStat) {
+	if !bs.isReadCPUByte() || storeLoad == nil || storeLoad.LoadPred == nil {
+		return
+	}
+	storeID := uint64(0)
+	if storeLoad.StoreSummaryInfo != nil && storeLoad.StoreInfo != nil {
+		storeID = storeLoad.GetID()
+	}
+	baseFields := []zap.Field{
+		zap.Uint64("store-id", storeID),
+		zap.String("rw", bs.rwTy.String()),
+		zap.String("resource", bs.resourceTy.String()),
+		zap.String("first-priority", utils.DimToString(bs.firstPriority)),
+		zap.String("second-priority", utils.DimToString(bs.secondPriority)),
+		zap.Int("max-peer-num", bs.maxPeerNum),
+		zap.Int("topn-position", topnPosition),
+		zap.Int("min-hot-degree", bs.minHotDegree),
+	}
+	if summary := storeLoad.ToHotPeersStat(); summary != nil {
+		baseFields = append(baseFields, hotOperatorStoreSummaryFields("summary", summary)...)
+	}
+	log.Info("filter hot peers before",
+		append(append([]zap.Field{}, baseFields...), hotOperatorPeerSetFields("before", storeLoad.HotPeers)...)...)
+	log.Info("filter hot peers after",
+		append(append(append([]zap.Field{}, baseFields...),
+			hotOperatorPeerSetFields("filtered", filtered)...),
+			append(append(
+				hotPeerFilterReasonFields("removed-pending", decisions, hotPeerFilterPending),
+				hotPeerFilterReasonFields("removed-cooldown", decisions, hotPeerFilterCooldown)...),
+				hotPeerFilterReasonFields("removed-topn", decisions, hotPeerFilterTopN)...)...)...)
+	for _, decision := range selectRejectedHotPeerFilterDecisions(decisions, readCPUByteRejectedDecisionLogLimitPerReason) {
+		log.Info("filter hot peer rejected",
+			append(append([]zap.Field{}, baseFields...), hotPeerFilterDecisionFields("peer", decision)...)...)
+	}
 }
 
 func sortHotPeers[T any](firstSort, secondSort []*T, maxPeerNum int) map[*T]struct{} {
