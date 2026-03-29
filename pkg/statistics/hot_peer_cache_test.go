@@ -421,18 +421,18 @@ func TestThresholdWithUpdateHotPeerStat(t *testing.T) {
 	testMetrics(ctx, re, 1., byteRate, expectThreshold)
 }
 
-func TestHotPeerStatIsHotUsesCPULastAverage(t *testing.T) {
+func TestHotPeerStatIsHotUsesCPURollingValue(t *testing.T) {
 	re := require.New(t)
 	interval := time.Duration(utils.StoreHeartBeatReportInterval) * time.Second
 	threshold := 10.0
 	highDelta := threshold * interval.Seconds()
 
-	// CPU dim uses isLastAverageHot, same as other dims.
-	cpuStat := newDimStat(interval)
+	// CPU dim uses the rolling value, not the last average.
+	cpuStat := newDimStat(interval, rollingWindowsSize)
 	cpuStat.add(highDelta, interval)
-	re.True(cpuStat.isLastAverageHot(threshold))
+	re.True(cpuStat.isHot(threshold))
 
-	lowStat := newDimStat(interval)
+	lowStat := newDimStat(interval, rollingWindowsSize)
 	lowStat.add(0, interval)
 
 	stat := &HotPeerStat{
@@ -446,8 +446,8 @@ func TestHotPeerStatIsHotUsesCPULastAverage(t *testing.T) {
 	thresholds := []float64{threshold, threshold, threshold, threshold}
 	re.True(stat.isHot(thresholds))
 
-	// When CPU last average is below threshold, it should not be hot.
-	coldCPU := newDimStat(interval)
+	// When CPU rolling value is below threshold, it should not be hot.
+	coldCPU := newDimStat(interval, rollingWindowsSize)
 	coldCPU.add(0, interval)
 	stat2 := &HotPeerStat{
 		rollingLoads: []*dimStat{

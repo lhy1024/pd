@@ -38,6 +38,7 @@ const (
 	HotThresholdRatio = 0.8
 
 	rollingWindowsSize = 5
+	cpuRollingWindowsSize = 9
 
 	// HotRegionReportMinInterval is used for the simulator and test
 	HotRegionReportMinInterval = 3
@@ -501,7 +502,11 @@ func (f *HotPeerCache) updateNewHotPeerStat(newItem *HotPeerStat, deltaLoads []f
 	newItem.actionType = utils.Add
 	newItem.rollingLoads = make([]*dimStat, utils.DimLen)
 	for i, k := range regionStats {
-		ds := newDimStat(f.interval())
+		windowSize := rollingWindowsSize
+		if f.kind == utils.Read && k == utils.RegionReadCPU {
+			windowSize = cpuRollingWindowsSize
+		}
+		ds := newDimStat(f.interval(), windowSize)
 		ds.add(deltaLoads[k], interval)
 		if ds.isFull(f.interval()) {
 			ds.clearLastAverage()
