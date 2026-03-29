@@ -421,6 +421,16 @@ func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
 			expectedBucket: "medium",
 		},
 		{
+			name:           "borderline heavy peer now keeps three minute zombie",
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.ByteDim,
+			sourceCPU:      1188,
+			peerCPU:        284,
+			expectedDur:    readCPUByteHeavyZombieDuration,
+			expectedShare:  284.0 / 1188.0,
+			expectedBucket: "heavy",
+		},
+		{
 			name:           "light peer keeps one minute zombie",
 			firstPriority:  utils.CPUDim,
 			secondPriority: utils.ByteDim,

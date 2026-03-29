@@ -427,7 +427,7 @@ const (
 	readCPUByteMediumZombieDuration                                  = 2 * time.Minute
 	readCPUByteHeavyZombieDuration                                   = 3 * time.Minute
 	readCPUByteMediumZombieShare                                     = 0.10
-	readCPUByteHeavyZombieShare                                      = 0.25
+	readCPUByteHeavyZombieShare                                      = 0.20
 	hotPeerFilterKept                            hotPeerFilterReason = "kept"
 	hotPeerFilterPending                         hotPeerFilterReason = "pending"
 	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
