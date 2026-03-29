@@ -243,6 +243,7 @@ type pendingInfluence struct {
 	to                uint64
 	origin            statistics.Influence
 	maxZombieDuration time.Duration
+	createdAt         time.Time
 }
 
 func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl statistics.Influence, maxZombieDur time.Duration) *pendingInfluence {
@@ -252,6 +253,7 @@ func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl 
 		to:                to,
 		origin:            infl,
 		maxZombieDuration: maxZombieDur,
+		createdAt:         time.Now(),
 	}
 }
 

@@ -391,68 +391,129 @@ func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
 
 	baseZombieDur := hb.(*hotScheduler).conf.getStoreStatZombieDuration()
 	testCases := []struct {
-		name           string
-		firstPriority  int
-		secondPriority int
-		sourceCPU      float64
-		peerCPU        float64
-		expectedDur    time.Duration
-		expectedShare  float64
-		expectedBucket string
+		name                 string
+		firstPriority        int
+		secondPriority       int
+		sourceCPU            float64
+		peerCPU              float64
+		recentPendingCPU     []float64
+		recentPendingAges    []time.Duration
+		recentPendingSources [][]uint64
+		expectedDur          time.Duration
+		expectedPeerShare    float64
+		expectedEffective    float64
+		expectedRecentCPU    float64
+		expectedBucket       string
 	}{
 		{
-			name:           "heavy peer keeps three minute zombie",
-			firstPriority:  utils.CPUDim,
-			secondPriority: utils.ByteDim,
-			sourceCPU:      1000,
-			peerCPU:        298,
-			expectedDur:    readCPUByteHeavyZombieDuration,
-			expectedShare:  0.298,
-			expectedBucket: "heavy",
+			name:              "heavy peer keeps three minute zombie",
+			firstPriority:     utils.CPUDim,
+			secondPriority:    utils.ByteDim,
+			sourceCPU:         1000,
+			peerCPU:           298,
+			expectedDur:       readCPUByteHeavyZombieDuration,
+			expectedPeerShare: 0.298,
+			expectedEffective: 0.298,
+			expectedRecentCPU: 0,
+			expectedBucket:    "heavy",
 		},
 		{
-			name:           "medium peer keeps two minute zombie",
-			firstPriority:  utils.CPUDim,
-			secondPriority: utils.ByteDim,
-			sourceCPU:      1000,
-			peerCPU:        150,
-			expectedDur:    readCPUByteMediumZombieDuration,
-			expectedShare:  0.15,
-			expectedBucket: "medium",
+			name:              "medium peer keeps two minute zombie",
+			firstPriority:     utils.CPUDim,
+			secondPriority:    utils.ByteDim,
+			sourceCPU:         1000,
+			peerCPU:           150,
+			expectedDur:       readCPUByteMediumZombieDuration,
+			expectedPeerShare: 0.15,
+			expectedEffective: 0.15,
+			expectedRecentCPU: 0,
+			expectedBucket:    "medium",
 		},
 		{
-			name:           "light peer keeps one minute zombie",
-			firstPriority:  utils.CPUDim,
-			secondPriority: utils.ByteDim,
-			sourceCPU:      1000,
-			peerCPU:        90,
-			expectedDur:    readCPUByteLightZombieDuration,
-			expectedShare:  0.09,
-			expectedBucket: "light",
+			name:              "light peer keeps one minute zombie",
+			firstPriority:     utils.CPUDim,
+			secondPriority:    utils.ByteDim,
+			sourceCPU:         1000,
+			peerCPU:           90,
+			expectedDur:       readCPUByteLightZombieDuration,
+			expectedPeerShare: 0.09,
+			expectedEffective: 0.09,
+			expectedRecentCPU: 0,
+			expectedBucket:    "light",
 		},
 		{
-			name:           "non cpu-byte path falls back to base zombie",
-			firstPriority:  utils.QueryDim,
-			secondPriority: utils.ByteDim,
-			sourceCPU:      1000,
-			peerCPU:        298,
-			expectedDur:    baseZombieDur,
-			expectedShare:  0,
-			expectedBucket: "base",
+			name:                 "recent same source burst uplifts medium peer to heavy bucket",
+			firstPriority:        utils.CPUDim,
+			secondPriority:       utils.ByteDim,
+			sourceCPU:            1000,
+			peerCPU:              161,
+			recentPendingCPU:     []float64{141, 127},
+			recentPendingAges:    []time.Duration{10 * time.Second, 20 * time.Second},
+			recentPendingSources: [][]uint64{{1}, {1}},
+			expectedDur:          readCPUByteHeavyZombieDuration,
+			expectedPeerShare:    0.161,
+			expectedEffective:    0.429,
+			expectedRecentCPU:    268,
+			expectedBucket:       "heavy",
 		},
 		{
-			name:           "zero source cpu falls back to base zombie",
-			firstPriority:  utils.CPUDim,
-			secondPriority: utils.ByteDim,
-			sourceCPU:      0,
-			peerCPU:        298,
-			expectedDur:    baseZombieDur,
-			expectedShare:  0,
-			expectedBucket: "base",
+			name:                 "old or different source burst does not count",
+			firstPriority:        utils.CPUDim,
+			secondPriority:       utils.ByteDim,
+			sourceCPU:            1000,
+			peerCPU:              161,
+			recentPendingCPU:     []float64{141, 127},
+			recentPendingAges:    []time.Duration{2 * time.Minute, 10 * time.Second},
+			recentPendingSources: [][]uint64{{1}, {2}},
+			expectedDur:          readCPUByteMediumZombieDuration,
+			expectedPeerShare:    0.161,
+			expectedEffective:    0.161,
+			expectedRecentCPU:    0,
+			expectedBucket:       "medium",
+		},
+		{
+			name:              "non cpu-byte path falls back to base zombie",
+			firstPriority:     utils.QueryDim,
+			secondPriority:    utils.ByteDim,
+			sourceCPU:         1000,
+			peerCPU:           298,
+			expectedDur:       baseZombieDur,
+			expectedPeerShare: 0,
+			expectedEffective: 0,
+			expectedRecentCPU: 0,
+			expectedBucket:    "base",
+		},
+		{
+			name:              "zero source cpu falls back to base zombie",
+			firstPriority:     utils.CPUDim,
+			secondPriority:    utils.ByteDim,
+			sourceCPU:         0,
+			peerCPU:           298,
+			expectedDur:       baseZombieDur,
+			expectedPeerShare: 0,
+			expectedEffective: 0,
+			expectedRecentCPU: 0,
+			expectedBucket:    "base",
 		},
 	}
 
 	for _, testCase := range testCases {
+		hb.(*hotScheduler).regionPendings = make(map[uint64]*pendingInfluence)
+		for i, cpu := range testCase.recentPendingCPU {
+			sources := []uint64{1}
+			if i < len(testCase.recentPendingSources) && len(testCase.recentPendingSources[i]) > 0 {
+				sources = testCase.recentPendingSources[i]
+			}
+			age := time.Duration(0)
+			if i < len(testCase.recentPendingAges) {
+				age = testCase.recentPendingAges[i]
+			}
+			hb.(*hotScheduler).regionPendings[uint64(i+1)] = &pendingInfluence{
+				froms:     sources,
+				origin:    statistics.Influence{Loads: []float64{0, 0, 0, cpu}},
+				createdAt: time.Now().Add(-age),
+			}
+		}
 		bs := &balanceSolver{
 			sche:           hb.(*hotScheduler),
 			rwTy:           utils.Read,
@@ -460,10 +521,12 @@ func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
 			firstPriority:  testCase.firstPriority,
 			secondPriority: testCase.secondPriority,
 		}
-		gotDur, gotShare, gotBucket := bs.calcPendingMaxZombieDurWithBucket(newPeer(testCase.peerCPU), newDetail(1, testCase.sourceCPU))
-		re.Equal(testCase.expectedDur, gotDur, testCase.name)
-		re.InDelta(testCase.expectedShare, gotShare, 1e-9, testCase.name)
-		re.Equal(testCase.expectedBucket, gotBucket, testCase.name)
+		got := bs.calcPendingMaxZombieDurWithBucket(newPeer(testCase.peerCPU), newDetail(1, testCase.sourceCPU))
+		re.Equal(testCase.expectedDur, got.maxZombieDur, testCase.name)
+		re.InDelta(testCase.expectedPeerShare, got.peerCPUShare, 1e-9, testCase.name)
+		re.InDelta(testCase.expectedEffective, got.effectiveCPUShare, 1e-9, testCase.name)
+		re.InDelta(testCase.expectedRecentCPU, got.recentPendingCPU, 1e-9, testCase.name)
+		re.Equal(testCase.expectedBucket, got.zombieBucket, testCase.name)
 	}
 }
 
