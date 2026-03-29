@@ -403,11 +403,39 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 			hotSchedulerResultCounter.WithLabelValues("src-store-history-loads-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
+		if !bs.checkReadCPUSourcePendingBrake(id, detail) {
+			hotSchedulerResultCounter.WithLabelValues("src-store-pending-cpu-brake-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+			continue
+		}
 
 		ret[id] = detail
 		hotSchedulerResultCounter.WithLabelValues("src-store-succ-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 	}
 	return ret
+}
+
+func (bs *balanceSolver) checkReadCPUSourcePendingBrake(storeID uint64, detail *statistics.StoreLoadDetail) bool {
+	if bs.rwTy != utils.Read || bs.firstPriority != utils.CPUDim || bs.secondPriority != utils.ByteDim {
+		return true
+	}
+	pendingCPU := detail.LoadPred.Pending().Loads[utils.CPUDim]
+	if pendingCPU <= 0 {
+		return true
+	}
+	// Use the hottest candidate peer CPU as the relay brake budget. Once a store already
+	// carries roughly one hot peer's worth of pending CPU influence, hold it out of the
+	// source set until the pending/zombie influence settles.
+	var maxMainPeerCPU float64
+	for _, peer := range bs.filteredHotPeers[storeID] {
+		if peer == nil {
+			continue
+		}
+		maxMainPeerCPU = math.Max(maxMainPeerCPU, peer.GetLoad(utils.CPUDim))
+	}
+	if maxMainPeerCPU <= 0 {
+		return true
+	}
+	return pendingCPU < maxMainPeerCPU
 }
 
 func (bs *balanceSolver) checkSrcByPriorityAndTolerance(minLoad, expectLoad *statistics.StoreLoad, toleranceRatio float64) bool {

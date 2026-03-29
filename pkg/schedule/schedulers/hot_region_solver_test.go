@@ -306,6 +306,95 @@ func TestMaxZombieDuration(t *testing.T) {
 	}
 }
 
+func TestFilterSrcStoresRejectsReadCPUSourcePendingBrake(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+
+	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
+	re.NoError(err)
+	tc.SetClusterVersion(versioninfo.MustParseVersion("8.5.7"))
+	hb.(*hotScheduler).conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+
+	bs := newBalanceSolver(hb.(*hotScheduler), tc, utils.Read, transferLeader)
+	srcStore := core.NewStoreInfoWithLabel(1, map[string]string{})
+	srcDetail := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: srcStore},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 10,
+				utils.CPUDim:  12,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 10,
+				utils.CPUDim:  16.5,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 5,
+				utils.CPUDim:  6,
+			}},
+		},
+		HotPeers: []*statistics.HotPeerStat{{
+			RegionID: 1,
+			StoreID:  1,
+			Loads: []float64{
+				utils.ByteDim: 6,
+				utils.CPUDim:  4,
+			},
+		}},
+	}
+	bs.stLoadDetail = map[uint64]*statistics.StoreLoadDetail{1: srcDetail}
+	bs.filteredHotPeers = map[uint64][]*statistics.HotPeerStat{1: srcDetail.HotPeers}
+
+	filtered := bs.filterSrcStores()
+	re.Empty(filtered)
+}
+
+func TestFilterSrcStoresKeepsNonCPUBytePathWithoutSourcePendingBrake(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+
+	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
+	re.NoError(err)
+	tc.SetClusterVersion(versioninfo.MustParseVersion("8.5.7"))
+	hb.(*hotScheduler).conf.ReadPriorities = []string{utils.BytePriority, utils.KeyPriority}
+
+	bs := newBalanceSolver(hb.(*hotScheduler), tc, utils.Read, transferLeader)
+	srcStore := core.NewStoreInfoWithLabel(1, map[string]string{})
+	srcDetail := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: srcStore},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 10,
+				utils.CPUDim:  12,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 10,
+				utils.CPUDim:  16.5,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 5,
+				utils.CPUDim:  6,
+			}},
+		},
+		HotPeers: []*statistics.HotPeerStat{{
+			RegionID: 1,
+			StoreID:  1,
+			Loads: []float64{
+				utils.ByteDim: 6,
+				utils.KeyDim:  3,
+				utils.CPUDim:  4,
+			},
+		}},
+	}
+	bs.stLoadDetail = map[uint64]*statistics.StoreLoadDetail{1: srcDetail}
+	bs.filteredHotPeers = map[uint64][]*statistics.HotPeerStat{1: srcDetail.HotPeers}
+
+	filtered := bs.filterSrcStores()
+	re.Contains(filtered, uint64(1))
+}
+
 func TestExpect(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
