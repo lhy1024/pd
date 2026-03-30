@@ -424,7 +424,8 @@ type hotPeerFilterReason string
 
 const (
 	readCPUByteRejectedDecisionLogLimitPerReason                      = 5
-	readCPUByteLightZombieDuration                                    = time.Minute
+	readCPUByteLightZombieDuration                                    = 30 * time.Second
+	readCPUByteDstGateZombieDuration                                  = time.Minute
 	readCPUByteMediumZombieDuration                                   = 2 * time.Minute
 	readCPUByteHeavyZombieDuration                                    = 3 * time.Minute
 	readCPUByteMediumZombieShare                                      = 0.10
@@ -1042,12 +1043,16 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		if pending == nil || pending.to != storeID {
 			continue
 		}
-		dstWeight, _ := calcPendingInfluence(pending.op, pending.dstMaxZombieDur)
-		if dstWeight <= 0 {
+		dstWeight, dstNeedGC := pending.calcDstPendingInfluence()
+		if dstNeedGC {
 			continue
 		}
 		if pending.dstInflated(informer, readCPUByteDstInflationDelta) {
+			pending.refreshDstZombie(readCPUByteDstGateZombieDuration)
 			return true
+		}
+		if dstWeight <= 0 {
+			continue
 		}
 	}
 	return false

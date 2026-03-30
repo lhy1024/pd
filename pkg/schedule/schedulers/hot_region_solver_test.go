@@ -520,6 +520,7 @@ func TestReadCPUByteDstInflationGate(t *testing.T) {
 		infl.Loads[utils.RegionReadCPU] = recordedCPU
 		pending := newPendingInfluence(op, []uint64{1}, dstStore, infl, time.Minute)
 		pending.dstMaxZombieDur = time.Minute
+		pending.dstGCGraceDur = time.Minute
 		pending.useDstObservedCPU = true
 		return pending
 	}
@@ -544,6 +545,50 @@ func TestReadCPUByteDstInflationGate(t *testing.T) {
 	re.False(bs.hasInflatedPendingOnDst(informer, 14))
 }
 
+func TestReadCPUByteDstInflationGateRefreshesDstZombie(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigSliceDecoder(types.BalanceHotRegionScheduler, nil))
+	re.NoError(err)
+
+	region := newTestRegion(36532)
+	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+	op.Start()
+	re.Nil(op.Check(region))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-40*time.Second))
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), HotPeerCount: 1}
+	infl.Loads[utils.RegionReadCPU] = 71
+	pending := newPendingInfluence(op, []uint64{1}, 14, infl, readCPUByteLightZombieDuration)
+	pending.dstMaxZombieDur = readCPUByteLightZombieDuration
+	pending.dstGCGraceDur = readCPUByteDstGateZombieDuration
+	pending.useDstObservedCPU = true
+	hb.(*hotScheduler).regionPendings[region.GetID()] = pending
+
+	weight, needGC := pending.calcDstPendingInfluence()
+	re.Zero(weight)
+	re.False(needGC)
+
+	bs := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{region.GetID(), 14}: {RegionID: region.GetID(), StoreID: 14, Loads: []float64{0, 0, 0, 90}},
+		},
+	}
+	re.True(bs.hasInflatedPendingOnDst(informer, 14))
+	re.Equal(readCPUByteDstGateZombieDuration, pending.dstMaxZombieDur)
+
+	weight, _ = pending.calcDstPendingInfluence()
+	re.Equal(1.0, weight)
+}
+
 func TestDstObservedAndInflationGateOnlyApplyToCPUFirstPriority(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
@@ -561,6 +606,7 @@ func TestDstObservedAndInflationGateOnlyApplyToCPUFirstPriority(t *testing.T) {
 		infl.Loads[utils.RegionReadCPU] = recordedCPU
 		pending := newPendingInfluence(op, []uint64{1}, dstStore, infl, time.Minute)
 		pending.dstMaxZombieDur = time.Minute
+		pending.dstGCGraceDur = time.Minute
 		pending.useDstObservedCPU = true
 		return pending
 	}

@@ -155,7 +155,7 @@ func (s *baseHotScheduler) updateHistoryLoadConfig(sampleDuration, sampleInterva
 func (s *baseHotScheduler) summaryPendingInfluence(informer statistics.RegionStatInformer, storeInfos map[uint64]*statistics.StoreSummaryInfo) {
 	for id, p := range s.regionPendings {
 		srcWeight, srcNeedGC := calcPendingInfluence(p.op, p.maxZombieDuration)
-		dstWeight, dstNeedGC := calcPendingInfluence(p.op, p.dstMaxZombieDur)
+		dstWeight, dstNeedGC := p.calcDstPendingInfluence()
 		if srcNeedGC && dstNeedGC {
 			delete(s.regionPendings, id)
 			continue
@@ -329,7 +329,11 @@ func (s *hotScheduler) tryAddPendingInfluence(
 
 	influence := newPendingInfluence(op, srcStore, dstStore, infl, srcMaxZombieDur)
 	influence.dstMaxZombieDur = dstMaxZombieDur
+	influence.dstGCGraceDur = dstMaxZombieDur
 	influence.useDstObservedCPU = useDstObservedCPU
+	if useDstObservedCPU && influence.dstGCGraceDur < readCPUByteDstGateZombieDuration {
+		influence.dstGCGraceDur = readCPUByteDstGateZombieDuration
+	}
 	s.regionPendings[regionID] = influence
 
 	utils.ForeachRegionStats(func(rwTy utils.RWType, dim int, kind utils.RegionStatKind) {

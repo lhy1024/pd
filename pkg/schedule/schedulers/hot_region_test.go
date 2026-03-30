@@ -2018,6 +2018,7 @@ func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 2, infl, 2*time.Minute)
 	pending.dstMaxZombieDur = 30 * time.Second
+	pending.dstGCGraceDur = time.Minute
 	pending.useDstObservedCPU = true
 	hb.regionPendings[region.GetID()] = pending
 
@@ -2052,6 +2053,7 @@ func TestSummaryPendingInfluenceUsesObservedDstCPU(t *testing.T) {
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 14, infl, time.Minute)
 	pending.dstMaxZombieDur = time.Minute
+	pending.dstGCGraceDur = time.Minute
 	pending.useDstObservedCPU = true
 	hb.regionPendings[region.GetID()] = pending
 
