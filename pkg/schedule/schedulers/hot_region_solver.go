@@ -568,6 +568,21 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 	fields = append(fields, hotOperatorStoreSummaryFields("dst-summary", dstSummary)...)
 	fields = append(fields, hotOperatorFilteredPeerFields("src-filtered-hot", bs.filteredHotPeers[srcID])...)
 	fields = append(fields, hotOperatorFilteredPeerFields("dst-filtered-hot", bs.filteredHotPeers[dstID])...)
+	if bs.isReadCPUByte() && bs.resourceTy == readLeader {
+		debugTopN := hotReadDebugDefaultTopN
+		if bs.sche.readHotDebug != nil {
+			debugTopN = bs.sche.readHotDebug.topNLimit()
+		}
+		if bs.sche.readHotDebug == nil || bs.sche.readHotDebug.shouldLogStore(srcID) || bs.sche.readHotDebug.shouldLogStore(dstID) {
+			mainPeerRank, mainPeerPrevCPU := findHotPeerRankByCPU(bs.best.srcStore.HotPeers, bs.best.mainPeerStat.RegionID, debugTopN)
+			fields = append(fields,
+				zap.Int("main-peer-prev-rank-in-src-topn", mainPeerRank),
+				zap.Float64("main-peer-prev-cpu-in-src-topn", mainPeerPrevCPU),
+				zap.Any("src-top3-before", buildHotStoreDebugPeers(bs.best.srcStore.HotPeers, hotReadDebugDispatchTopN)),
+				zap.Any("dst-top3-before", buildHotStoreDebugPeers(bs.best.dstStore.HotPeers, hotReadDebugDispatchTopN)),
+			)
+		}
+	}
 	if len(bs.ops) > 0 {
 		fields = append(fields, zap.String("operator-0", bs.ops[0].Desc()))
 	}

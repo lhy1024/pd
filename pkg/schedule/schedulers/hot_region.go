@@ -76,6 +76,7 @@ type baseHotScheduler struct {
 	types           []resourceType
 	updateReadTime  time.Time
 	updateWriteTime time.Time
+	readHotDebug    *hotReadDebugTracer
 }
 
 func newBaseHotScheduler(
@@ -88,6 +89,7 @@ func newBaseHotScheduler(
 		BaseScheduler:  base,
 		regionPendings: make(map[uint64]*pendingInfluence),
 		stHistoryLoads: statistics.NewStoreHistoryLoads(sampleDuration, sampleInterval),
+		readHotDebug:   newHotReadDebugTracerFromEnv(),
 	}
 	for ty := resourceType(0); ty < resourceTypeLen; ty++ {
 		ret.types = append(ret.types, ty)
@@ -113,6 +115,11 @@ func (s *baseHotScheduler) prepareForBalance(typ resourceType, cluster sche.Sche
 			regionStats,
 			isTraceRegionFlow,
 			rw, resource)
+		if ty == readLeader {
+			for _, detail := range s.stLoadInfos[ty] {
+				s.readHotDebug.logReadLeaderStoreSnapshot(detail)
+			}
+		}
 	}
 	switch typ {
 	case readLeader, readPeer:
