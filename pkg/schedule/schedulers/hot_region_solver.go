@@ -423,17 +423,19 @@ func hotOperatorPeerSetFields(prefix string, peers []*statistics.HotPeerStat) []
 type hotPeerFilterReason string
 
 const (
-	readCPUByteRejectedDecisionLogLimitPerReason                     = 5
-	readCPUByteLightZombieDuration                                   = time.Minute
-	readCPUByteMediumZombieDuration                                  = 2 * time.Minute
-	readCPUByteHeavyZombieDuration                                   = 3 * time.Minute
-	readCPUByteMediumZombieShare                                     = 0.10
-	readCPUByteHeavyZombieShare                                      = 0.20
-	readCPUByteDstInflationDelta                                     = 10.0
-	hotPeerFilterKept                            hotPeerFilterReason = "kept"
-	hotPeerFilterPending                         hotPeerFilterReason = "pending"
-	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
-	hotPeerFilterTopN                            hotPeerFilterReason = "topn"
+	readCPUByteRejectedDecisionLogLimitPerReason                      = 5
+	readCPUByteLightZombieDuration                                    = time.Minute
+	readCPUByteMediumZombieDuration                                   = 2 * time.Minute
+	readCPUByteHeavyZombieDuration                                    = 3 * time.Minute
+	readCPUByteMediumZombieShare                                      = 0.10
+	readCPUByteHeavyZombieShare                                       = 0.20
+	readCPUByteDstInflationDelta                                      = 10.0
+	readCPUByteSrcCooldownMinPendingRatio                             = 0.30
+	readCPUByteSrcCooldownFutureNearBalancedRatio                     = 1.05
+	hotPeerFilterKept                             hotPeerFilterReason = "kept"
+	hotPeerFilterPending                          hotPeerFilterReason = "pending"
+	hotPeerFilterCooldown                         hotPeerFilterReason = "cooldown"
+	hotPeerFilterTopN                             hotPeerFilterReason = "topn"
 )
 
 type hotPeerFilterDecision struct {
@@ -691,11 +693,34 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 			hotSchedulerResultCounter.WithLabelValues("src-store-history-loads-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
+		if bs.shouldCoolDownSrcStore(detail, srcToleranceRatio) {
+			hotSchedulerResultCounter.WithLabelValues("src-store-cooldown-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+			continue
+		}
 
 		ret[id] = detail
 		hotSchedulerResultCounter.WithLabelValues("src-store-succ-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 	}
 	return ret
+}
+
+func (bs *balanceSolver) shouldCoolDownSrcStore(detail *statistics.StoreLoadDetail, toleranceRatio float64) bool {
+	if !bs.isReadCPUByte() || detail == nil || detail.LoadPred == nil {
+		return false
+	}
+	dim := bs.firstPriority
+	current := detail.LoadPred.Current.Loads[dim]
+	future := detail.LoadPred.Future.Loads[dim]
+	expect := detail.LoadPred.Expect.Loads[dim]
+	if expect <= 0 {
+		return false
+	}
+
+	pendingOut := math.Max(0, current-future)
+	tooMuchPending := pendingOut > readCPUByteSrcCooldownMinPendingRatio*expect
+	stillHotAfterPending := current > toleranceRatio*expect
+	futureNearBalanced := future < readCPUByteSrcCooldownFutureNearBalancedRatio*expect
+	return tooMuchPending && stillHotAfterPending && futureNearBalanced
 }
 
 func (bs *balanceSolver) checkSrcByPriorityAndTolerance(minLoad, expectLoad *statistics.StoreLoad, toleranceRatio float64) bool {

@@ -544,6 +544,46 @@ func TestReadCPUByteDstInflationGate(t *testing.T) {
 	re.False(bs.hasInflatedPendingOnDst(informer, 14))
 }
 
+func TestReadCPUByteSrcCooldown(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigSliceDecoder(types.BalanceHotRegionScheduler, nil))
+	re.NoError(err)
+
+	newDetail := func(currentCPU, futureCPU, expectCPU float64) *statistics.StoreLoadDetail {
+		return &statistics.StoreLoadDetail{
+			StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: core.NewStoreInfoWithLabel(1, map[string]string{})},
+			LoadPred: &statistics.StoreLoadPred{
+				Current: statistics.StoreLoad{Loads: statistics.Loads{0, 0, 0, currentCPU}},
+				Future:  statistics.StoreLoad{Loads: statistics.Loads{0, 0, 0, futureCPU}},
+				Expect:  statistics.StoreLoad{Loads: statistics.Loads{0, 0, 0, expectCPU}},
+			},
+		}
+	}
+
+	bs := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+
+	re.True(bs.shouldCoolDownSrcStore(newDetail(1300, 900, 1000), 1.0))
+	re.False(bs.shouldCoolDownSrcStore(newDetail(1300, 1100, 1000), 1.0))
+	re.False(bs.shouldCoolDownSrcStore(newDetail(1005, 650, 1000), 1.05))
+
+	nonReadCPUByte := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.QueryDim,
+		secondPriority: utils.ByteDim,
+	}
+	re.False(nonReadCPUByte.shouldCoolDownSrcStore(newDetail(1300, 900, 1000), 1.0))
+}
+
 func TestExpect(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
