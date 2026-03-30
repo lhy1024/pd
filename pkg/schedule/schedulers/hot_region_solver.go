@@ -646,8 +646,12 @@ func (bs *balanceSolver) calcDstPendingMaxZombieDur(peer *statistics.HotPeerStat
 	return bs.calcPendingMaxZombieDur(peer, srcStore)
 }
 
+func (bs *balanceSolver) shouldApplyDstCPUProtections() bool {
+	return bs.rwTy == utils.Read && bs.firstPriority == utils.CPUDim
+}
+
 func (bs *balanceSolver) shouldUseDstObservedCPU() bool {
-	return bs.isReadCPUByte()
+	return bs.shouldApplyDstCPUProtections()
 }
 
 func (bs *balanceSolver) calcPendingMaxZombieDurWithBucket(peer *statistics.HotPeerStat, srcStore *statistics.StoreLoadDetail) (time.Duration, float64, string) {
@@ -1031,7 +1035,7 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 }
 
 func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatInformer, storeID uint64) bool {
-	if !bs.isReadCPUByte() || informer == nil || storeID == 0 {
+	if !bs.shouldApplyDstCPUProtections() || informer == nil || storeID == 0 {
 		return false
 	}
 	for _, pending := range bs.sche.regionPendings {

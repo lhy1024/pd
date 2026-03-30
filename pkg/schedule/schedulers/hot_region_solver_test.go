@@ -544,6 +544,45 @@ func TestReadCPUByteDstInflationGate(t *testing.T) {
 	re.False(bs.hasInflatedPendingOnDst(informer, 14))
 }
 
+func TestDstObservedAndInflationGateOnlyApplyToCPUFirstPriority(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigSliceDecoder(types.BalanceHotRegionScheduler, nil))
+	re.NoError(err)
+
+	makePending := func(regionID, dstStore uint64, recordedCPU float64) *pendingInfluence {
+		region := newTestRegion(regionID)
+		op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+		op.Start()
+		re.Nil(op.Check(region))
+		op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-10*time.Second))
+		infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), HotPeerCount: 1}
+		infl.Loads[utils.RegionReadCPU] = recordedCPU
+		pending := newPendingInfluence(op, []uint64{1}, dstStore, infl, time.Minute)
+		pending.dstMaxZombieDur = time.Minute
+		pending.useDstObservedCPU = true
+		return pending
+	}
+
+	nonCPUFirst := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.ByteDim,
+		secondPriority: utils.CPUDim,
+	}
+	re.False(nonCPUFirst.shouldUseDstObservedCPU())
+
+	hb.(*hotScheduler).regionPendings[36532] = makePending(36532, 14, 71)
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{36532, 14}: {RegionID: 36532, StoreID: 14, Loads: []float64{0, 0, 0, 90}},
+		},
+	}
+	re.False(nonCPUFirst.hasInflatedPendingOnDst(informer, 14))
+}
+
 func TestReadCPUByteSrcCooldown(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
