@@ -370,7 +370,7 @@ func TestMaxZombieDuration(t *testing.T) {
 	}
 }
 
-func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
+func TestReadCPUBytePendingMaxZombieDurationFallsBackToBase(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
 	defer cancel()
@@ -401,44 +401,44 @@ func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
 		expectedBucket string
 	}{
 		{
-			name:           "heavy peer keeps three minute zombie",
+			name:           "heavy peer keeps base zombie",
 			firstPriority:  utils.CPUDim,
 			secondPriority: utils.ByteDim,
 			sourceCPU:      1000,
 			peerCPU:        298,
-			expectedDur:    readCPUByteHeavyZombieDuration,
+			expectedDur:    baseZombieDur,
 			expectedShare:  0.298,
-			expectedBucket: "heavy",
+			expectedBucket: "base",
 		},
 		{
-			name:           "medium peer keeps two minute zombie",
+			name:           "medium peer keeps base zombie",
 			firstPriority:  utils.CPUDim,
 			secondPriority: utils.ByteDim,
 			sourceCPU:      1000,
 			peerCPU:        150,
-			expectedDur:    readCPUByteMediumZombieDuration,
+			expectedDur:    baseZombieDur,
 			expectedShare:  0.15,
-			expectedBucket: "medium",
+			expectedBucket: "base",
 		},
 		{
-			name:           "borderline heavy peer now keeps three minute zombie",
+			name:           "borderline heavy peer keeps base zombie",
 			firstPriority:  utils.CPUDim,
 			secondPriority: utils.ByteDim,
 			sourceCPU:      1188,
 			peerCPU:        284,
-			expectedDur:    readCPUByteHeavyZombieDuration,
+			expectedDur:    baseZombieDur,
 			expectedShare:  284.0 / 1188.0,
-			expectedBucket: "heavy",
+			expectedBucket: "base",
 		},
 		{
-			name:           "light peer keeps one minute zombie",
+			name:           "light peer keeps base zombie",
 			firstPriority:  utils.CPUDim,
 			secondPriority: utils.ByteDim,
 			sourceCPU:      1000,
 			peerCPU:        90,
-			expectedDur:    readCPUByteLightZombieDuration,
+			expectedDur:    baseZombieDur,
 			expectedShare:  0.09,
-			expectedBucket: "light",
+			expectedBucket: "base",
 		},
 		{
 			name:           "non cpu-byte path falls back to base zombie",

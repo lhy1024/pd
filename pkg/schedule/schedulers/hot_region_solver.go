@@ -645,14 +645,7 @@ func (bs *balanceSolver) calcPendingMaxZombieDurWithBucket(peer *statistics.HotP
 	}
 
 	share := peerCPU / sourceCPU
-	switch {
-	case share >= readCPUByteHeavyZombieShare:
-		return readCPUByteHeavyZombieDuration, share, "heavy"
-	case share >= readCPUByteMediumZombieShare:
-		return readCPUByteMediumZombieDuration, share, "medium"
-	default:
-		return readCPUByteLightZombieDuration, share, "light"
-	}
+	return baseZombieDur, share, "base"
 }
 
 // filterSrcStores compare the min rate and the ratio * expectation rate, if two dim rate is greater than
