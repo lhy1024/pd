@@ -82,6 +82,25 @@ func newTestRegion(id uint64) *core.RegionInfo {
 	return core.NewRegionInfo(&metapb.Region{Id: id, Peers: peers}, peers[0])
 }
 
+type fakeRegionStatInformer struct {
+	stats map[[2]uint64]*statistics.HotPeerStat
+}
+
+func (f *fakeRegionStatInformer) GetHotPeerStat(rw utils.RWType, regionID, storeID uint64) *statistics.HotPeerStat {
+	if rw != utils.Read {
+		return nil
+	}
+	return f.stats[[2]uint64{regionID, storeID}]
+}
+
+func (*fakeRegionStatInformer) IsRegionHot(*core.RegionInfo) bool {
+	return false
+}
+
+func (*fakeRegionStatInformer) GetHotPeerStats(utils.RWType) map[uint64][]*statistics.HotPeerStat {
+	return nil
+}
+
 func TestUpgrade(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
@@ -182,7 +201,7 @@ func checkGCPendingOpInfos(re *require.Assertions, enablePlacementRules bool) {
 	}
 
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.summaryPendingInfluence(storeInfos) // Calling this function will GC.
+	hb.summaryPendingInfluence(tc, storeInfos) // Calling this function will GC.
 
 	for i := range opInfluenceCreators {
 		for j, typ := range typs {
@@ -1941,7 +1960,7 @@ func TestInfluenceByRWType(t *testing.T) {
 	re.NotNil(op)
 
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.(*hotScheduler).summaryPendingInfluence(storeInfos)
+	hb.(*hotScheduler).summaryPendingInfluence(tc, storeInfos)
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteKeys], -0.5*units.MiB))
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteBytes], -0.5*units.MiB))
 	re.True(nearlyAbout(storeInfos[4].PendingSum.Loads[utils.RegionWriteKeys], 0.5*units.MiB))
@@ -1966,7 +1985,7 @@ func TestInfluenceByRWType(t *testing.T) {
 	re.NotNil(op)
 
 	storeInfos = statistics.SummaryStoreInfos(tc.GetStores())
-	hb.(*hotScheduler).summaryPendingInfluence(storeInfos)
+	hb.(*hotScheduler).summaryPendingInfluence(tc, storeInfos)
 	// assert read/write influence is the sum of write peer and write leader
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteKeys], -1.2*units.MiB))
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteBytes], -1.2*units.MiB))
@@ -1976,6 +1995,78 @@ func TestInfluenceByRWType(t *testing.T) {
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionReadBytes], -1.2*units.MiB))
 	re.True(nearlyAbout(storeInfos[3].PendingSum.Loads[utils.RegionReadKeys], 0.7*units.MiB))
 	re.True(nearlyAbout(storeInfos[3].PendingSum.Loads[utils.RegionReadBytes], 0.7*units.MiB))
+}
+
+func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	tc.PutStoreWithLabels(1)
+	tc.PutStoreWithLabels(2)
+
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+
+	region := newTestRegion(100)
+	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+	op.Start()
+	re.Nil(op.Check(region))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-40*time.Second))
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), HotPeerCount: 1}
+	infl.Loads[utils.RegionReadCPU] = 71
+	pending := newPendingInfluence(op, []uint64{1}, 2, infl, 2*time.Minute)
+	pending.dstMaxZombieDur = 30 * time.Second
+	pending.useDstObservedCPU = true
+	hb.regionPendings[region.GetID()] = pending
+
+	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
+	hb.summaryPendingInfluence(&fakeRegionStatInformer{}, storeInfos)
+
+	re.NotNil(storeInfos[1].PendingSum)
+	re.Equal(-71.0, storeInfos[1].PendingSum.Loads[utils.RegionReadCPU])
+	re.Nil(storeInfos[2].PendingSum)
+	_, ok := hb.regionPendings[region.GetID()]
+	re.True(ok)
+}
+
+func TestSummaryPendingInfluenceUsesObservedDstCPU(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	tc.PutStoreWithLabels(1)
+	tc.PutStoreWithLabels(14)
+
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+
+	region := newTestRegion(36532)
+	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+	op.Start()
+	re.Nil(op.Check(region))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-10*time.Second))
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), HotPeerCount: 1}
+	infl.Loads[utils.RegionReadCPU] = 71
+	pending := newPendingInfluence(op, []uint64{1}, 14, infl, time.Minute)
+	pending.dstMaxZombieDur = time.Minute
+	pending.useDstObservedCPU = true
+	hb.regionPendings[region.GetID()] = pending
+
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{region.GetID(), 14}: {RegionID: region.GetID(), StoreID: 14, Loads: []float64{0, 0, 0, 259}},
+		},
+	}
+	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
+	hb.summaryPendingInfluence(informer, storeInfos)
+
+	re.NotNil(storeInfos[1].PendingSum)
+	re.NotNil(storeInfos[14].PendingSum)
+	re.Equal(-71.0, storeInfos[1].PendingSum.Loads[utils.RegionReadCPU])
+	re.Equal(259.0, storeInfos[14].PendingSum.Loads[utils.RegionReadCPU])
 }
 
 func nearlyAbout(f1, f2 float64) bool {

@@ -102,7 +102,7 @@ func newBaseHotScheduler(
 // each store, only update read or write load detail
 func (s *baseHotScheduler) prepareForBalance(typ resourceType, cluster sche.SchedulerCluster) {
 	storeInfos := statistics.SummaryStoreInfos(cluster.GetStores())
-	s.summaryPendingInfluence(storeInfos)
+	s.summaryPendingInfluence(cluster, storeInfos)
 	storesLoads := cluster.GetStoresLoads()
 	isTraceRegionFlow := cluster.GetSchedulerConfig().IsTraceRegionFlow()
 
@@ -152,24 +152,25 @@ func (s *baseHotScheduler) updateHistoryLoadConfig(sampleDuration, sampleInterva
 // summaryPendingInfluence calculate the summary of pending Influence for each store
 // and clean the region from regionInfluence if they have ended operator.
 // It makes each dim rate or count become `weight` times to the origin value.
-func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statistics.StoreSummaryInfo) {
+func (s *baseHotScheduler) summaryPendingInfluence(informer statistics.RegionStatInformer, storeInfos map[uint64]*statistics.StoreSummaryInfo) {
 	for id, p := range s.regionPendings {
-		for _, from := range p.froms {
-			from := storeInfos[from]
-			to := storeInfos[p.to]
-			maxZombieDur := p.maxZombieDuration
-			weight, needGC := calcPendingInfluence(p.op, maxZombieDur)
+		srcWeight, srcNeedGC := calcPendingInfluence(p.op, p.maxZombieDuration)
+		dstWeight, dstNeedGC := calcPendingInfluence(p.op, p.dstMaxZombieDur)
+		if srcNeedGC && dstNeedGC {
+			delete(s.regionPendings, id)
+			continue
+		}
 
-			if needGC {
-				delete(s.regionPendings, id)
-				continue
+		if srcWeight > 0 {
+			for _, fromID := range p.froms {
+				if from := storeInfos[fromID]; from != nil {
+					from.AddInfluence(&p.origin, -srcWeight)
+				}
 			}
-
-			if from != nil && weight > 0 {
-				from.AddInfluence(&p.origin, -weight)
-			}
-			if to != nil && weight > 0 {
-				to.AddInfluence(&p.origin, weight)
+		}
+		if dstWeight > 0 {
+			if to := storeInfos[p.to]; to != nil {
+				to.AddInfluence(p.dstInfluence(informer), dstWeight)
 			}
 		}
 	}
@@ -311,7 +312,14 @@ func (s *hotScheduler) dispatch(typ resourceType, cluster sche.SchedulerCluster)
 	return ops
 }
 
-func (s *hotScheduler) tryAddPendingInfluence(op *operator.Operator, srcStore []uint64, dstStore uint64, infl statistics.Influence, maxZombieDur time.Duration) bool {
+func (s *hotScheduler) tryAddPendingInfluence(
+	op *operator.Operator,
+	srcStore []uint64,
+	dstStore uint64,
+	infl statistics.Influence,
+	srcMaxZombieDur, dstMaxZombieDur time.Duration,
+	useDstObservedCPU bool,
+) bool {
 	regionID := op.RegionID()
 	_, ok := s.regionPendings[regionID]
 	if ok {
@@ -319,7 +327,9 @@ func (s *hotScheduler) tryAddPendingInfluence(op *operator.Operator, srcStore []
 		return false
 	}
 
-	influence := newPendingInfluence(op, srcStore, dstStore, infl, maxZombieDur)
+	influence := newPendingInfluence(op, srcStore, dstStore, infl, srcMaxZombieDur)
+	influence.dstMaxZombieDur = dstMaxZombieDur
+	influence.useDstObservedCPU = useDstObservedCPU
 	s.regionPendings[regionID] = influence
 
 	utils.ForeachRegionStats(func(rwTy utils.RWType, dim int, kind utils.RegionStatKind) {

@@ -319,9 +319,10 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		srcStoreIDs = append(srcStoreIDs, bs.best.srcStore.GetID())
 		dstStoreID = bs.best.dstStore.GetID()
 	}
-	maxZombieDur := bs.calcPendingMaxZombieDur(bs.best.mainPeerStat, bs.best.srcStore)
+	srcMaxZombieDur := bs.calcPendingMaxZombieDur(bs.best.mainPeerStat, bs.best.srcStore)
+	dstMaxZombieDur := bs.calcDstPendingMaxZombieDur(bs.best.mainPeerStat, bs.best.srcStore)
 	infl := bs.collectPendingInfluence(bs.best.mainPeerStat)
-	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
+	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, srcMaxZombieDur, dstMaxZombieDur, bs.shouldUseDstObservedCPU()) {
 		return false
 	}
 	if isSplit {
@@ -331,7 +332,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	if bs.best.revertPeerStat != nil && len(bs.ops) > 1 {
 		revertZombieDur := bs.calcPendingMaxZombieDur(bs.best.revertPeerStat, bs.best.dstStore)
 		infl := bs.collectPendingInfluence(bs.best.revertPeerStat)
-		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, revertZombieDur) {
+		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, revertZombieDur, revertZombieDur, false) {
 			return false
 		}
 	}
@@ -523,6 +524,7 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 	srcSummary := bs.best.srcStore.ToHotPeersStat()
 	dstSummary := bs.best.dstStore.ToHotPeersStat()
 	maxZombieDur, mainPeerCPUShare, zombieBucket := bs.calcPendingMaxZombieDurWithBucket(bs.best.mainPeerStat, bs.best.srcStore)
+	dstMaxZombieDur := bs.calcDstPendingMaxZombieDur(bs.best.mainPeerStat, bs.best.srcStore)
 	fields := []zap.Field{
 		zap.Stringer("rw-type", bs.rwTy),
 		zap.Stringer("op-type", bs.opTy),
@@ -535,6 +537,7 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 		zap.Uint64("region-id", bs.best.region.GetID()),
 		zap.Bool("has-revert-region", bs.best.revertRegion != nil),
 		zap.Duration("max-zombie-dur", maxZombieDur),
+		zap.Duration("dst-max-zombie-dur", dstMaxZombieDur),
 		zap.Float64("main-peer-cpu-share", mainPeerCPUShare),
 		zap.String("main-peer-zombie-bucket", zombieBucket),
 	}
@@ -631,6 +634,17 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 func (bs *balanceSolver) calcPendingMaxZombieDur(peer *statistics.HotPeerStat, srcStore *statistics.StoreLoadDetail) time.Duration {
 	maxZombieDur, _, _ := bs.calcPendingMaxZombieDurWithBucket(peer, srcStore)
 	return maxZombieDur
+}
+
+func (bs *balanceSolver) calcDstPendingMaxZombieDur(peer *statistics.HotPeerStat, srcStore *statistics.StoreLoadDetail) time.Duration {
+	if bs.isReadCPUByte() {
+		return readCPUByteLightZombieDuration
+	}
+	return bs.calcPendingMaxZombieDur(peer, srcStore)
+}
+
+func (bs *balanceSolver) shouldUseDstObservedCPU() bool {
+	return bs.isReadCPUByte()
 }
 
 func (bs *balanceSolver) calcPendingMaxZombieDurWithBucket(peer *statistics.HotPeerStat, srcStore *statistics.StoreLoadDetail) (time.Duration, float64, string) {

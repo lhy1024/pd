@@ -477,6 +477,32 @@ func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
 	}
 }
 
+func TestReadCPUByteDstPendingMaxZombieDuration(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigSliceDecoder(types.BalanceHotRegionScheduler, nil))
+	re.NoError(err)
+
+	bs := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+	re.Equal(readCPUByteLightZombieDuration, bs.calcDstPendingMaxZombieDur(nil, nil))
+
+	nonRead := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.QueryDim,
+		secondPriority: utils.ByteDim,
+	}
+	re.Equal(hb.(*hotScheduler).conf.getStoreStatZombieDuration(), nonRead.calcDstPendingMaxZombieDur(nil, nil))
+}
+
 func TestExpect(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()

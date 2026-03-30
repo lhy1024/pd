@@ -31,6 +31,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/placement"
 	"github.com/tikv/pd/pkg/schedule/plan"
 	"github.com/tikv/pd/pkg/statistics"
+	"github.com/tikv/pd/pkg/statistics/utils"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/logutil"
 )
@@ -243,6 +244,8 @@ type pendingInfluence struct {
 	to                uint64
 	origin            statistics.Influence
 	maxZombieDuration time.Duration
+	dstMaxZombieDur   time.Duration
+	useDstObservedCPU bool
 }
 
 func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl statistics.Influence, maxZombieDur time.Duration) *pendingInfluence {
@@ -252,6 +255,28 @@ func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl 
 		to:                to,
 		origin:            infl,
 		maxZombieDuration: maxZombieDur,
+		dstMaxZombieDur:   maxZombieDur,
+	}
+}
+
+func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer) *statistics.Influence {
+	if !p.useDstObservedCPU || informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
+		return &p.origin
+	}
+	observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
+	if observed == nil {
+		return &p.origin
+	}
+	observedCPU := observed.GetLoad(utils.CPUDim)
+	recordedCPU := p.origin.Loads[utils.RegionReadCPU]
+	if observedCPU <= recordedCPU {
+		return &p.origin
+	}
+	loads := append([]float64(nil), p.origin.Loads...)
+	loads[utils.RegionReadCPU] = observedCPU
+	return &statistics.Influence{
+		Loads:        loads,
+		HotPeerCount: p.origin.HotPeerCount,
 	}
 }
 
