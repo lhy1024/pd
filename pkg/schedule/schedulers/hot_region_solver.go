@@ -429,6 +429,7 @@ const (
 	readCPUByteHeavyZombieDuration                                   = 3 * time.Minute
 	readCPUByteMediumZombieShare                                     = 0.10
 	readCPUByteHeavyZombieShare                                      = 0.20
+	readCPUByteDstInflationDelta                                     = 10.0
 	hotPeerFilterKept                            hotPeerFilterReason = "kept"
 	hotPeerFilterPending                         hotPeerFilterReason = "pending"
 	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
@@ -659,14 +660,7 @@ func (bs *balanceSolver) calcPendingMaxZombieDurWithBucket(peer *statistics.HotP
 	}
 
 	share := peerCPU / sourceCPU
-	switch {
-	case share >= readCPUByteHeavyZombieShare:
-		return readCPUByteHeavyZombieDuration, share, "heavy"
-	case share >= readCPUByteMediumZombieShare:
-		return readCPUByteMediumZombieDuration, share, "medium"
-	default:
-		return readCPUByteLightZombieDuration, share, "light"
-	}
+	return readCPUByteLightZombieDuration, share, "uniform"
 }
 
 // filterSrcStores compare the min rate and the ratio * expectation rate, if two dim rate is greater than
@@ -991,6 +985,10 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		}
 		if filter.Target(bs.GetSchedulerConfig(), store, filters) {
 			id := store.GetID()
+			if bs.hasInflatedPendingOnDst(bs.SchedulerCluster, id) {
+				hotSchedulerResultCounter.WithLabelValues("dst-store-inflated-pending-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+				continue
+			}
 			if !bs.checkDstByPriorityAndTolerance(detail.LoadPred.Max(), &detail.LoadPred.Expect, dstToleranceRatio) {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 				continue
@@ -1005,6 +1003,25 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		}
 	}
 	return ret
+}
+
+func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatInformer, storeID uint64) bool {
+	if !bs.isReadCPUByte() || informer == nil || storeID == 0 {
+		return false
+	}
+	for _, pending := range bs.sche.regionPendings {
+		if pending == nil || pending.to != storeID {
+			continue
+		}
+		dstWeight, _ := calcPendingInfluence(pending.op, pending.dstMaxZombieDur)
+		if dstWeight <= 0 {
+			continue
+		}
+		if pending.dstInflated(informer, readCPUByteDstInflationDelta) {
+			return true
+		}
+	}
+	return false
 }
 
 func (bs *balanceSolver) checkDstByPriorityAndTolerance(maxLoad, expect *statistics.StoreLoad, toleranceRatio float64) bool {

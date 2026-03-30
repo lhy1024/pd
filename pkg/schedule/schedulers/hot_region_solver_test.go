@@ -401,34 +401,34 @@ func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
 		expectedBucket string
 	}{
 		{
-			name:           "heavy peer keeps three minute zombie",
+			name:           "heavy peer now keeps uniform one minute zombie",
 			firstPriority:  utils.CPUDim,
 			secondPriority: utils.ByteDim,
 			sourceCPU:      1000,
 			peerCPU:        298,
-			expectedDur:    readCPUByteHeavyZombieDuration,
+			expectedDur:    readCPUByteLightZombieDuration,
 			expectedShare:  0.298,
-			expectedBucket: "heavy",
+			expectedBucket: "uniform",
 		},
 		{
-			name:           "medium peer keeps two minute zombie",
+			name:           "medium peer now keeps uniform one minute zombie",
 			firstPriority:  utils.CPUDim,
 			secondPriority: utils.ByteDim,
 			sourceCPU:      1000,
 			peerCPU:        150,
-			expectedDur:    readCPUByteMediumZombieDuration,
+			expectedDur:    readCPUByteLightZombieDuration,
 			expectedShare:  0.15,
-			expectedBucket: "medium",
+			expectedBucket: "uniform",
 		},
 		{
-			name:           "borderline heavy peer now keeps three minute zombie",
+			name:           "borderline heavy peer now keeps uniform one minute zombie",
 			firstPriority:  utils.CPUDim,
 			secondPriority: utils.ByteDim,
 			sourceCPU:      1188,
 			peerCPU:        284,
-			expectedDur:    readCPUByteHeavyZombieDuration,
+			expectedDur:    readCPUByteLightZombieDuration,
 			expectedShare:  284.0 / 1188.0,
-			expectedBucket: "heavy",
+			expectedBucket: "uniform",
 		},
 		{
 			name:           "light peer keeps one minute zombie",
@@ -438,7 +438,7 @@ func TestReadCPUBytePendingMaxZombieDurationBuckets(t *testing.T) {
 			peerCPU:        90,
 			expectedDur:    readCPUByteLightZombieDuration,
 			expectedShare:  0.09,
-			expectedBucket: "light",
+			expectedBucket: "uniform",
 		},
 		{
 			name:           "non cpu-byte path falls back to base zombie",
@@ -501,6 +501,47 @@ func TestReadCPUByteDstPendingMaxZombieDuration(t *testing.T) {
 		secondPriority: utils.ByteDim,
 	}
 	re.Equal(hb.(*hotScheduler).conf.getStoreStatZombieDuration(), nonRead.calcDstPendingMaxZombieDur(nil, nil))
+}
+
+func TestReadCPUByteDstInflationGate(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigSliceDecoder(types.BalanceHotRegionScheduler, nil))
+	re.NoError(err)
+
+	makePending := func(regionID, dstStore uint64, recordedCPU float64) *pendingInfluence {
+		region := newTestRegion(regionID)
+		op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+		op.Start()
+		re.Nil(op.Check(region))
+		op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-10*time.Second))
+		infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), HotPeerCount: 1}
+		infl.Loads[utils.RegionReadCPU] = recordedCPU
+		pending := newPendingInfluence(op, []uint64{1}, dstStore, infl, time.Minute)
+		pending.dstMaxZombieDur = time.Minute
+		pending.useDstObservedCPU = true
+		return pending
+	}
+
+	bs := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+
+	hb.(*hotScheduler).regionPendings[36532] = makePending(36532, 14, 71)
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{36532, 14}: {RegionID: 36532, StoreID: 14, Loads: []float64{0, 0, 0, 90}},
+		},
+	}
+	re.True(bs.hasInflatedPendingOnDst(informer, 14))
+
+	informer.stats[[2]uint64{36532, 14}] = &statistics.HotPeerStat{RegionID: 36532, StoreID: 14, Loads: []float64{0, 0, 0, 80}}
+	re.False(bs.hasInflatedPendingOnDst(informer, 14))
 }
 
 func TestExpect(t *testing.T) {
