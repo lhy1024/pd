@@ -1090,7 +1090,7 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		observedCPU := observed.GetLoad(utils.CPUDim)
 		if observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
 			pending.dstReadCPURecord = observedCPU
-			pending.maxZombieDuration += 30 * time.Second
+			pending.maxZombieDuration += bs.sche.conf.getStoreStatZombieDuration()
 			return true
 		}
 	}
