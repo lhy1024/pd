@@ -165,14 +165,14 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 		}
 	}
 	for id, p := range s.regionPendings {
-		srcZombieDur := p.maxZombieDuration
-		if srcZombieDur < p.dstMaxZombieDur {
-			srcZombieDur = p.dstMaxZombieDur
-		}
-		for _, fromID := range p.froms {
-			from := storeInfos[fromID]
+		for _, from := range p.froms {
+			from := storeInfos[from]
 			to := storeInfos[p.to]
-			srcWeight, needGC := calcPendingInfluence(p.op, srcZombieDur)
+			maxZombieDur := p.maxZombieDuration
+			if maxZombieDur < p.dstMaxZombieDur {
+				maxZombieDur = p.dstMaxZombieDur
+			}
+			srcWeight, needGC := calcPendingInfluence(p.op, maxZombieDur)
 			if needGC {
 				delete(s.regionPendings, id)
 				continue
