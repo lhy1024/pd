@@ -749,7 +749,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		dstStoreID = bs.best.dstStore.GetID()
 	}
 	infl := bs.collectPendingInfluence(bs.best.mainPeerStat)
-	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.shouldApplyDstCPUProtections()) {
+	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.rwTy == utils.Read && bs.firstPriority == utils.CPUDim) {
 		return false
 	}
 	if isSplit {
@@ -758,7 +758,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	// revert peers
 	if bs.best.revertPeerStat != nil && len(bs.ops) > 1 {
 		infl := bs.collectPendingInfluence(bs.best.revertPeerStat)
-		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.shouldApplyDstCPUProtections()) {
+		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.rwTy == utils.Read && bs.firstPriority == utils.CPUDim) {
 			return false
 		}
 	}
@@ -797,10 +797,6 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 	default:
 		return bs.sche.conf.getStoreStatZombieDuration()
 	}
-}
-
-func (bs *balanceSolver) shouldApplyDstCPUProtections() bool {
-	return bs.rwTy == utils.Read && bs.firstPriority == utils.CPUDim
 }
 
 // filterSrcStores compare the min rate and the ratio * expectation rate, if two dim rate is greater than
@@ -1083,23 +1079,20 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 }
 
 func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatInformer, storeID uint64) bool {
-	if !bs.shouldApplyDstCPUProtections() || informer == nil || storeID == 0 {
+	if bs.rwTy != utils.Read || bs.firstPriority != utils.CPUDim || informer == nil || storeID == 0 {
 		return false
 	}
 	for _, pending := range bs.sche.regionPendings {
 		if pending == nil || pending.to != storeID {
 			continue
 		}
-		dstWeight, dstNeedGC := pending.calcDstPendingInfluence()
+		_, dstNeedGC := pending.calcDstPendingInfluence()
 		if dstNeedGC {
 			continue
 		}
 		if pending.dstInflated(informer, readCPUDstInflationDelta) {
 			pending.refreshDstZombie(readCPUDstGateZombieDur)
 			return true
-		}
-		if dstWeight <= 0 {
-			continue
 		}
 	}
 	return false

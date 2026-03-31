@@ -3252,7 +3252,6 @@ func TestDstObservedAndInflationGateOnlyApplyToCPUFirstPriority(t *testing.T) {
 		firstPriority:  utils.ByteDim,
 		secondPriority: utils.CPUDim,
 	}
-	re.False(nonCPUFirst.shouldApplyDstCPUProtections())
 
 	hb.(*hotScheduler).regionPendings[36532] = makePending(36532, 14, 71)
 	informer := &fakeRegionStatInformer{
