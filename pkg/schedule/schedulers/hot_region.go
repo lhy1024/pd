@@ -111,7 +111,7 @@ func newBaseHotScheduler(
 // each store, only update read or write load detail
 func (s *baseHotScheduler) prepareForBalance(typ resourceType, cluster sche.SchedulerCluster) {
 	storeInfos := statistics.SummaryStoreInfos(cluster.GetStores())
-	s.summaryPendingInfluence(storeInfos)
+	s.summaryPendingInfluence(typ, cluster, storeInfos)
 	storesLoads := cluster.GetStoresLoads()
 	isTraceRegionFlow := cluster.GetSchedulerConfig().IsTraceRegionFlow()
 
@@ -156,7 +156,14 @@ func (s *baseHotScheduler) updateHistoryLoadConfig(sampleDuration, sampleInterva
 // summaryPendingInfluence calculate the summary of pending Influence for each store
 // and clean the region from regionInfluence if they have ended operator.
 // It makes each dim rate or count become `weight` times to the origin value.
-func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statistics.StoreSummaryInfo) {
+func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer statistics.RegionStatInformer, storeInfos map[uint64]*statistics.StoreSummaryInfo) {
+	cpuFirstPriority := false
+	if (typ == readLeader || typ == readPeer) && s.conf != nil {
+		if conf, ok := s.conf.(*hotRegionSchedulerConfig); ok {
+			priorities := conf.getReadPriorities()
+			cpuFirstPriority = len(priorities) > 0 && priorities[0] == utils.CPUPriority
+		}
+	}
 	for id, p := range s.regionPendings {
 		for _, from := range p.froms {
 			from := storeInfos[from]
@@ -169,11 +176,14 @@ func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statis
 				continue
 			}
 
+			// The same pending window is applied to both src and dst on purpose:
+			// once dst is still inflating, the region should neither be selected
+			// back out of dst nor released from src-side suppression too early.
 			if from != nil && weight > 0 {
 				from.AddInfluence(&p.origin, -weight)
 			}
 			if to != nil && weight > 0 {
-				to.AddInfluence(&p.origin, weight)
+				to.AddInfluence(p.dstInfluence(informer, cpuFirstPriority), weight)
 			}
 		}
 	}
@@ -230,11 +240,13 @@ func (s *hotScheduler) ReloadConfig() error {
 	s.conf.MinHotByteRate = newCfg.MinHotByteRate
 	s.conf.MinHotKeyRate = newCfg.MinHotKeyRate
 	s.conf.MinHotQueryRate = newCfg.MinHotQueryRate
+	s.conf.MinHotCPURate = newCfg.MinHotCPURate
 	s.conf.MaxZombieRounds = newCfg.MaxZombieRounds
 	s.conf.MaxPeerNum = newCfg.MaxPeerNum
 	s.conf.ByteRateRankStepRatio = newCfg.ByteRateRankStepRatio
 	s.conf.KeyRateRankStepRatio = newCfg.KeyRateRankStepRatio
 	s.conf.QueryRateRankStepRatio = newCfg.QueryRateRankStepRatio
+	s.conf.CPURateRankStepRatio = newCfg.CPURateRankStepRatio
 	s.conf.CountRankStepRatio = newCfg.CountRankStepRatio
 	s.conf.GreatDecRatio = newCfg.GreatDecRatio
 	s.conf.MinorDecRatio = newCfg.MinorDecRatio
@@ -535,7 +547,9 @@ func (bs *balanceSolver) init() {
 	rankStepRatios := []float64{
 		utils.ByteDim:  bs.sche.conf.getByteRankStepRatio(),
 		utils.KeyDim:   bs.sche.conf.getKeyRankStepRatio(),
-		utils.QueryDim: bs.sche.conf.getQueryRateRankStepRatio()}
+		utils.QueryDim: bs.sche.conf.getQueryRateRankStepRatio(),
+		utils.CPUDim:   bs.sche.conf.getCPURateRankStepRatio(),
+	}
 	stepLoads := make([]float64, utils.DimLen)
 	for i := range stepLoads {
 		stepLoads[i] = maxCur.Loads[i] * rankStepRatios[i]
@@ -687,6 +701,8 @@ func (bs *balanceSolver) skipCounter(label string) prometheus.Counter {
 			return readSkipKeyDimUniformStoreCounter
 		case "query":
 			return readSkipQueryDimUniformStoreCounter
+		case "cpu":
+			return readSkipCPUDimUniformStoreCounter
 		default:
 			return readSkipAllDimUniformStoreCounter
 		}
@@ -1041,6 +1057,10 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		}
 		if filter.Target(bs.GetSchedulerConfig(), store, filters) {
 			id := store.GetID()
+			if bs.hasInflatedPendingOnDst(bs.SchedulerCluster, id) {
+				hotSchedulerResultCounter.WithLabelValues("dst-store-inflated-pending-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+				continue
+			}
 			if !bs.checkDstByPriorityAndTolerance(detail.LoadPred.Max(), &detail.LoadPred.Expect, dstToleranceRatio) {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 				continue
@@ -1055,6 +1075,41 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		}
 	}
 	return ret
+}
+
+// hasInflatedPendingOnDst checks whether a destination store still has a moved
+// hot region whose observed CPU has grown beyond the recorded baseline.
+// It intentionally has side effects: once a new inflation step is observed, it
+// raises the recorded CPU baseline and extends the shared zombie window so the
+// destination stays blocked until it stabilizes.
+func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatInformer, storeID uint64) bool {
+	if bs.rwTy != utils.Read || bs.firstPriority != utils.CPUDim || informer == nil || storeID == 0 {
+		return false
+	}
+	minHotCPU := bs.sche.conf.getMinHotCPURate()
+	for _, pending := range bs.sche.regionPendings {
+		if pending == nil || pending.to != storeID || pending.op == nil || len(pending.origin.Loads) <= int(utils.RegionReadCPU) {
+			continue
+		}
+		observed := informer.GetHotPeerStat(utils.Read, pending.op.RegionID(), storeID)
+		if observed == nil {
+			continue
+		}
+		recordedCPU := pending.dstReadCPURecord
+		observedCPU := observed.GetLoad(utils.CPUDim)
+		if observedCPU > recordedCPU+minHotCPU {
+			// When a moved region keeps growing on dst, temporarily block the
+			// whole dst store so scheduler does not keep stacking more hot peers
+			// onto a destination whose real CPU has not stabilized yet.
+			pending.dstReadCPURecord = observedCPU
+			pending.maxZombieDuration += bs.sche.conf.getStoreStatZombieDuration()
+			return true
+		}
+		if pending.dstReadCPURecord > pending.origin.GetReadCPU() {
+			return true
+		}
+	}
+	return false
 }
 
 func (bs *balanceSolver) checkDstByPriorityAndTolerance(maxLoad, expect *statistics.StoreLoad, toleranceRatio float64) bool {
@@ -1156,6 +1211,8 @@ func (bs *balanceSolver) getMinRate(dim int) float64 {
 		return bs.sche.conf.getMinHotByteRate()
 	case utils.QueryDim:
 		return bs.sche.conf.getMinHotQueryRate()
+	case utils.CPUDim:
+		return bs.sche.conf.getMinHotCPURate()
 	}
 	return -1
 }
@@ -1164,6 +1221,7 @@ var dimToStep = [utils.DimLen]float64{
 	utils.ByteDim:  100,
 	utils.KeyDim:   10,
 	utils.QueryDim: 10,
+	utils.CPUDim:   10,
 }
 
 // compareSrcStore compares the source store of detail1, detail2, the result is:
@@ -1317,18 +1375,21 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator) {
 }
 
 // bucketFirstStat returns the first priority statistics of the bucket.
-// if the first priority is query rate, it will return the second priority .
+// If the first priority is a dimension that buckets do not report, it falls
+// back to another bucket-supported priority.
 func (bs *balanceSolver) bucketFirstStat() utils.RegionStatKind {
-	base := utils.RegionReadBytes
-	if bs.rwTy == utils.Write {
-		base = utils.RegionWriteBytes
+	dim := bs.firstPriority
+	if !isBucketLoadDimSupported(dim) {
+		dim = bs.secondPriority
 	}
-	offset := bs.firstPriority
-	// todo: remove it if bucket's qps has been supported.
-	if bs.firstPriority == utils.QueryDim {
-		offset = bs.secondPriority
+	if !isBucketLoadDimSupported(dim) {
+		dim = utils.ByteDim
 	}
-	return base + utils.RegionStatKind(offset)
+	return bs.rwTy.RegionStats()[dim]
+}
+
+func isBucketLoadDimSupported(dim int) bool {
+	return dim == utils.ByteDim || dim == utils.KeyDim || dim == utils.QueryDim
 }
 
 func (bs *balanceSolver) splitBucketsOperator(region *core.RegionInfo, keys [][]byte) *operator.Operator {

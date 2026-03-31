@@ -80,6 +80,25 @@ func newTestRegion(id uint64) *core.RegionInfo {
 	return core.NewRegionInfo(&metapb.Region{Id: id, Peers: peers}, peers[0])
 }
 
+type fakeRegionStatInformer struct {
+	stats map[[2]uint64]*statistics.HotPeerStat
+}
+
+func (f *fakeRegionStatInformer) GetHotPeerStat(rw utils.RWType, regionID, storeID uint64) *statistics.HotPeerStat {
+	if rw != utils.Read {
+		return nil
+	}
+	return f.stats[[2]uint64{regionID, storeID}]
+}
+
+func (*fakeRegionStatInformer) IsRegionHot(*core.RegionInfo) bool {
+	return false
+}
+
+func (*fakeRegionStatInformer) GetHotPeerStats(utils.RWType) map[uint64][]*statistics.HotPeerStat {
+	return nil
+}
+
 func TestUpgrade(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
@@ -180,7 +199,7 @@ func checkGCPendingOpInfos(re *require.Assertions, enablePlacementRules bool) {
 	}
 
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.summaryPendingInfluence(storeInfos) // Calling this function will GC.
+	hb.summaryPendingInfluence(readLeader, nil, storeInfos) // Calling this function will GC.
 
 	for i := range opInfluenceCreators {
 		for j, typ := range typs {
@@ -209,6 +228,7 @@ func TestSplitIfRegionTooHot(t *testing.T) {
 	defer cancel()
 	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
 	re.NoError(err)
+	hb.(*hotScheduler).conf.ReadPriorities = []string{utils.BytePriority, utils.KeyPriority}
 	b := &metapb.Buckets{
 		RegionId:   1,
 		PeriodInMs: 1000,
@@ -369,6 +389,9 @@ func TestSplitBucketsByLoad(t *testing.T) {
 	defer cancel()
 	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
 	re.NoError(err)
+	// Explicitly use byte/key here so this test only verifies split-key selection
+	// instead of depending on the cluster-version-specific default priorities.
+	hb.(*hotScheduler).conf.ReadPriorities = []string{utils.BytePriority, utils.KeyPriority}
 	solve := newBalanceSolver(hb.(*hotScheduler), tc, utils.Read, transferLeader)
 	solve.cur = &solution{}
 	region := core.NewTestRegionInfo(1, 1, []byte("a"), []byte("f"))
@@ -826,16 +849,16 @@ func TestHotWriteRegionScheduleByteRateOnlyWithTiFlash(t *testing.T) {
 		re.True(
 			loadsEqual(
 				hb.stLoadInfos[writeLeader][1].LoadPred.Expect.Loads,
-				[]float64{hotRegionBytesSum / allowLeaderTiKVCount, hotRegionKeysSum / allowLeaderTiKVCount, tikvQuerySum / allowLeaderTiKVCount}))
+				[]float64{hotRegionBytesSum / allowLeaderTiKVCount, hotRegionKeysSum / allowLeaderTiKVCount, tikvQuerySum / allowLeaderTiKVCount, 0}))
 		re.NotEqual(tikvQuerySum, hotRegionQuerySum)
 		re.True(
 			loadsEqual(
 				hb.stLoadInfos[writePeer][1].LoadPred.Expect.Loads,
-				[]float64{tikvBytesSum / aliveTiKVCount, tikvKeysSum / aliveTiKVCount, 0}))
+				[]float64{tikvBytesSum / aliveTiKVCount, tikvKeysSum / aliveTiKVCount, 0, 0}))
 		re.True(
 			loadsEqual(
 				hb.stLoadInfos[writePeer][8].LoadPred.Expect.Loads,
-				[]float64{regionBytesSum / aliveTiFlashCount, regionKeysSum / aliveTiFlashCount, 0}))
+				[]float64{regionBytesSum / aliveTiFlashCount, regionKeysSum / aliveTiFlashCount, 0, 0}))
 		// check IsTraceRegionFlow == false
 		pdServerCfg := tc.GetPDServerConfig()
 		pdServerCfg.FlowRoundByDigit = 8
@@ -848,7 +871,7 @@ func TestHotWriteRegionScheduleByteRateOnlyWithTiFlash(t *testing.T) {
 		re.True(
 			loadsEqual(
 				hb.stLoadInfos[writePeer][8].LoadPred.Expect.Loads,
-				[]float64{hotRegionBytesSum / aliveTiFlashCount, hotRegionKeysSum / aliveTiFlashCount, 0}))
+				[]float64{hotRegionBytesSum / aliveTiFlashCount, hotRegionKeysSum / aliveTiFlashCount, 0, 0}))
 		// revert
 		pdServerCfg.FlowRoundByDigit = 3
 		tc.SetPDServerConfig(pdServerCfg)
@@ -1414,6 +1437,7 @@ func TestHotReadRegionScheduleWithQuery(t *testing.T) {
 	hb.(*hotScheduler).conf.setDstToleranceRatio(1)
 	hb.(*hotScheduler).conf.RankFormulaVersion = "v1"
 	hb.(*hotScheduler).conf.setHistorySampleDuration(0)
+	hb.(*hotScheduler).conf.ReadPriorities = []string{utils.QueryPriority, utils.BytePriority}
 
 	tc.AddRegionStore(1, 20)
 	tc.AddRegionStore(2, 20)
@@ -2124,7 +2148,7 @@ func TestInfluenceByRWType(t *testing.T) {
 	re.NotNil(op)
 
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.(*hotScheduler).summaryPendingInfluence(storeInfos)
+	hb.(*hotScheduler).summaryPendingInfluence(readLeader, nil, storeInfos)
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteKeys], -0.5*units.MiB))
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteBytes], -0.5*units.MiB))
 	re.True(nearlyAbout(storeInfos[4].PendingSum.Loads[utils.RegionWriteKeys], 0.5*units.MiB))
@@ -2149,7 +2173,7 @@ func TestInfluenceByRWType(t *testing.T) {
 	re.NotNil(op)
 
 	storeInfos = statistics.SummaryStoreInfos(tc.GetStores())
-	hb.(*hotScheduler).summaryPendingInfluence(storeInfos)
+	hb.(*hotScheduler).summaryPendingInfluence(readLeader, nil, storeInfos)
 	// assert read/write influence is the sum of write peer and write leader
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteKeys], -1.2*units.MiB))
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteBytes], -1.2*units.MiB))
@@ -2474,6 +2498,12 @@ func TestCompatibility(t *testing.T) {
 		{utils.ByteDim, utils.KeyDim},
 	})
 	re.True(hb.(*hotScheduler).conf.lastQuerySupported)
+	tc.SetClusterVersion(versioninfo.MustParseVersion("8.5.5"))
+	checkPriority(re, hb.(*hotScheduler), tc, [3][2]int{
+		{utils.QueryDim, utils.ByteDim},
+		{utils.QueryDim, utils.ByteDim},
+		{utils.ByteDim, utils.KeyDim},
+	})
 }
 
 func TestCompatibilityConfig(t *testing.T) {
@@ -2529,7 +2559,7 @@ func TestCompatibilityConfig(t *testing.T) {
 
 	// From configured cluster
 	cfg := initHotRegionScheduleConfig()
-	cfg.ReadPriorities = []string{"key", "query"}
+	cfg.ReadPriorities = []string{"cpu", "byte"}
 	cfg.WriteLeaderPriorities = []string{"query", "key"}
 	data, err = EncodeConfig(cfg)
 	re.NoError(err)
@@ -2538,7 +2568,7 @@ func TestCompatibilityConfig(t *testing.T) {
 	hb, err = CreateScheduler(types.BalanceHotRegionScheduler, oc, storage, ConfigJSONDecoder(data))
 	re.NoError(err)
 	checkPriority(re, hb.(*hotScheduler), tc, [3][2]int{
-		{utils.KeyDim, utils.QueryDim},
+		{utils.CPUDim, utils.ByteDim},
 		{utils.QueryDim, utils.KeyDim},
 		{utils.ByteDim, utils.KeyDim},
 	})
@@ -2577,6 +2607,16 @@ func TestConfigValidation(t *testing.T) {
 	// query is not allowed to be set in priorities for write-peer-priorities
 	hc = initHotRegionScheduleConfig()
 	hc.WritePeerPriorities = []string{"query", "byte"}
+	err = hc.validateLocked()
+	re.Error(err)
+	// cpu is not allowed to be set in priorities for write-leader-priorities
+	hc = initHotRegionScheduleConfig()
+	hc.WriteLeaderPriorities = []string{"cpu", "byte"}
+	err = hc.validateLocked()
+	re.Error(err)
+	// cpu is not allowed to be set in priorities for write-peer-priorities
+	hc = initHotRegionScheduleConfig()
+	hc.WritePeerPriorities = []string{"cpu", "byte"}
 	err = hc.validateLocked()
 	re.Error(err)
 	// priorities shouldn't be repeated
@@ -3035,7 +3075,7 @@ func TestBucketFirstStat(t *testing.T) {
 			firstPriority:  utils.QueryDim,
 			secondPriority: utils.ByteDim,
 			rwTy:           utils.Write,
-			expect:         utils.RegionWriteBytes,
+			expect:         utils.RegionWriteQueryNum,
 		},
 		{
 			firstPriority:  utils.KeyDim,
@@ -3046,6 +3086,18 @@ func TestBucketFirstStat(t *testing.T) {
 		{
 			firstPriority:  utils.QueryDim,
 			secondPriority: utils.ByteDim,
+			rwTy:           utils.Read,
+			expect:         utils.RegionReadQueryNum,
+		},
+		{
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.QueryDim,
+			rwTy:           utils.Read,
+			expect:         utils.RegionReadQueryNum,
+		},
+		{
+			firstPriority:  utils.CPUDim,
+			secondPriority: utils.CPUDim,
 			rwTy:           utils.Read,
 			expect:         utils.RegionReadBytes,
 		},
@@ -3058,4 +3110,186 @@ func TestBucketFirstStat(t *testing.T) {
 		}
 		re.Equal(data.expect, bs.bucketFirstStat())
 	}
+}
+
+func TestSummaryPendingInfluenceUnifiedZombieDuration(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	tc.PutStoreWithLabels(1)
+	tc.PutStoreWithLabels(2)
+
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+
+	region := newTestRegion(100)
+	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+	op.Start()
+	re.Nil(op.Check(region))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-40*time.Second))
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
+	infl.Loads[utils.RegionReadCPU] = 71
+	pending := newPendingInfluence(op, []uint64{1}, 2, infl, 2*time.Minute)
+	hb.regionPendings[region.GetID()] = pending
+
+	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
+	hb.summaryPendingInfluence(readLeader, &fakeRegionStatInformer{}, storeInfos)
+
+	re.NotNil(storeInfos[1].PendingSum)
+	re.Equal(-71.0, storeInfos[1].PendingSum.Loads[utils.RegionReadCPU])
+	re.NotNil(storeInfos[2].PendingSum)
+	re.Equal(71.0, storeInfos[2].PendingSum.Loads[utils.RegionReadCPU])
+	_, ok := hb.regionPendings[region.GetID()]
+	re.True(ok)
+}
+
+func TestSummaryPendingInfluenceUsesObservedDstCPU(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	tc.PutStoreWithLabels(1)
+	tc.PutStoreWithLabels(14)
+
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+
+	region := newTestRegion(36532)
+	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+	op.Start()
+	re.Nil(op.Check(region))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-10*time.Second))
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
+	infl.Loads[utils.RegionReadCPU] = 71
+	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
+	hb.regionPendings[region.GetID()] = pending
+
+	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{region.GetID(), 14}: {RegionID: region.GetID(), StoreID: 14, Loads: []float64{0, 0, 0, 259}},
+		},
+	}
+	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
+	hb.summaryPendingInfluence(readLeader, informer, storeInfos)
+
+	re.NotNil(storeInfos[1].PendingSum)
+	re.NotNil(storeInfos[14].PendingSum)
+	re.Equal(-71.0, storeInfos[1].PendingSum.Loads[utils.RegionReadCPU])
+	re.Equal(259.0, storeInfos[14].PendingSum.Loads[utils.RegionReadCPU])
+}
+
+func TestSummaryPendingInfluenceKeepsRecordedDstCPUWhenObservedFallsBack(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	tc.PutStoreWithLabels(1)
+	tc.PutStoreWithLabels(14)
+
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+
+	region := newTestRegion(36532)
+	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+	op.Start()
+	re.Nil(op.Check(region))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-10*time.Second))
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
+	infl.Loads[utils.RegionReadCPU] = 71
+	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
+	pending.dstReadCPURecord = 120
+	hb.regionPendings[region.GetID()] = pending
+
+	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{region.GetID(), 14}: {RegionID: region.GetID(), StoreID: 14, Loads: []float64{0, 0, 0, 110}},
+		},
+	}
+	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
+	hb.summaryPendingInfluence(readLeader, informer, storeInfos)
+
+	re.NotNil(storeInfos[14].PendingSum)
+	re.Equal(120.0, storeInfos[14].PendingSum.Loads[utils.RegionReadCPU])
+}
+
+func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigSliceDecoder(types.BalanceHotRegionScheduler, nil))
+	re.NoError(err)
+
+	region := newTestRegion(36532)
+	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+	op.Start()
+	re.Nil(op.Check(region))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-20*time.Second))
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
+	infl.Loads[utils.RegionReadCPU] = 71
+	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
+	hb.(*hotScheduler).regionPendings[region.GetID()] = pending
+
+	bs := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+	}
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{region.GetID(), 14}: {RegionID: region.GetID(), StoreID: 14, Loads: []float64{0, 0, 0, 90}},
+		},
+	}
+	re.True(bs.hasInflatedPendingOnDst(informer, 14))
+	re.Equal(71.0, pending.origin.Loads[utils.RegionReadCPU])
+	re.Equal(90.0, pending.dstReadCPURecord)
+	re.Greater(pending.maxZombieDuration, 30*time.Second)
+	re.True(bs.hasInflatedPendingOnDst(informer, 14))
+	informer.stats = nil
+	re.False(bs.hasInflatedPendingOnDst(informer, 14))
+}
+
+func TestDstObservedAndInflationGateOnlyApplyToCPUFirstPriority(t *testing.T) {
+	re := require.New(t)
+	cancel, _, _, oc := prepareSchedulersTest()
+	defer cancel()
+	hb, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigSliceDecoder(types.BalanceHotRegionScheduler, nil))
+	re.NoError(err)
+
+	makePending := func(regionID, dstStore uint64, recordedCPU float64) *pendingInfluence {
+		region := newTestRegion(regionID)
+		op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+		op.Start()
+		re.Nil(op.Check(region))
+		op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-10*time.Second))
+		infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
+		infl.Loads[utils.RegionReadCPU] = recordedCPU
+		pending := newPendingInfluence(op, []uint64{1}, dstStore, infl, 30*time.Second)
+		return pending
+	}
+
+	nonCPUFirst := &balanceSolver{
+		sche:           hb.(*hotScheduler),
+		rwTy:           utils.Read,
+		resourceTy:     readPeer,
+		firstPriority:  utils.ByteDim,
+		secondPriority: utils.CPUDim,
+	}
+
+	hb.(*hotScheduler).regionPendings[36532] = makePending(36532, 14, 71)
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{36532, 14}: {RegionID: 36532, StoreID: 14, Loads: []float64{0, 0, 0, 90}},
+		},
+	}
+	re.False(nonCPUFirst.hasInflatedPendingOnDst(informer, 14))
 }

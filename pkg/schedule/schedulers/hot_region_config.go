@@ -62,11 +62,13 @@ func initHotRegionScheduleConfig() *hotRegionSchedulerConfig {
 			MinHotByteRate:         100,
 			MinHotKeyRate:          10,
 			MinHotQueryRate:        10,
+			MinHotCPURate:          10,
 			MaxZombieRounds:        3,
 			MaxPeerNum:             1000,
 			ByteRateRankStepRatio:  0.05,
 			KeyRateRankStepRatio:   0.05,
 			QueryRateRankStepRatio: 0.05,
+			CPURateRankStepRatio:   0.05,
 			CountRankStepRatio:     0.01,
 			GreatDecRatio:          0.95,
 			MinorDecRatio:          0.99,
@@ -90,11 +92,13 @@ func (conf *hotRegionSchedulerConfig) getValidConf() *hotRegionSchedulerParam {
 		MinHotByteRate:         conf.MinHotByteRate,
 		MinHotKeyRate:          conf.MinHotKeyRate,
 		MinHotQueryRate:        conf.MinHotQueryRate,
+		MinHotCPURate:          conf.MinHotCPURate,
 		MaxZombieRounds:        conf.MaxZombieRounds,
 		MaxPeerNum:             conf.MaxPeerNum,
 		ByteRateRankStepRatio:  conf.ByteRateRankStepRatio,
 		KeyRateRankStepRatio:   conf.KeyRateRankStepRatio,
 		QueryRateRankStepRatio: conf.QueryRateRankStepRatio,
+		CPURateRankStepRatio:   conf.CPURateRankStepRatio,
 		CountRankStepRatio:     conf.CountRankStepRatio,
 		GreatDecRatio:          conf.GreatDecRatio,
 		MinorDecRatio:          conf.MinorDecRatio,
@@ -117,6 +121,7 @@ type hotRegionSchedulerParam struct {
 	MinHotByteRate  float64 `json:"min-hot-byte-rate"`
 	MinHotKeyRate   float64 `json:"min-hot-key-rate"`
 	MinHotQueryRate float64 `json:"min-hot-query-rate"`
+	MinHotCPURate   float64 `json:"min-hot-cpu-rate"`
 	MaxZombieRounds int     `json:"max-zombie-rounds"`
 	MaxPeerNum      int     `json:"max-peer-number"`
 
@@ -125,6 +130,7 @@ type hotRegionSchedulerParam struct {
 	ByteRateRankStepRatio  float64 `json:"byte-rate-rank-step-ratio"`
 	KeyRateRankStepRatio   float64 `json:"key-rate-rank-step-ratio"`
 	QueryRateRankStepRatio float64 `json:"query-rate-rank-step-ratio"`
+	CPURateRankStepRatio   float64 `json:"cpu-rate-rank-step-ratio"`
 	CountRankStepRatio     float64 `json:"count-rank-step-ratio"`
 	GreatDecRatio          float64 `json:"great-dec-ratio"`
 	MinorDecRatio          float64 `json:"minor-dec-ratio"` // only for v1
@@ -227,6 +233,12 @@ func (conf *hotRegionSchedulerConfig) getQueryRateRankStepRatio() float64 {
 	return conf.QueryRateRankStepRatio
 }
 
+func (conf *hotRegionSchedulerConfig) getCPURateRankStepRatio() float64 {
+	conf.RLock()
+	defer conf.RUnlock()
+	return conf.CPURateRankStepRatio
+}
+
 func (conf *hotRegionSchedulerConfig) getCountRankStepRatio() float64 {
 	conf.RLock()
 	defer conf.RUnlock()
@@ -279,6 +291,12 @@ func (conf *hotRegionSchedulerConfig) getMinHotQueryRate() float64 {
 	conf.RLock()
 	defer conf.RUnlock()
 	return conf.MinHotQueryRate
+}
+
+func (conf *hotRegionSchedulerConfig) getMinHotCPURate() float64 {
+	conf.RLock()
+	defer conf.RUnlock()
+	return conf.MinHotCPURate
 }
 
 func (conf *hotRegionSchedulerConfig) getReadPriorities() []string {
@@ -391,7 +409,7 @@ func (conf *hotRegionSchedulerConfig) handleGetConfig(w http.ResponseWriter, _ *
 func isPriorityValid(priorities []string) (map[string]bool, error) {
 	priorityMap := map[string]bool{}
 	for _, p := range priorities {
-		if p != utils.BytePriority && p != utils.KeyPriority && p != utils.QueryPriority {
+		if p != utils.BytePriority && p != utils.KeyPriority && p != utils.QueryPriority && p != utils.CPUPriority {
 			return nil, errs.ErrSchedulerConfig.FastGenByArgs("invalid scheduling dimensions")
 		}
 		priorityMap[p] = true
@@ -409,11 +427,15 @@ func (conf *hotRegionSchedulerParam) validateLocked() error {
 	if _, err := isPriorityValid(conf.ReadPriorities); err != nil {
 		return err
 	}
-	if _, err := isPriorityValid(conf.WriteLeaderPriorities); err != nil {
+	if pm, err := isPriorityValid(conf.WriteLeaderPriorities); err != nil {
 		return err
+	} else if pm[utils.CPUPriority] {
+		return errs.ErrSchedulerConfig.FastGenByArgs("cpu is not allowed to be set in priorities for write-leader-priorities")
 	}
 	if pm, err := isPriorityValid(conf.WritePeerPriorities); err != nil {
 		return err
+	} else if pm[utils.CPUPriority] {
+		return errs.ErrSchedulerConfig.FastGenByArgs("cpu is not allowed to be set in priorities for write-peer-priorities")
 	} else if pm[utils.QueryPriority] {
 		return errs.ErrSchedulerConfig.FastGenByArgs("query is not allowed to be set in priorities for write-peer-priorities")
 	}
@@ -524,20 +546,23 @@ func getWritePeerPriorities(c *prioritiesConfig) []string {
 	return c.writePeer
 }
 
-// adjustPrioritiesConfig will adjust config for cluster with low version tikv
-// because tikv below 5.2.0 does not report query information, we will use byte and key as the scheduling dimensions
+// adjustPrioritiesConfig will adjust config for cluster with low version tikv.
+// because tikv below 5.2.0 does not report query information, we will use byte and key as the scheduling dimensions.
 func adjustPrioritiesConfig(querySupport bool, origins []string, getPriorities func(*prioritiesConfig) []string) []string {
 	withQuery := slice.AnyOf(origins, func(i int) bool {
 		return origins[i] == utils.QueryPriority
 	})
+	withCPU := slice.AnyOf(origins, func(i int) bool {
+		return origins[i] == utils.CPUPriority
+	})
 	compatibles := getPriorities(&compatiblePrioritiesConfig)
-	if !querySupport && withQuery {
+	if !querySupport && (withQuery || withCPU) {
 		return compatibles
 	}
 
 	defaults := getPriorities(&defaultPrioritiesConfig)
 	isLegal := slice.AllOf(origins, func(i int) bool {
-		return origins[i] == utils.BytePriority || origins[i] == utils.KeyPriority || origins[i] == utils.QueryPriority
+		return origins[i] == utils.BytePriority || origins[i] == utils.KeyPriority || origins[i] == utils.QueryPriority || origins[i] == utils.CPUPriority
 	})
 	if len(defaults) == len(origins) && isLegal && origins[0] != origins[1] {
 		return origins
