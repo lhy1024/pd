@@ -1086,15 +1086,16 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		return false
 	}
 	for _, pending := range bs.sche.regionPendings {
-		if pending == nil || pending.to != storeID {
+		if pending == nil || pending.to != storeID || pending.op == nil || len(pending.origin.Loads) <= int(utils.RegionReadCPU) {
 			continue
 		}
-		_, dstNeedGC := pending.calcDstPendingInfluence(true)
-		if dstNeedGC {
+		observed := informer.GetHotPeerStat(utils.Read, pending.op.RegionID(), storeID)
+		if observed == nil {
 			continue
 		}
-		recordedCPU, observedCPU, ok := pending.dstObservedCPU(informer)
-		if ok && observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
+		recordedCPU := pending.origin.Loads[utils.RegionReadCPU]
+		observedCPU := observed.GetLoad(utils.CPUDim)
+		if observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
 			pending.refreshDstRecordedCPU(observedCPU)
 			pending.refreshDstZombie(time.Minute)
 			return true

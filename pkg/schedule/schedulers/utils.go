@@ -256,19 +256,6 @@ func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl 
 	}
 }
 
-func (p *pendingInfluence) dstObservedCPU(informer statistics.RegionStatInformer) (recordedCPU, observedCPU float64, ok bool) {
-	if informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
-		return 0, 0, false
-	}
-	observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
-	if observed == nil {
-		return 0, 0, false
-	}
-	recordedCPU = p.origin.Loads[utils.RegionReadCPU]
-	observedCPU = observed.GetLoad(utils.CPUDim)
-	return recordedCPU, observedCPU, true
-}
-
 func (p *pendingInfluence) refreshDstRecordedCPU(observedCPU float64) {
 	if len(p.origin.Loads) <= int(utils.RegionReadCPU) {
 		return
@@ -320,11 +307,16 @@ func (p *pendingInfluence) calcDstPendingInfluence(useGCGrace bool) (weight floa
 }
 
 func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer, useObservedCPU bool) *statistics.Influence {
-	if !useObservedCPU {
+	if !useObservedCPU || informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
 		return &p.origin
 	}
-	recordedCPU, observedCPU, ok := p.dstObservedCPU(informer)
-	if !ok || observedCPU <= recordedCPU {
+	observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
+	if observed == nil {
+		return &p.origin
+	}
+	recordedCPU := p.origin.Loads[utils.RegionReadCPU]
+	observedCPU := observed.GetLoad(utils.CPUDim)
+	if observedCPU <= recordedCPU {
 		return &p.origin
 	}
 	loads := append([]float64(nil), p.origin.Loads...)
