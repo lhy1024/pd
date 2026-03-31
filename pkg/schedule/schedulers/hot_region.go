@@ -1084,10 +1084,16 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 	return ret
 }
 
+// hasInflatedPendingOnDst checks whether a destination store still has a moved
+// hot region whose observed CPU has grown beyond the recorded baseline.
+// It intentionally has side effects: once a new inflation step is observed, it
+// raises the recorded CPU baseline and extends the shared zombie window so the
+// destination stays blocked until it stabilizes.
 func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatInformer, storeID uint64) bool {
 	if bs.rwTy != utils.Read || bs.firstPriority != utils.CPUDim || informer == nil || storeID == 0 {
 		return false
 	}
+	minHotCPU := bs.sche.conf.getMinHotCPURate()
 	for _, pending := range bs.sche.regionPendings {
 		if pending == nil || pending.to != storeID || pending.op == nil || len(pending.origin.Loads) <= int(utils.RegionReadCPU) {
 			continue
@@ -1098,7 +1104,7 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		}
 		recordedCPU := pending.dstReadCPURecord
 		observedCPU := observed.GetLoad(utils.CPUDim)
-		if observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
+		if observedCPU > recordedCPU+minHotCPU {
 			// When a moved region keeps growing on dst, temporarily block the
 			// whole dst store so scheduler does not keep stacking more hot peers
 			// onto a destination whose real CPU has not stabilized yet.

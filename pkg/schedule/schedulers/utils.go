@@ -261,16 +261,19 @@ func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer, 
 	if !cpuFirstPriority || informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
 		return dstInfluence
 	}
+	targetCPU := p.dstReadCPURecord
 	observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
-	if observed == nil {
-		return dstInfluence
+	if observed != nil {
+		observedCPU := observed.GetLoad(utils.CPUDim)
+		if observedCPU > targetCPU {
+			targetCPU = observedCPU
+		}
 	}
-	observedCPU := observed.GetLoad(utils.CPUDim)
-	if observedCPU <= p.dstReadCPURecord {
+	if targetCPU <= p.origin.GetReadCPU() {
 		return dstInfluence
 	}
 	loads := append([]float64(nil), p.origin.Loads...)
-	loads[utils.RegionReadCPU] = observedCPU
+	loads[utils.RegionReadCPU] = targetCPU
 	return &statistics.Influence{
 		Loads: loads,
 		Count: p.origin.Count,
