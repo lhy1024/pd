@@ -1091,7 +1091,7 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		if observed == nil {
 			continue
 		}
-		recordedCPU := pending.origin.Loads[utils.RegionReadCPU]
+		recordedCPU := pending.dstRecordedCPU
 		observedCPU := observed.GetLoad(utils.CPUDim)
 		if observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
 			pending.refreshDstRecordedCPU(observedCPU)

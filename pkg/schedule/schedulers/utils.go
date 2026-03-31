@@ -241,27 +241,30 @@ type pendingInfluence struct {
 	froms             []uint64
 	to                uint64
 	origin            statistics.Influence
+	dstRecordedCPU    float64
 	maxZombieDuration time.Duration
 	dstMaxZombieDur   time.Duration
 }
 
 func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl statistics.Influence, maxZombieDur time.Duration) *pendingInfluence {
+	recordedCPU := 0.0
+	if len(infl.Loads) > int(utils.RegionReadCPU) {
+		recordedCPU = infl.Loads[utils.RegionReadCPU]
+	}
 	return &pendingInfluence{
 		op:                op,
 		froms:             froms,
 		to:                to,
 		origin:            infl,
+		dstRecordedCPU:    recordedCPU,
 		maxZombieDuration: maxZombieDur,
 		dstMaxZombieDur:   maxZombieDur,
 	}
 }
 
 func (p *pendingInfluence) refreshDstRecordedCPU(observedCPU float64) {
-	if len(p.origin.Loads) <= int(utils.RegionReadCPU) {
-		return
-	}
-	if observedCPU > p.origin.Loads[utils.RegionReadCPU] {
-		p.origin.Loads[utils.RegionReadCPU] = observedCPU
+	if observedCPU > p.dstRecordedCPU {
+		p.dstRecordedCPU = observedCPU
 	}
 }
 
@@ -314,7 +317,7 @@ func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer, 
 	if observed == nil {
 		return &p.origin
 	}
-	recordedCPU := p.origin.Loads[utils.RegionReadCPU]
+	recordedCPU := p.dstRecordedCPU
 	observedCPU := observed.GetLoad(utils.CPUDim)
 	if observedCPU <= recordedCPU {
 		return &p.origin
