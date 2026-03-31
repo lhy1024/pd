@@ -164,8 +164,14 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 			useDstObservedCPU = len(priorities) > 0 && priorities[0] == utils.CPUPriority
 		}
 	}
+	dstGCGraceDur := time.Duration(0)
+	if useDstObservedCPU {
+		if conf, ok := s.conf.(*hotRegionSchedulerConfig); ok {
+			dstGCGraceDur = conf.getStoreStatZombieDuration()
+		}
+	}
 	for id, p := range s.regionPendings {
-		dstWeight, dstNeedGC := p.calcDstPendingInfluence(useDstObservedCPU)
+		dstWeight, dstNeedGC := p.calcDstPendingInfluence(dstGCGraceDur)
 		if dstNeedGC {
 			delete(s.regionPendings, id)
 			continue
@@ -1101,7 +1107,7 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		observedCPU := observed.GetLoad(utils.CPUDim)
 		if observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
 			pending.refreshDstRecordedCPU(observedCPU)
-			pending.refreshDstZombie(time.Minute)
+			pending.refreshDstZombie(bs.sche.conf.getStoreStatZombieDuration())
 			return true
 		}
 	}

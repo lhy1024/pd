@@ -282,7 +282,7 @@ func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
 	}
 }
 
-func (p *pendingInfluence) calcDstPendingInfluence(useGCGrace bool) (weight float64, needGC bool) {
+func (p *pendingInfluence) calcDstPendingInfluence(minGCGraceDur time.Duration) (weight float64, needGC bool) {
 	status := p.op.CheckAndGetStatus()
 	if !operator.IsEndStatus(status) {
 		return 1, false
@@ -296,8 +296,8 @@ func (p *pendingInfluence) calcDstPendingInfluence(useGCGrace bool) (weight floa
 	}
 
 	gcGraceDur := p.dstMaxZombieDur
-	if useGCGrace && gcGraceDur < time.Minute {
-		gcGraceDur = time.Minute
+	if gcGraceDur < minGCGraceDur {
+		gcGraceDur = minGCGraceDur
 	}
 	needGC = zombieDur >= gcGraceDur
 	if status != operator.SUCCESS {

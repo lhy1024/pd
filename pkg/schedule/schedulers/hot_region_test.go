@@ -3139,11 +3139,10 @@ func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
 	hb.summaryPendingInfluence(readLeader, &fakeRegionStatInformer{}, storeInfos)
 
-	re.NotNil(storeInfos[1].PendingSum)
-	re.Equal(-71.0, storeInfos[1].PendingSum.Loads[utils.RegionReadCPU])
+	re.Nil(storeInfos[1].PendingSum)
 	re.Nil(storeInfos[2].PendingSum)
 	_, ok := hb.regionPendings[region.GetID()]
-	re.True(ok)
+	re.False(ok)
 }
 
 func TestSummaryPendingInfluenceUsesObservedDstCPU(t *testing.T) {
@@ -3194,15 +3193,15 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
 	op.Start()
 	re.Nil(op.Check(region))
-	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-40*time.Second))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-20*time.Second))
 
 	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
 	hb.(*hotScheduler).regionPendings[region.GetID()] = pending
 
-	weight, needGC := pending.calcDstPendingInfluence(true)
-	re.Zero(weight)
+	weight, needGC := pending.calcDstPendingInfluence(hb.(*hotScheduler).conf.getStoreStatZombieDuration())
+	re.Equal(1.0, weight)
 	re.False(needGC)
 
 	bs := &balanceSolver{
@@ -3219,10 +3218,10 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	}
 	re.True(bs.hasInflatedPendingOnDst(informer, 14))
 	re.Equal(90.0, pending.origin.Loads[utils.RegionReadCPU])
-	re.GreaterOrEqual(pending.dstMaxZombieDur, time.Minute)
+	re.GreaterOrEqual(pending.dstMaxZombieDur, hb.(*hotScheduler).conf.getStoreStatZombieDuration())
 	re.False(bs.hasInflatedPendingOnDst(informer, 14))
 
-	weight, _ = pending.calcDstPendingInfluence(true)
+	weight, _ = pending.calcDstPendingInfluence(hb.(*hotScheduler).conf.getStoreStatZombieDuration())
 	re.Equal(1.0, weight)
 }
 
