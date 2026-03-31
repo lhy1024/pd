@@ -153,27 +153,14 @@ func (s *baseHotScheduler) updateHistoryLoadConfig(sampleDuration, sampleInterva
 	s.stHistoryLoads = s.stHistoryLoads.UpdateConfig(sampleDuration, sampleInterval)
 }
 
-func getPrioritiesByResourceType(conf *hotRegionSchedulerConfig, typ resourceType) []string {
-	switch typ {
-	case readLeader, readPeer:
-		return conf.getReadPriorities()
-	case writeLeader:
-		return conf.getWriteLeaderPriorities()
-	case writePeer:
-		return conf.getWritePeerPriorities()
-	default:
-		return nil
-	}
-}
-
 // summaryPendingInfluence calculate the summary of pending Influence for each store
 // and clean the region from regionInfluence if they have ended operator.
 // It makes each dim rate or count become `weight` times to the origin value.
 func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer statistics.RegionStatInformer, storeInfos map[uint64]*statistics.StoreSummaryInfo) {
 	cpuFirstPriority := false
-	if s.conf != nil {
+	if (typ == readLeader || typ == readPeer) && s.conf != nil {
 		if conf, ok := s.conf.(*hotRegionSchedulerConfig); ok {
-			priorities := getPrioritiesByResourceType(conf, typ)
+			priorities := conf.getReadPriorities()
 			cpuFirstPriority = len(priorities) > 0 && priorities[0] == utils.CPUPriority
 		}
 	}
