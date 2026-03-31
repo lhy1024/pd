@@ -3133,7 +3133,6 @@ func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 2, infl, 2*time.Minute)
 	pending.dstMaxZombieDur = 30 * time.Second
-	pending.dstGCGraceDur = time.Minute
 	pending.useDstObservedCPU = true
 	hb.regionPendings[region.GetID()] = pending
 
@@ -3168,7 +3167,6 @@ func TestSummaryPendingInfluenceUsesObservedDstCPU(t *testing.T) {
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
 	pending.useDstObservedCPU = true
-	pending.dstGCGraceDur = time.Minute
 	hb.regionPendings[region.GetID()] = pending
 
 	informer := &fakeRegionStatInformer{
@@ -3202,7 +3200,6 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
 	pending.useDstObservedCPU = true
-	pending.dstGCGraceDur = time.Minute
 	hb.(*hotScheduler).regionPendings[region.GetID()] = pending
 
 	weight, needGC := pending.calcDstPendingInfluence()
@@ -3245,7 +3242,6 @@ func TestDstObservedAndInflationGateOnlyApplyToCPUFirstPriority(t *testing.T) {
 		infl.Loads[utils.RegionReadCPU] = recordedCPU
 		pending := newPendingInfluence(op, []uint64{1}, dstStore, infl, 30*time.Second)
 		pending.useDstObservedCPU = true
-		pending.dstGCGraceDur = time.Minute
 		return pending
 	}
 

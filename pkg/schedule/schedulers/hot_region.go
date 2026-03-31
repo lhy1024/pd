@@ -332,9 +332,6 @@ func (s *hotScheduler) tryAddPendingInfluence(
 
 	influence := newPendingInfluence(op, srcStore, dstStore, infl, maxZombieDur)
 	influence.useDstObservedCPU = useDstObservedCPU
-	if useDstObservedCPU && influence.dstGCGraceDur < readCPUDstGateZombieDur {
-		influence.dstGCGraceDur = readCPUDstGateZombieDur
-	}
 	s.regionPendings[regionID] = influence
 
 	utils.ForeachRegionStats(func(rwTy utils.RWType, dim int, kind utils.RegionStatKind) {

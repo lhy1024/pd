@@ -243,7 +243,6 @@ type pendingInfluence struct {
 	origin            statistics.Influence
 	maxZombieDuration time.Duration
 	dstMaxZombieDur   time.Duration
-	dstGCGraceDur     time.Duration
 	useDstObservedCPU bool
 }
 
@@ -255,7 +254,6 @@ func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl 
 		origin:            infl,
 		maxZombieDuration: maxZombieDur,
 		dstMaxZombieDur:   maxZombieDur,
-		dstGCGraceDur:     maxZombieDur,
 	}
 }
 
@@ -286,20 +284,11 @@ func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
 		if p.dstMaxZombieDur < dur {
 			p.dstMaxZombieDur = dur
 		}
-		if p.dstGCGraceDur < p.dstMaxZombieDur {
-			p.dstGCGraceDur = p.dstMaxZombieDur
-		}
 		return
 	}
 	targetDur := time.Since(p.op.GetReachTimeOf(status)) + dur
 	if p.dstMaxZombieDur < targetDur {
 		p.dstMaxZombieDur = targetDur
-	}
-	if p.dstGCGraceDur < dur {
-		p.dstGCGraceDur = dur
-	}
-	if p.dstGCGraceDur < p.dstMaxZombieDur {
-		p.dstGCGraceDur = p.dstMaxZombieDur
 	}
 }
 
@@ -316,9 +305,9 @@ func (p *pendingInfluence) calcDstPendingInfluence() (weight float64, needGC boo
 		weight = 1
 	}
 
-	gcGraceDur := p.dstGCGraceDur
-	if gcGraceDur < p.dstMaxZombieDur {
-		gcGraceDur = p.dstMaxZombieDur
+	gcGraceDur := p.dstMaxZombieDur
+	if p.useDstObservedCPU && gcGraceDur < time.Minute {
+		gcGraceDur = time.Minute
 	}
 	needGC = zombieDur >= gcGraceDur
 	if status != operator.SUCCESS {
