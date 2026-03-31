@@ -270,11 +270,6 @@ func (p *pendingInfluence) dstObservedCPU(informer statistics.RegionStatInformer
 	return recordedCPU, observedCPU, true
 }
 
-func (p *pendingInfluence) dstInflated(informer statistics.RegionStatInformer, delta float64) bool {
-	recordedCPU, observedCPU, ok := p.dstObservedCPU(informer)
-	return ok && observedCPU > recordedCPU+delta
-}
-
 func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
 	if dur <= 0 || p.op == nil {
 		return

@@ -53,8 +53,6 @@ const (
 	defaultPendingAmpFactor  = 2.0
 	defaultStddevThreshold   = 0.1
 	defaultTopnPosition      = 10
-	readCPUDstInflationDelta = 10.0
-	readCPUDstGateZombieDur  = time.Minute
 )
 
 var (
@@ -1090,8 +1088,9 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		if dstNeedGC {
 			continue
 		}
-		if pending.dstInflated(informer, readCPUDstInflationDelta) {
-			pending.refreshDstZombie(readCPUDstGateZombieDur)
+		recordedCPU, observedCPU, ok := pending.dstObservedCPU(informer)
+		if ok && observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
+			pending.refreshDstZombie(time.Minute)
 			return true
 		}
 	}
