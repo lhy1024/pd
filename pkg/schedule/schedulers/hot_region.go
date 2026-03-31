@@ -157,15 +157,33 @@ func (s *baseHotScheduler) updateHistoryLoadConfig(sampleDuration, sampleInterva
 // and clean the region from regionInfluence if they have ended operator.
 // It makes each dim rate or count become `weight` times to the origin value.
 func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer statistics.RegionStatInformer, storeInfos map[uint64]*statistics.StoreSummaryInfo) {
-	useDstObservedCPU := false
+	cpuFirstPriority := false
 	if (typ == readLeader || typ == readPeer) && s.conf != nil {
 		if conf, ok := s.conf.(*hotRegionSchedulerConfig); ok {
 			priorities := conf.getReadPriorities()
-			useDstObservedCPU = len(priorities) > 0 && priorities[0] == utils.CPUPriority
+			cpuFirstPriority = len(priorities) > 0 && priorities[0] == utils.CPUPriority
 		}
 	}
 	for id, p := range s.regionPendings {
-		dstWeight, dstNeedGC := p.calcDstPendingInfluence()
+		dstWeight := 0.0
+		dstNeedGC := false
+		status := p.op.CheckAndGetStatus()
+		if !operator.IsEndStatus(status) {
+			dstWeight = 1
+		} else {
+			zombieDur := time.Since(p.op.GetReachTimeOf(status))
+			if zombieDur < p.dstMaxZombieDur {
+				dstWeight = 1
+			}
+			gcGraceDur := p.dstMaxZombieDur
+			if gcGraceDur < p.maxZombieDuration {
+				gcGraceDur = p.maxZombieDuration
+			}
+			dstNeedGC = zombieDur >= gcGraceDur
+			if status != operator.SUCCESS {
+				dstWeight = 0
+			}
+		}
 		if dstNeedGC {
 			delete(s.regionPendings, id)
 			continue
@@ -185,7 +203,22 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 		}
 		if dstWeight > 0 {
 			if to := storeInfos[p.to]; to != nil {
-				to.AddInfluence(p.dstInfluence(informer, useDstObservedCPU), dstWeight)
+				dstInfluence := &p.origin
+				if cpuFirstPriority && informer != nil && p.op != nil && p.to != 0 && len(p.origin.Loads) > int(utils.RegionReadCPU) {
+					observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
+					if observed != nil {
+						observedCPU := observed.GetLoad(utils.CPUDim)
+						if observedCPU > p.dstRecordedCPU {
+							loads := append([]float64(nil), p.origin.Loads...)
+							loads[utils.RegionReadCPU] = observedCPU
+							dstInfluence = &statistics.Influence{
+								Loads: loads,
+								Count: p.origin.Count,
+							}
+						}
+					}
+				}
+				to.AddInfluence(dstInfluence, dstWeight)
 			}
 		}
 	}

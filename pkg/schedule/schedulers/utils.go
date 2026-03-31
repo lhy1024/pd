@@ -285,51 +285,6 @@ func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
 	}
 }
 
-func (p *pendingInfluence) calcDstPendingInfluence() (weight float64, needGC bool) {
-	status := p.op.CheckAndGetStatus()
-	if !operator.IsEndStatus(status) {
-		return 1, false
-	}
-
-	zombieDur := time.Since(p.op.GetReachTimeOf(status))
-	if zombieDur >= p.dstMaxZombieDur {
-		weight = 0
-	} else {
-		weight = 1
-	}
-
-	gcGraceDur := p.dstMaxZombieDur
-	if gcGraceDur < p.maxZombieDuration {
-		gcGraceDur = p.maxZombieDuration
-	}
-	needGC = zombieDur >= gcGraceDur
-	if status != operator.SUCCESS {
-		weight = 0
-	}
-	return
-}
-
-func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer, useObservedCPU bool) *statistics.Influence {
-	if !useObservedCPU || informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
-		return &p.origin
-	}
-	observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
-	if observed == nil {
-		return &p.origin
-	}
-	recordedCPU := p.dstRecordedCPU
-	observedCPU := observed.GetLoad(utils.CPUDim)
-	if observedCPU <= recordedCPU {
-		return &p.origin
-	}
-	loads := append([]float64(nil), p.origin.Loads...)
-	loads[utils.RegionReadCPU] = observedCPU
-	return &statistics.Influence{
-		Loads: loads,
-		Count: p.origin.Count,
-	}
-}
-
 // stLdRate returns a function to get the load rate of the store with the specified dimension.
 func stLdRate(dim int) func(ld *statistics.StoreLoad) float64 {
 	return func(ld *statistics.StoreLoad) float64 {

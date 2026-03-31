@@ -3201,10 +3201,6 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
 	hb.(*hotScheduler).regionPendings[region.GetID()] = pending
 
-	weight, needGC := pending.calcDstPendingInfluence()
-	re.Equal(1.0, weight)
-	re.False(needGC)
-
 	bs := &balanceSolver{
 		sche:           hb.(*hotScheduler),
 		rwTy:           utils.Read,
@@ -3222,9 +3218,6 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	re.Equal(90.0, pending.dstRecordedCPU)
 	re.GreaterOrEqual(pending.dstMaxZombieDur, pending.maxZombieDuration)
 	re.False(bs.hasInflatedPendingOnDst(informer, 14))
-
-	weight, _ = pending.calcDstPendingInfluence()
-	re.Equal(1.0, weight)
 }
 
 func TestDstObservedAndInflationGateOnlyApplyToCPUFirstPriority(t *testing.T) {
