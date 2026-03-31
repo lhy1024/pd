@@ -32,8 +32,8 @@ import (
 const (
 	hotReadDebugStoreIDsEnv      = "PD_HOT_DEBUG_STORE_IDS"
 	hotReadDebugTopNEnv          = "PD_HOT_DEBUG_TOPN"
-	hotReadDebugDefaultStoreIDs  = "1,14"
 	hotReadDebugDefaultTopN      = 10
+	hotReadDebugDefaultCPUMin    = 100
 	hotReadDebugDispatchTopN     = 3
 	hotReadDebugDeltaChangeLimit = 5
 )
@@ -85,9 +85,6 @@ type hotReadDebugTracer struct {
 
 func newHotReadDebugTracerFromEnv() *hotReadDebugTracer {
 	storeIDs := parseHotReadDebugStoreIDs(os.Getenv(hotReadDebugStoreIDsEnv))
-	if len(storeIDs) == 0 {
-		storeIDs = parseHotReadDebugStoreIDs(hotReadDebugDefaultStoreIDs)
-	}
 	topN := hotReadDebugDefaultTopN
 	if raw := strings.TrimSpace(os.Getenv(hotReadDebugTopNEnv)); raw != "" {
 		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
@@ -131,8 +128,11 @@ func parseHotReadDebugStoreIDs(raw string) map[uint64]struct{} {
 }
 
 func (t *hotReadDebugTracer) shouldLogStore(storeID uint64) bool {
-	if t == nil || len(t.storeIDs) == 0 {
+	if t == nil {
 		return false
+	}
+	if len(t.storeIDs) == 0 {
+		return true
 	}
 	_, ok := t.storeIDs[storeID]
 	return ok
@@ -206,11 +206,11 @@ func buildHotStoreDebugPeers(peers []*statistics.HotPeerStat, limit int) []hotSt
 		limit = hotReadDebugDefaultTopN
 	}
 	sorted := sortHotPeersByCPU(peers)
-	if len(sorted) > limit {
-		sorted = sorted[:limit]
-	}
-	ret := make([]hotStoreDebugPeer, 0, len(sorted))
-	for _, peer := range sorted {
+	ret := make([]hotStoreDebugPeer, 0, min(limit, len(sorted)))
+	for idx, peer := range sorted {
+		if idx >= limit && peer.GetLoad(utils.CPUDim) < hotReadDebugDefaultCPUMin {
+			break
+		}
 		ret = append(ret, newHotStoreDebugPeer(peer))
 	}
 	return ret

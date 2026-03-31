@@ -39,7 +39,7 @@ func TestBuildHotStoreDebugSnapshotAndRank(t *testing.T) {
 		},
 		HotPeers: []*statistics.HotPeerStat{
 			{StoreID: 1, RegionID: 11, HotDegree: 4, AntiCount: 1, Loads: []float64{10, 0, 90, 200}},
-			{StoreID: 1, RegionID: 12, HotDegree: 3, AntiCount: 2, Loads: []float64{20, 0, 80, 120}},
+			{StoreID: 1, RegionID: 12, HotDegree: 3, AntiCount: 2, Loads: []float64{20, 0, 80, 90}},
 			{StoreID: 1, RegionID: 13, HotDegree: 2, AntiCount: 3, Loads: []float64{30, 0, 70, 160}},
 		},
 	}
@@ -101,4 +101,27 @@ func TestDiffHotStoreDebugSnapshot(t *testing.T) {
 	re.Equal(120.0, delta.CPUDownTop5[0].NewCPU)
 	re.Equal(1, delta.CPUDownTop5[0].OldRank)
 	re.Equal(3, delta.CPUDownTop5[0].NewRank)
+}
+
+func TestBuildHotStoreDebugPeersKeepTopNOrHighCPU(t *testing.T) {
+	re := require.New(t)
+	peers := []*statistics.HotPeerStat{
+		{RegionID: 1, HotDegree: 1, Loads: []float64{0, 0, 0, 210}},
+		{RegionID: 2, HotDegree: 1, Loads: []float64{0, 0, 0, 180}},
+		{RegionID: 3, HotDegree: 1, Loads: []float64{0, 0, 0, 150}},
+		{RegionID: 4, HotDegree: 1, Loads: []float64{0, 0, 0, 120}},
+		{RegionID: 5, HotDegree: 1, Loads: []float64{0, 0, 0, 95}},
+	}
+
+	ret := buildHotStoreDebugPeers(peers, 2)
+	re.Len(ret, 4)
+	re.Equal([]uint64{1, 2, 3, 4}, []uint64{ret[0].RegionID, ret[1].RegionID, ret[2].RegionID, ret[3].RegionID})
+}
+
+func TestHotReadDebugTracerLogsAllStoresByDefault(t *testing.T) {
+	re := require.New(t)
+	tracer := &hotReadDebugTracer{}
+	re.True(tracer.shouldLogStore(1))
+	re.True(tracer.shouldLogStore(14))
+	re.True(tracer.shouldLogStore(999))
 }
