@@ -165,59 +165,38 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 		}
 	}
 	for id, p := range s.regionPendings {
-		dstWeight := 0.0
-		dstNeedGC := false
-		status := p.op.CheckAndGetStatus()
-		if !operator.IsEndStatus(status) {
-			dstWeight = 1
-		} else {
-			zombieDur := time.Since(p.op.GetReachTimeOf(status))
-			if zombieDur < p.dstMaxZombieDur {
-				dstWeight = 1
-			}
-			gcGraceDur := p.dstMaxZombieDur
-			if gcGraceDur < p.maxZombieDuration {
-				gcGraceDur = p.maxZombieDuration
-			}
-			dstNeedGC = zombieDur >= gcGraceDur
-			if status != operator.SUCCESS {
-				dstWeight = 0
-			}
-		}
-		if dstNeedGC {
-			delete(s.regionPendings, id)
-			continue
-		}
 		srcZombieDur := p.maxZombieDuration
 		if srcZombieDur < p.dstMaxZombieDur {
 			srcZombieDur = p.dstMaxZombieDur
 		}
-		srcWeight, _ := calcPendingInfluence(p.op, srcZombieDur)
-
-		if srcWeight > 0 {
-			for _, fromID := range p.froms {
-				if from := storeInfos[fromID]; from != nil {
-					from.AddInfluence(&p.origin, -srcWeight)
-				}
+		for _, fromID := range p.froms {
+			from := storeInfos[fromID]
+			to := storeInfos[p.to]
+			srcWeight, needGC := calcPendingInfluence(p.op, srcZombieDur)
+			if needGC {
+				delete(s.regionPendings, id)
+				continue
 			}
-		}
-		if dstWeight > 0 {
-			if to := storeInfos[p.to]; to != nil {
-				dstInfluence := &p.origin
-				if cpuFirstPriority && informer != nil && p.op != nil && p.to != 0 && len(p.origin.Loads) > int(utils.RegionReadCPU) {
-					observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
-					if observed != nil {
-						observedCPU := observed.GetLoad(utils.CPUDim)
-						if observedCPU > p.dstRecordedCPU {
-							loads := append([]float64(nil), p.origin.Loads...)
-							loads[utils.RegionReadCPU] = observedCPU
-							dstInfluence = &statistics.Influence{
-								Loads: loads,
-								Count: p.origin.Count,
-							}
+			dstWeight, _ := calcPendingInfluence(p.op, p.dstMaxZombieDur)
+			dstInfluence := &p.origin
+			if cpuFirstPriority && informer != nil && p.op != nil && p.to != 0 && len(p.origin.Loads) > int(utils.RegionReadCPU) {
+				observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
+				if observed != nil {
+					observedCPU := observed.GetLoad(utils.CPUDim)
+					if observedCPU > p.dstRecordedCPU {
+						loads := append([]float64(nil), p.origin.Loads...)
+						loads[utils.RegionReadCPU] = observedCPU
+						dstInfluence = &statistics.Influence{
+							Loads: loads,
+							Count: p.origin.Count,
 						}
 					}
 				}
+			}
+			if from != nil {
+				from.AddInfluence(&p.origin, -srcWeight)
+			}
+			if to != nil {
 				to.AddInfluence(dstInfluence, dstWeight)
 			}
 		}
