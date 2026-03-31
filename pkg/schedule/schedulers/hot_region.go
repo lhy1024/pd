@@ -45,14 +45,16 @@ import (
 )
 
 const (
-	splitHotReadBuckets     = "split-hot-read-region"
-	splitHotWriteBuckets    = "split-hot-write-region"
-	splitProgressiveRank    = 5
-	minHotScheduleInterval  = time.Second
-	maxHotScheduleInterval  = 20 * time.Second
-	defaultPendingAmpFactor = 2.0
-	defaultStddevThreshold  = 0.1
-	defaultTopnPosition     = 10
+	splitHotReadBuckets      = "split-hot-read-region"
+	splitHotWriteBuckets     = "split-hot-write-region"
+	splitProgressiveRank     = 5
+	minHotScheduleInterval   = time.Second
+	maxHotScheduleInterval   = 20 * time.Second
+	defaultPendingAmpFactor  = 2.0
+	defaultStddevThreshold   = 0.1
+	defaultTopnPosition      = 10
+	readCPUDstInflationDelta = 10.0
+	readCPUDstGateZombieDur  = time.Minute
 )
 
 var (
@@ -111,7 +113,7 @@ func newBaseHotScheduler(
 // each store, only update read or write load detail
 func (s *baseHotScheduler) prepareForBalance(typ resourceType, cluster sche.SchedulerCluster) {
 	storeInfos := statistics.SummaryStoreInfos(cluster.GetStores())
-	s.summaryPendingInfluence(storeInfos)
+	s.summaryPendingInfluence(cluster, storeInfos)
 	storesLoads := cluster.GetStoresLoads()
 	isTraceRegionFlow := cluster.GetSchedulerConfig().IsTraceRegionFlow()
 
@@ -156,24 +158,25 @@ func (s *baseHotScheduler) updateHistoryLoadConfig(sampleDuration, sampleInterva
 // summaryPendingInfluence calculate the summary of pending Influence for each store
 // and clean the region from regionInfluence if they have ended operator.
 // It makes each dim rate or count become `weight` times to the origin value.
-func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statistics.StoreSummaryInfo) {
+func (s *baseHotScheduler) summaryPendingInfluence(informer statistics.RegionStatInformer, storeInfos map[uint64]*statistics.StoreSummaryInfo) {
 	for id, p := range s.regionPendings {
-		for _, from := range p.froms {
-			from := storeInfos[from]
-			to := storeInfos[p.to]
-			maxZombieDur := p.maxZombieDuration
-			weight, needGC := calcPendingInfluence(p.op, maxZombieDur)
+		srcWeight, srcNeedGC := calcPendingInfluence(p.op, p.maxZombieDuration)
+		dstWeight, dstNeedGC := p.calcDstPendingInfluence()
+		if srcNeedGC && dstNeedGC {
+			delete(s.regionPendings, id)
+			continue
+		}
 
-			if needGC {
-				delete(s.regionPendings, id)
-				continue
+		if srcWeight > 0 {
+			for _, fromID := range p.froms {
+				if from := storeInfos[fromID]; from != nil {
+					from.AddInfluence(&p.origin, -srcWeight)
+				}
 			}
-
-			if from != nil && weight > 0 {
-				from.AddInfluence(&p.origin, -weight)
-			}
-			if to != nil && weight > 0 {
-				to.AddInfluence(&p.origin, weight)
+		}
+		if dstWeight > 0 {
+			if to := storeInfos[p.to]; to != nil {
+				to.AddInfluence(p.dstInfluence(informer), dstWeight)
 			}
 		}
 	}
@@ -312,7 +315,14 @@ func (s *hotScheduler) dispatch(typ resourceType, cluster sche.SchedulerCluster)
 	return nil
 }
 
-func (s *hotScheduler) tryAddPendingInfluence(op *operator.Operator, srcStore []uint64, dstStore uint64, infl statistics.Influence, maxZombieDur time.Duration) bool {
+func (s *hotScheduler) tryAddPendingInfluence(
+	op *operator.Operator,
+	srcStore []uint64,
+	dstStore uint64,
+	infl statistics.Influence,
+	maxZombieDur time.Duration,
+	useDstObservedCPU bool,
+) bool {
 	regionID := op.RegionID()
 	_, ok := s.regionPendings[regionID]
 	if ok {
@@ -321,6 +331,10 @@ func (s *hotScheduler) tryAddPendingInfluence(op *operator.Operator, srcStore []
 	}
 
 	influence := newPendingInfluence(op, srcStore, dstStore, infl, maxZombieDur)
+	influence.useDstObservedCPU = useDstObservedCPU
+	if useDstObservedCPU && influence.dstGCGraceDur < readCPUDstGateZombieDur {
+		influence.dstGCGraceDur = readCPUDstGateZombieDur
+	}
 	s.regionPendings[regionID] = influence
 
 	utils.ForeachRegionStats(func(rwTy utils.RWType, dim int, kind utils.RegionStatKind) {
@@ -738,7 +752,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		dstStoreID = bs.best.dstStore.GetID()
 	}
 	infl := bs.collectPendingInfluence(bs.best.mainPeerStat)
-	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
+	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.shouldApplyDstCPUProtections()) {
 		return false
 	}
 	if isSplit {
@@ -747,7 +761,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	// revert peers
 	if bs.best.revertPeerStat != nil && len(bs.ops) > 1 {
 		infl := bs.collectPendingInfluence(bs.best.revertPeerStat)
-		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
+		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.shouldApplyDstCPUProtections()) {
 			return false
 		}
 	}
@@ -786,6 +800,10 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 	default:
 		return bs.sche.conf.getStoreStatZombieDuration()
 	}
+}
+
+func (bs *balanceSolver) shouldApplyDstCPUProtections() bool {
+	return bs.rwTy == utils.Read && bs.firstPriority == utils.CPUDim
 }
 
 // filterSrcStores compare the min rate and the ratio * expectation rate, if two dim rate is greater than
@@ -1047,6 +1065,10 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		}
 		if filter.Target(bs.GetSchedulerConfig(), store, filters) {
 			id := store.GetID()
+			if bs.hasInflatedPendingOnDst(bs.SchedulerCluster, id) {
+				hotSchedulerResultCounter.WithLabelValues("dst-store-inflated-pending-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+				continue
+			}
 			if !bs.checkDstByPriorityAndTolerance(detail.LoadPred.Max(), &detail.LoadPred.Expect, dstToleranceRatio) {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 				continue
@@ -1061,6 +1083,29 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		}
 	}
 	return ret
+}
+
+func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatInformer, storeID uint64) bool {
+	if !bs.shouldApplyDstCPUProtections() || informer == nil || storeID == 0 {
+		return false
+	}
+	for _, pending := range bs.sche.regionPendings {
+		if pending == nil || pending.to != storeID {
+			continue
+		}
+		dstWeight, dstNeedGC := pending.calcDstPendingInfluence()
+		if dstNeedGC {
+			continue
+		}
+		if pending.dstInflated(informer, readCPUDstInflationDelta) {
+			pending.refreshDstZombie(readCPUDstGateZombieDur)
+			return true
+		}
+		if dstWeight <= 0 {
+			continue
+		}
+	}
+	return false
 }
 
 func (bs *balanceSolver) checkDstByPriorityAndTolerance(maxLoad, expect *statistics.StoreLoad, toleranceRatio float64) bool {
