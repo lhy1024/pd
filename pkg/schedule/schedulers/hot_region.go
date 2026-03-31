@@ -168,16 +168,11 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 		for _, from := range p.froms {
 			from := storeInfos[from]
 			to := storeInfos[p.to]
-			maxZombieDur := p.maxZombieDuration
-			if maxZombieDur < p.dstMaxZombieDur {
-				maxZombieDur = p.dstMaxZombieDur
-			}
-			srcWeight, needGC := calcPendingInfluence(p.op, maxZombieDur)
+			weight, needGC := calcPendingInfluence(p.op, p.maxZombieDuration)
 			if needGC {
 				delete(s.regionPendings, id)
 				continue
 			}
-			dstWeight, _ := calcPendingInfluence(p.op, p.dstMaxZombieDur)
 			dstInfluence := &p.origin
 			if cpuFirstPriority && informer != nil && p.op != nil && p.to != 0 && len(p.origin.Loads) > int(utils.RegionReadCPU) {
 				observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
@@ -194,10 +189,10 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 				}
 			}
 			if from != nil {
-				from.AddInfluence(&p.origin, -srcWeight)
+				from.AddInfluence(&p.origin, -weight)
 			}
 			if to != nil {
-				to.AddInfluence(dstInfluence, dstWeight)
+				to.AddInfluence(dstInfluence, weight)
 			}
 		}
 	}

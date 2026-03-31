@@ -3112,7 +3112,7 @@ func TestBucketFirstStat(t *testing.T) {
 	}
 }
 
-func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
+func TestSummaryPendingInfluenceUnifiedZombieDuration(t *testing.T) {
 	re := require.New(t)
 	cancel, _, tc, oc := prepareSchedulersTest()
 	defer cancel()
@@ -3132,7 +3132,6 @@ func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
 	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 2, infl, 2*time.Minute)
-	pending.dstMaxZombieDur = 30 * time.Second
 	hb.regionPendings[region.GetID()] = pending
 
 	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
@@ -3141,7 +3140,8 @@ func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
 
 	re.NotNil(storeInfos[1].PendingSum)
 	re.Equal(-71.0, storeInfos[1].PendingSum.Loads[utils.RegionReadCPU])
-	re.Nil(storeInfos[2].PendingSum)
+	re.NotNil(storeInfos[2].PendingSum)
+	re.Equal(71.0, storeInfos[2].PendingSum.Loads[utils.RegionReadCPU])
 	_, ok := hb.regionPendings[region.GetID()]
 	re.True(ok)
 }
@@ -3216,7 +3216,7 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	re.True(bs.hasInflatedPendingOnDst(informer, 14))
 	re.Equal(71.0, pending.origin.Loads[utils.RegionReadCPU])
 	re.Equal(90.0, pending.dstRecordedCPU)
-	re.GreaterOrEqual(pending.dstMaxZombieDur, pending.maxZombieDuration)
+	re.Greater(pending.maxZombieDuration, 30*time.Second)
 	re.False(bs.hasInflatedPendingOnDst(informer, 14))
 }
 

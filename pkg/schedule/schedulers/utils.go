@@ -243,7 +243,6 @@ type pendingInfluence struct {
 	origin            statistics.Influence
 	dstRecordedCPU    float64
 	maxZombieDuration time.Duration
-	dstMaxZombieDur   time.Duration
 }
 
 func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl statistics.Influence, maxZombieDur time.Duration) *pendingInfluence {
@@ -258,7 +257,6 @@ func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl 
 		origin:            infl,
 		dstRecordedCPU:    recordedCPU,
 		maxZombieDuration: maxZombieDur,
-		dstMaxZombieDur:   maxZombieDur,
 	}
 }
 
@@ -274,14 +272,14 @@ func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
 	}
 	status := p.op.CheckAndGetStatus()
 	if !operator.IsEndStatus(status) {
-		if p.dstMaxZombieDur < dur {
-			p.dstMaxZombieDur = dur
+		if p.maxZombieDuration < dur {
+			p.maxZombieDuration = dur
 		}
 		return
 	}
 	targetDur := time.Since(p.op.GetReachTimeOf(status)) + dur
-	if p.dstMaxZombieDur < targetDur {
-		p.dstMaxZombieDur = targetDur
+	if p.maxZombieDuration < targetDur {
+		p.maxZombieDuration = targetDur
 	}
 }
 
