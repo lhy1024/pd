@@ -45,14 +45,14 @@ import (
 )
 
 const (
-	splitHotReadBuckets      = "split-hot-read-region"
-	splitHotWriteBuckets     = "split-hot-write-region"
-	splitProgressiveRank     = 5
-	minHotScheduleInterval   = time.Second
-	maxHotScheduleInterval   = 20 * time.Second
-	defaultPendingAmpFactor  = 2.0
-	defaultStddevThreshold   = 0.1
-	defaultTopnPosition      = 10
+	splitHotReadBuckets     = "split-hot-read-region"
+	splitHotWriteBuckets    = "split-hot-write-region"
+	splitProgressiveRank    = 5
+	minHotScheduleInterval  = time.Second
+	maxHotScheduleInterval  = 20 * time.Second
+	defaultPendingAmpFactor = 2.0
+	defaultStddevThreshold  = 0.1
+	defaultTopnPosition     = 10
 )
 
 var (
@@ -324,13 +324,7 @@ func (s *hotScheduler) dispatch(typ resourceType, cluster sche.SchedulerCluster)
 	return nil
 }
 
-func (s *hotScheduler) tryAddPendingInfluence(
-	op *operator.Operator,
-	srcStore []uint64,
-	dstStore uint64,
-	infl statistics.Influence,
-	maxZombieDur time.Duration,
-) bool {
+func (s *hotScheduler) tryAddPendingInfluence(op *operator.Operator, srcStore []uint64, dstStore uint64, infl statistics.Influence, maxZombieDur time.Duration) bool {
 	regionID := op.RegionID()
 	_, ok := s.regionPendings[regionID]
 	if ok {
