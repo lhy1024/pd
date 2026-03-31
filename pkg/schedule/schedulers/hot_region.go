@@ -1099,6 +1099,9 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 			pending.maxZombieDuration += bs.sche.conf.getStoreStatZombieDuration()
 			return true
 		}
+		if pending.dstReadCPURecord > pending.origin.GetReadCPU() {
+			return true
+		}
 	}
 	return false
 }

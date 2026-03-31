@@ -3217,6 +3217,8 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	re.Equal(71.0, pending.origin.Loads[utils.RegionReadCPU])
 	re.Equal(90.0, pending.dstReadCPURecord)
 	re.Greater(pending.maxZombieDuration, 30*time.Second)
+	re.True(bs.hasInflatedPendingOnDst(informer, 14))
+	informer.stats = nil
 	re.False(bs.hasInflatedPendingOnDst(informer, 14))
 }
 
