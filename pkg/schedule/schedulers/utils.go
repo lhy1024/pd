@@ -269,6 +269,15 @@ func (p *pendingInfluence) dstObservedCPU(informer statistics.RegionStatInformer
 	return recordedCPU, observedCPU, true
 }
 
+func (p *pendingInfluence) refreshDstRecordedCPU(observedCPU float64) {
+	if len(p.origin.Loads) <= int(utils.RegionReadCPU) {
+		return
+	}
+	if observedCPU > p.origin.Loads[utils.RegionReadCPU] {
+		p.origin.Loads[utils.RegionReadCPU] = observedCPU
+	}
+}
+
 func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
 	if dur <= 0 || p.op == nil {
 		return
