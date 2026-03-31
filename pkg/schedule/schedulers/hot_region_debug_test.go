@@ -26,15 +26,15 @@ import (
 
 func TestBuildHotStoreDebugSnapshotAndRank(t *testing.T) {
 	re := require.New(t)
+	loads := make([]float64, utils.DimLen)
+	loads[utils.ByteDim] = 321
+	loads[utils.QueryDim] = 654
+	loads[utils.CPUDim] = 987
 	detail := &statistics.StoreLoadDetail{
 		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: core.NewStoreInfoWithLabel(1, map[string]string{})},
 		LoadPred: &statistics.StoreLoadPred{
 			Current: statistics.StoreLoad{
-				Loads: statistics.Loads{
-					utils.ByteDim:  321,
-					utils.QueryDim: 654,
-					utils.CPUDim:   987,
-				},
+				Loads: loads,
 			},
 		},
 		HotPeers: []*statistics.HotPeerStat{
