@@ -3183,6 +3183,42 @@ func TestSummaryPendingInfluenceUsesObservedDstCPU(t *testing.T) {
 	re.Equal(259.0, storeInfos[14].PendingSum.Loads[utils.RegionReadCPU])
 }
 
+func TestSummaryPendingInfluenceKeepsRecordedDstCPUWhenObservedFallsBack(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	tc.PutStoreWithLabels(1)
+	tc.PutStoreWithLabels(14)
+
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+
+	region := newTestRegion(36532)
+	op := operator.NewTestOperator(region.GetID(), region.GetRegionEpoch(), operator.OpHotRegion, operator.TransferLeader{FromStore: 1, ToStore: 1})
+	op.Start()
+	re.Nil(op.Check(region))
+	op.SetStatusReachTime(operator.SUCCESS, time.Now().Add(-10*time.Second))
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
+	infl.Loads[utils.RegionReadCPU] = 71
+	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
+	pending.dstReadCPURecord = 120
+	hb.regionPendings[region.GetID()] = pending
+
+	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+	informer := &fakeRegionStatInformer{
+		stats: map[[2]uint64]*statistics.HotPeerStat{
+			{region.GetID(), 14}: {RegionID: region.GetID(), StoreID: 14, Loads: []float64{0, 0, 0, 110}},
+		},
+	}
+	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
+	hb.summaryPendingInfluence(readLeader, informer, storeInfos)
+
+	re.NotNil(storeInfos[14].PendingSum)
+	re.Equal(120.0, storeInfos[14].PendingSum.Loads[utils.RegionReadCPU])
+}
+
 func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()
