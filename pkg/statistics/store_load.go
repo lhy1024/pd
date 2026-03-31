@@ -112,6 +112,14 @@ type Influence struct {
 	Count float64
 }
 
+// GetReadCPU returns the recorded read CPU influence.
+func (infl Influence) GetReadCPU() float64 {
+	if len(infl.Loads) <= int(utils.RegionReadCPU) {
+		return 0
+	}
+	return infl.Loads[utils.RegionReadCPU]
+}
+
 // SummaryStoreInfos return a mapping from store to summary information.
 func SummaryStoreInfos(stores []*core.StoreInfo) map[uint64]*StoreSummaryInfo {
 	infos := make(map[uint64]*StoreSummaryInfo, len(stores))

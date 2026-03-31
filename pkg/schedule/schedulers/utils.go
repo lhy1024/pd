@@ -246,16 +246,12 @@ type pendingInfluence struct {
 }
 
 func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl statistics.Influence, maxZombieDur time.Duration) *pendingInfluence {
-	recordedCPU := 0.0
-	if len(infl.Loads) > int(utils.RegionReadCPU) {
-		recordedCPU = infl.Loads[utils.RegionReadCPU]
-	}
 	return &pendingInfluence{
 		op:                op,
 		froms:             froms,
 		to:                to,
 		origin:            infl,
-		dstRecordedCPU:    recordedCPU,
+		dstRecordedCPU:    infl.GetReadCPU(),
 		maxZombieDuration: maxZombieDur,
 	}
 }
