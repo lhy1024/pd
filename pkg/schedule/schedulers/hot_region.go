@@ -168,15 +168,18 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 		for _, from := range p.froms {
 			from := storeInfos[from]
 			to := storeInfos[p.to]
-			weight, needGC := calcPendingInfluence(p.op, p.maxZombieDuration)
+			maxZombieDur := p.maxZombieDuration
+			weight, needGC := calcPendingInfluence(p.op, maxZombieDur)
+
 			if needGC {
 				delete(s.regionPendings, id)
 				continue
 			}
-			if from != nil {
+
+			if from != nil && weight > 0 {
 				from.AddInfluence(&p.origin, -weight)
 			}
-			if to != nil {
+			if to != nil && weight > 0 {
 				to.AddInfluence(p.dstInfluence(informer, cpuFirstPriority), weight)
 			}
 		}
@@ -1083,10 +1086,10 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		if observed == nil {
 			continue
 		}
-		recordedCPU := pending.dstRecordedCPU
+		recordedCPU := pending.dstReadCPURecord
 		observedCPU := observed.GetLoad(utils.CPUDim)
 		if observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
-			pending.refreshDstRecordedCPU(observedCPU)
+			pending.dstReadCPURecord = observedCPU
 			pending.refreshDstZombie(pending.maxZombieDuration)
 			return true
 		}

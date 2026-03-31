@@ -241,8 +241,8 @@ type pendingInfluence struct {
 	froms             []uint64
 	to                uint64
 	origin            statistics.Influence
-	dstRecordedCPU    float64
 	maxZombieDuration time.Duration
+	dstReadCPURecord  float64
 }
 
 func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl statistics.Influence, maxZombieDur time.Duration) *pendingInfluence {
@@ -251,14 +251,8 @@ func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl 
 		froms:             froms,
 		to:                to,
 		origin:            infl,
-		dstRecordedCPU:    infl.GetReadCPU(),
 		maxZombieDuration: maxZombieDur,
-	}
-}
-
-func (p *pendingInfluence) refreshDstRecordedCPU(observedCPU float64) {
-	if observedCPU > p.dstRecordedCPU {
-		p.dstRecordedCPU = observedCPU
+		dstReadCPURecord:  infl.GetReadCPU(),
 	}
 }
 
@@ -289,7 +283,7 @@ func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer, 
 		return dstInfluence
 	}
 	observedCPU := observed.GetLoad(utils.CPUDim)
-	if observedCPU <= p.dstRecordedCPU {
+	if observedCPU <= p.dstReadCPURecord {
 		return dstInfluence
 	}
 	loads := append([]float64(nil), p.origin.Loads...)
