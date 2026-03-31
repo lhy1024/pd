@@ -256,23 +256,6 @@ func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl 
 	}
 }
 
-func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
-	if dur <= 0 || p.op == nil {
-		return
-	}
-	status := p.op.CheckAndGetStatus()
-	if !operator.IsEndStatus(status) {
-		if p.maxZombieDuration < dur {
-			p.maxZombieDuration = dur
-		}
-		return
-	}
-	targetDur := time.Since(p.op.GetReachTimeOf(status)) + dur
-	if p.maxZombieDuration < targetDur {
-		p.maxZombieDuration = targetDur
-	}
-}
-
 func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer, cpuFirstPriority bool) *statistics.Influence {
 	dstInfluence := &p.origin
 	if !cpuFirstPriority || informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
