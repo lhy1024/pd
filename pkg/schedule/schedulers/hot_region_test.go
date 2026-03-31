@@ -3139,10 +3139,11 @@ func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
 	hb.summaryPendingInfluence(readLeader, &fakeRegionStatInformer{}, storeInfos)
 
-	re.Nil(storeInfos[1].PendingSum)
+	re.NotNil(storeInfos[1].PendingSum)
+	re.Equal(-71.0, storeInfos[1].PendingSum.Loads[utils.RegionReadCPU])
 	re.Nil(storeInfos[2].PendingSum)
 	_, ok := hb.regionPendings[region.GetID()]
-	re.False(ok)
+	re.True(ok)
 }
 
 func TestSummaryPendingInfluenceUsesObservedDstCPU(t *testing.T) {
@@ -3200,7 +3201,7 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
 	hb.(*hotScheduler).regionPendings[region.GetID()] = pending
 
-	weight, needGC := pending.calcDstPendingInfluence(hb.(*hotScheduler).conf.getStoreStatZombieDuration())
+	weight, needGC := pending.calcDstPendingInfluence()
 	re.Equal(1.0, weight)
 	re.False(needGC)
 
@@ -3218,10 +3219,10 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	}
 	re.True(bs.hasInflatedPendingOnDst(informer, 14))
 	re.Equal(90.0, pending.origin.Loads[utils.RegionReadCPU])
-	re.GreaterOrEqual(pending.dstMaxZombieDur, hb.(*hotScheduler).conf.getStoreStatZombieDuration())
+	re.GreaterOrEqual(pending.dstMaxZombieDur, pending.maxZombieDuration)
 	re.False(bs.hasInflatedPendingOnDst(informer, 14))
 
-	weight, _ = pending.calcDstPendingInfluence(hb.(*hotScheduler).conf.getStoreStatZombieDuration())
+	weight, _ = pending.calcDstPendingInfluence()
 	re.Equal(1.0, weight)
 }
 
