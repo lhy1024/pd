@@ -199,7 +199,7 @@ func checkGCPendingOpInfos(re *require.Assertions, enablePlacementRules bool) {
 	}
 
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.summaryPendingInfluence(nil, storeInfos) // Calling this function will GC.
+	hb.summaryPendingInfluence(readLeader, nil, storeInfos) // Calling this function will GC.
 
 	for i := range opInfluenceCreators {
 		for j, typ := range typs {
@@ -2148,7 +2148,7 @@ func TestInfluenceByRWType(t *testing.T) {
 	re.NotNil(op)
 
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.(*hotScheduler).summaryPendingInfluence(nil, storeInfos)
+	hb.(*hotScheduler).summaryPendingInfluence(readLeader, nil, storeInfos)
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteKeys], -0.5*units.MiB))
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteBytes], -0.5*units.MiB))
 	re.True(nearlyAbout(storeInfos[4].PendingSum.Loads[utils.RegionWriteKeys], 0.5*units.MiB))
@@ -2173,7 +2173,7 @@ func TestInfluenceByRWType(t *testing.T) {
 	re.NotNil(op)
 
 	storeInfos = statistics.SummaryStoreInfos(tc.GetStores())
-	hb.(*hotScheduler).summaryPendingInfluence(nil, storeInfos)
+	hb.(*hotScheduler).summaryPendingInfluence(readLeader, nil, storeInfos)
 	// assert read/write influence is the sum of write peer and write leader
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteKeys], -1.2*units.MiB))
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteBytes], -1.2*units.MiB))
@@ -3133,11 +3133,11 @@ func TestSummaryPendingInfluenceSplitDstDuration(t *testing.T) {
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 2, infl, 2*time.Minute)
 	pending.dstMaxZombieDur = 30 * time.Second
-	pending.useDstObservedCPU = true
 	hb.regionPendings[region.GetID()] = pending
 
+	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.summaryPendingInfluence(&fakeRegionStatInformer{}, storeInfos)
+	hb.summaryPendingInfluence(readLeader, &fakeRegionStatInformer{}, storeInfos)
 
 	re.NotNil(storeInfos[1].PendingSum)
 	re.Equal(-71.0, storeInfos[1].PendingSum.Loads[utils.RegionReadCPU])
@@ -3166,16 +3166,16 @@ func TestSummaryPendingInfluenceUsesObservedDstCPU(t *testing.T) {
 	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
-	pending.useDstObservedCPU = true
 	hb.regionPendings[region.GetID()] = pending
 
+	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
 	informer := &fakeRegionStatInformer{
 		stats: map[[2]uint64]*statistics.HotPeerStat{
 			{region.GetID(), 14}: {RegionID: region.GetID(), StoreID: 14, Loads: []float64{0, 0, 0, 259}},
 		},
 	}
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.summaryPendingInfluence(informer, storeInfos)
+	hb.summaryPendingInfluence(readLeader, informer, storeInfos)
 
 	re.NotNil(storeInfos[1].PendingSum)
 	re.NotNil(storeInfos[14].PendingSum)
@@ -3199,10 +3199,9 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
 	infl.Loads[utils.RegionReadCPU] = 71
 	pending := newPendingInfluence(op, []uint64{1}, 14, infl, 30*time.Second)
-	pending.useDstObservedCPU = true
 	hb.(*hotScheduler).regionPendings[region.GetID()] = pending
 
-	weight, needGC := pending.calcDstPendingInfluence()
+	weight, needGC := pending.calcDstPendingInfluence(true)
 	re.Zero(weight)
 	re.False(needGC)
 
@@ -3221,7 +3220,7 @@ func TestReadCPUDstInflationGateRefreshesDstZombie(t *testing.T) {
 	re.True(bs.hasInflatedPendingOnDst(informer, 14))
 	re.GreaterOrEqual(pending.dstMaxZombieDur, time.Minute)
 
-	weight, _ = pending.calcDstPendingInfluence()
+	weight, _ = pending.calcDstPendingInfluence(true)
 	re.Equal(1.0, weight)
 }
 
@@ -3241,7 +3240,6 @@ func TestDstObservedAndInflationGateOnlyApplyToCPUFirstPriority(t *testing.T) {
 		infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
 		infl.Loads[utils.RegionReadCPU] = recordedCPU
 		pending := newPendingInfluence(op, []uint64{1}, dstStore, infl, 30*time.Second)
-		pending.useDstObservedCPU = true
 		return pending
 	}
 

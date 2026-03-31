@@ -243,7 +243,6 @@ type pendingInfluence struct {
 	origin            statistics.Influence
 	maxZombieDuration time.Duration
 	dstMaxZombieDur   time.Duration
-	useDstObservedCPU bool
 }
 
 func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl statistics.Influence, maxZombieDur time.Duration) *pendingInfluence {
@@ -258,7 +257,7 @@ func newPendingInfluence(op *operator.Operator, froms []uint64, to uint64, infl 
 }
 
 func (p *pendingInfluence) dstObservedCPU(informer statistics.RegionStatInformer) (recordedCPU, observedCPU float64, ok bool) {
-	if !p.useDstObservedCPU || informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
+	if informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
 		return 0, 0, false
 	}
 	observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
@@ -287,7 +286,7 @@ func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
 	}
 }
 
-func (p *pendingInfluence) calcDstPendingInfluence() (weight float64, needGC bool) {
+func (p *pendingInfluence) calcDstPendingInfluence(useGCGrace bool) (weight float64, needGC bool) {
 	status := p.op.CheckAndGetStatus()
 	if !operator.IsEndStatus(status) {
 		return 1, false
@@ -301,7 +300,7 @@ func (p *pendingInfluence) calcDstPendingInfluence() (weight float64, needGC boo
 	}
 
 	gcGraceDur := p.dstMaxZombieDur
-	if p.useDstObservedCPU && gcGraceDur < time.Minute {
+	if useGCGrace && gcGraceDur < time.Minute {
 		gcGraceDur = time.Minute
 	}
 	needGC = zombieDur >= gcGraceDur
@@ -311,7 +310,10 @@ func (p *pendingInfluence) calcDstPendingInfluence() (weight float64, needGC boo
 	return
 }
 
-func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer) *statistics.Influence {
+func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer, useObservedCPU bool) *statistics.Influence {
+	if !useObservedCPU {
+		return &p.origin
+	}
 	recordedCPU, observedCPU, ok := p.dstObservedCPU(informer)
 	if !ok || observedCPU <= recordedCPU {
 		return &p.origin
