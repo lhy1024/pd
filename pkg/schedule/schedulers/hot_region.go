@@ -165,9 +165,9 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 		}
 	}
 	for id, p := range s.regionPendings {
-		srcWeight, srcNeedGC := calcPendingInfluence(p.op, p.maxZombieDuration)
+		srcWeight, _ := calcPendingInfluence(p.op, p.maxZombieDuration)
 		dstWeight, dstNeedGC := p.calcDstPendingInfluence(useDstObservedCPU)
-		if srcNeedGC && dstNeedGC {
+		if dstNeedGC {
 			delete(s.regionPendings, id)
 			continue
 		}
