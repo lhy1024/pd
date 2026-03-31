@@ -164,6 +164,10 @@ func (s *baseHotScheduler) updateHistoryLoadConfig(sampleDuration, sampleInterva
 // and clean the region from regionInfluence if they have ended operator.
 // It makes each dim rate or count become `weight` times to the origin value.
 func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statistics.StoreSummaryInfo) {
+	pendingWeight := 1.0
+	if conf, ok := s.conf.(*hotRegionSchedulerConfig); ok {
+		pendingWeight = conf.getPendingWeight()
+	}
 	for id, p := range s.regionPendings {
 		for _, from := range p.froms {
 			from := storeInfos[from]
@@ -176,6 +180,7 @@ func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statis
 				continue
 			}
 
+			weight *= pendingWeight
 			if from != nil && weight > 0 {
 				from.AddInfluence(&p.origin, -weight)
 			}
@@ -239,6 +244,7 @@ func (s *hotScheduler) ReloadConfig() error {
 	s.conf.MinHotQueryRate = newCfg.MinHotQueryRate
 	s.conf.MinHotCPURate = newCfg.MinHotCPURate
 	s.conf.MaxZombieRounds = newCfg.MaxZombieRounds
+	s.conf.PendingWeight = newCfg.PendingWeight
 	s.conf.MaxPeerNum = newCfg.MaxPeerNum
 	s.conf.ByteRateRankStepRatio = newCfg.ByteRateRankStepRatio
 	s.conf.KeyRateRankStepRatio = newCfg.KeyRateRankStepRatio
@@ -777,6 +783,8 @@ func (bs *balanceSolver) collectPendingInfluence(peer *statistics.HotPeerStat) s
 // If the statistics are from the sum of Regions, there will be a longer ZombieDuration.
 func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 	switch bs.resourceTy {
+	case readLeader:
+		return 60 * time.Second
 	case writeLeader:
 		if bs.firstPriority == utils.QueryDim {
 			// We use store query info rather than total of hot write leader to guide hot write leader scheduler

@@ -91,6 +91,7 @@ func TestUpgrade(t *testing.T) {
 	re.Equal([]string{utils.QueryPriority, utils.BytePriority}, hb.conf.getReadPriorities())
 	re.Equal([]string{utils.QueryPriority, utils.BytePriority}, hb.conf.getWriteLeaderPriorities())
 	re.Equal([]string{utils.BytePriority, utils.KeyPriority}, hb.conf.getWritePeerPriorities())
+	re.Equal(10.0, hb.conf.getPendingWeight())
 	re.Equal("v2", hb.conf.getRankFormulaVersion())
 	// upgrade from json(null)
 	sche, err = CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
@@ -927,6 +928,7 @@ func TestHotWriteRegionScheduleWithKeyRate(t *testing.T) {
 	hb, err := CreateScheduler(writeType, oc, storage.NewStorageWithMemoryBackend(), nil)
 	re.NoError(err)
 	hb.(*hotScheduler).types = []resourceType{writePeer}
+	hb.(*hotScheduler).conf.PendingWeight = 1
 	hb.(*hotScheduler).conf.setDstToleranceRatio(1)
 	hb.(*hotScheduler).conf.setSrcToleranceRatio(1)
 	hb.(*hotScheduler).conf.WriteLeaderPriorities = []string{utils.KeyPriority, utils.BytePriority}
@@ -1506,15 +1508,16 @@ func TestHotReadRegionScheduleWithPendingInfluence(t *testing.T) {
 func checkHotReadRegionScheduleWithPendingInfluence(re *require.Assertions, dim int) {
 	cancel, _, tc, oc := prepareSchedulersTest()
 	defer cancel()
-	hb, err := CreateScheduler(readType, oc, storage.NewStorageWithMemoryBackend(), nil)
-	re.NoError(err)
+	cfg := initHotRegionScheduleConfig()
+	cfg.PendingWeight = 1
+	hb := newHotReadScheduler(oc, cfg)
 	// For test
-	hb.(*hotScheduler).conf.RankFormulaVersion = "v1"
-	hb.(*hotScheduler).conf.GreatDecRatio = 0.99
-	hb.(*hotScheduler).conf.MinorDecRatio = 1
-	hb.(*hotScheduler).conf.DstToleranceRatio = 1
-	hb.(*hotScheduler).conf.ReadPriorities = []string{utils.BytePriority, utils.KeyPriority}
-	hb.(*hotScheduler).conf.setHistorySampleDuration(0)
+	hb.conf.RankFormulaVersion = "v1"
+	hb.conf.GreatDecRatio = 0.99
+	hb.conf.MinorDecRatio = 1
+	hb.conf.DstToleranceRatio = 1
+	hb.conf.ReadPriorities = []string{utils.BytePriority, utils.KeyPriority}
+	hb.conf.setHistorySampleDuration(0)
 	pendingAmpFactor = 0.0
 
 	tc.SetClusterVersion(versioninfo.MinSupportedVersion(versioninfo.Version4_0))
@@ -1559,7 +1562,7 @@ func checkHotReadRegionScheduleWithPendingInfluence(re *require.Assertions, dim 
 	// Before schedule, store byte/key rate: 7.1 | 6.1 | 6 | 5
 	// Min and max from storeLoadPred. They will be generated in the comparison of current and future.
 	for range 20 {
-		clearPendingInfluence(hb.(*hotScheduler))
+		clearPendingInfluence(hb)
 
 		ops, _ := hb.Schedule(tc, false)
 		op1 := ops[0]
@@ -1582,7 +1585,7 @@ func checkHotReadRegionScheduleWithPendingInfluence(re *require.Assertions, dim 
 
 	// Before schedule, store byte/key rate: 7.1 | 6.1 | 6 | 5
 	for range 20 {
-		clearPendingInfluence(hb.(*hotScheduler))
+		clearPendingInfluence(hb)
 
 		ops, _ := hb.Schedule(tc, false)
 		op1 := ops[0]
@@ -2102,12 +2105,13 @@ func TestInfluenceByRWType(t *testing.T) {
 	re := require.New(t)
 	cancel, _, tc, oc := prepareSchedulersTest()
 	defer cancel()
-	hb, err := CreateScheduler(writeType, oc, storage.NewStorageWithMemoryBackend(), nil)
-	re.NoError(err)
-	hb.(*hotScheduler).types = []resourceType{writePeer}
-	hb.(*hotScheduler).conf.setDstToleranceRatio(1)
-	hb.(*hotScheduler).conf.setSrcToleranceRatio(1)
-	hb.(*hotScheduler).conf.setHistorySampleDuration(0)
+	cfg := initHotRegionScheduleConfig()
+	cfg.PendingWeight = 1
+	hb := newHotWriteScheduler(oc, cfg)
+	hb.types = []resourceType{writePeer}
+	hb.conf.setDstToleranceRatio(1)
+	hb.conf.setSrcToleranceRatio(1)
+	hb.conf.setHistorySampleDuration(0)
 	tc.SetClusterVersion(versioninfo.MinSupportedVersion(versioninfo.Version4_0))
 	tc.AddRegionStore(1, 20)
 	tc.AddRegionStore(2, 20)
@@ -2129,7 +2133,7 @@ func TestInfluenceByRWType(t *testing.T) {
 	re.NotNil(op)
 
 	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
-	hb.(*hotScheduler).summaryPendingInfluence(storeInfos)
+	hb.summaryPendingInfluence(storeInfos)
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteKeys], -0.5*units.MiB))
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteBytes], -0.5*units.MiB))
 	re.True(nearlyAbout(storeInfos[4].PendingSum.Loads[utils.RegionWriteKeys], 0.5*units.MiB))
@@ -2147,14 +2151,14 @@ func TestInfluenceByRWType(t *testing.T) {
 	}
 
 	// must transfer leader
-	hb.(*hotScheduler).types = []resourceType{writeLeader}
+	hb.types = []resourceType{writeLeader}
 	// must transfer leader from 1 to 3
 	ops, _ = hb.Schedule(tc, false)
 	op = ops[0]
 	re.NotNil(op)
 
 	storeInfos = statistics.SummaryStoreInfos(tc.GetStores())
-	hb.(*hotScheduler).summaryPendingInfluence(storeInfos)
+	hb.summaryPendingInfluence(storeInfos)
 	// assert read/write influence is the sum of write peer and write leader
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteKeys], -1.2*units.MiB))
 	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionWriteBytes], -1.2*units.MiB))
@@ -2171,6 +2175,29 @@ func nearlyAbout(f1, f2 float64) bool {
 		return true
 	}
 	return false
+}
+
+func TestPendingWeight(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	hb := newHotReadScheduler(oc, initHotRegionScheduleConfig())
+
+	tc.AddLeaderStore(1, 20)
+	tc.AddLeaderStore(2, 20)
+	tc.AddLeaderStore(3, 20)
+	region := newTestRegion(1)
+	op, err := operator.CreateTransferLeaderOperator("transfer-leader-test", tc, region, 2, []uint64{}, operator.OpAdmin)
+	re.NoError(err)
+
+	infl := statistics.Influence{Loads: make([]float64, utils.RegionStatCount), Count: 1}
+	infl.Loads[utils.RegionReadBytes] = 1
+	re.True(hb.tryAddPendingInfluence(op, []uint64{1}, 2, infl, hb.conf.getStoreStatZombieDuration()))
+
+	storeInfos := statistics.SummaryStoreInfos(tc.GetStores())
+	hb.summaryPendingInfluence(storeInfos)
+	re.True(nearlyAbout(storeInfos[1].PendingSum.Loads[utils.RegionReadBytes], -10))
+	re.True(nearlyAbout(storeInfos[2].PendingSum.Loads[utils.RegionReadBytes], 10))
 }
 
 func loadsEqual(loads1, loads2 []float64) bool {
@@ -2680,7 +2707,7 @@ func TestMaxZombieDuration(t *testing.T) {
 		},
 		{
 			typ:          readLeader,
-			maxZombieDur: maxZombieDur * utils.StoreHeartBeatReportInterval,
+			maxZombieDur: 60,
 		},
 		{
 			typ:          writePeer,
