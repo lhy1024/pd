@@ -283,6 +283,27 @@ func (p *pendingInfluence) refreshDstZombie(dur time.Duration) {
 	}
 }
 
+func (p *pendingInfluence) dstInfluence(informer statistics.RegionStatInformer, cpuFirstPriority bool) *statistics.Influence {
+	dstInfluence := &p.origin
+	if !cpuFirstPriority || informer == nil || p.op == nil || p.to == 0 || len(p.origin.Loads) <= int(utils.RegionReadCPU) {
+		return dstInfluence
+	}
+	observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
+	if observed == nil {
+		return dstInfluence
+	}
+	observedCPU := observed.GetLoad(utils.CPUDim)
+	if observedCPU <= p.dstRecordedCPU {
+		return dstInfluence
+	}
+	loads := append([]float64(nil), p.origin.Loads...)
+	loads[utils.RegionReadCPU] = observedCPU
+	return &statistics.Influence{
+		Loads: loads,
+		Count: p.origin.Count,
+	}
+}
+
 // stLdRate returns a function to get the load rate of the store with the specified dimension.
 func stLdRate(dim int) func(ld *statistics.StoreLoad) float64 {
 	return func(ld *statistics.StoreLoad) float64 {

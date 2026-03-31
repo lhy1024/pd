@@ -173,26 +173,11 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 				delete(s.regionPendings, id)
 				continue
 			}
-			dstInfluence := &p.origin
-			if cpuFirstPriority && informer != nil && p.op != nil && p.to != 0 && len(p.origin.Loads) > int(utils.RegionReadCPU) {
-				observed := informer.GetHotPeerStat(utils.Read, p.op.RegionID(), p.to)
-				if observed != nil {
-					observedCPU := observed.GetLoad(utils.CPUDim)
-					if observedCPU > p.dstRecordedCPU {
-						loads := append([]float64(nil), p.origin.Loads...)
-						loads[utils.RegionReadCPU] = observedCPU
-						dstInfluence = &statistics.Influence{
-							Loads: loads,
-							Count: p.origin.Count,
-						}
-					}
-				}
-			}
 			if from != nil {
 				from.AddInfluence(&p.origin, -weight)
 			}
 			if to != nil {
-				to.AddInfluence(dstInfluence, weight)
+				to.AddInfluence(p.dstInfluence(informer, cpuFirstPriority), weight)
 			}
 		}
 	}
