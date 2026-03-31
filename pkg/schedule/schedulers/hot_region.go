@@ -176,6 +176,9 @@ func (s *baseHotScheduler) summaryPendingInfluence(typ resourceType, informer st
 				continue
 			}
 
+			// The same pending window is applied to both src and dst on purpose:
+			// once dst is still inflating, the region should neither be selected
+			// back out of dst nor released from src-side suppression too early.
 			if from != nil && weight > 0 {
 				from.AddInfluence(&p.origin, -weight)
 			}
@@ -1089,6 +1092,9 @@ func (bs *balanceSolver) hasInflatedPendingOnDst(informer statistics.RegionStatI
 		recordedCPU := pending.dstReadCPURecord
 		observedCPU := observed.GetLoad(utils.CPUDim)
 		if observedCPU > recordedCPU+bs.sche.conf.getMinHotCPURate() {
+			// When a moved region keeps growing on dst, temporarily block the
+			// whole dst store so scheduler does not keep stacking more hot peers
+			// onto a destination whose real CPU has not stabilized yet.
 			pending.dstReadCPURecord = observedCPU
 			pending.maxZombieDuration += bs.sche.conf.getStoreStatZombieDuration()
 			return true
