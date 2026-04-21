@@ -224,6 +224,7 @@ func (sc *schedulingController) GetLabelStats() *statistics.LabelStatistics {
 	return sc.labelStats
 }
 
+// RecordSplitScatterBatch records a split batch for later scatter dispatch.
 func (sc *schedulingController) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
 	sc.mu.RLock()
 	coordinator := sc.coordinator
@@ -234,6 +235,7 @@ func (sc *schedulingController) RecordSplitScatterBatch(sourceRegionID uint64, n
 	coordinator.GetCheckerController().RecordSplitScatterBatch(sourceRegionID, newRegionIDs)
 }
 
+// ObserveSplitScatterRegion updates split-scatter priority from the latest region heartbeat.
 func (sc *schedulingController) ObserveSplitScatterRegion(region *core.RegionInfo) {
 	sc.mu.RLock()
 	coordinator := sc.coordinator

@@ -176,7 +176,7 @@ func (c *Controller) PatrolRegions() {
 			})
 
 			measure(c.metrics.patrolPhaseHistograms[phaseCheckPending], func() {
-				c.checkSplitScatterRegions()
+				c.dispatchSplitScatterRegions()
 				c.checkPendingProcessedRegions()
 			})
 

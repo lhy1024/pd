@@ -50,7 +50,7 @@ func TestHandleAskBatchSplitSchedulesSplitScatterInPatrol(t *testing.T) {
 	re.NoError(cluster.processRegionHeartbeat(core.ContextTODO(), newSplitScatterRegion(splitRegionIDs[0], []byte("m"), []byte("t"), 120)))
 	re.NoError(cluster.processRegionHeartbeat(core.ContextTODO(), newSplitScatterRegion(splitRegionIDs[1], []byte("t"), []byte(""), 80)))
 
-	cluster.GetCoordinator().GetCheckerController().CheckSplitScatterRegions()
+	cluster.GetCoordinator().GetCheckerController().DispatchSplitScatterRegionsForTest()
 
 	group := ""
 	for _, regionID := range splitRegionIDs {
@@ -75,9 +75,9 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 	re := require.New(t)
 	cluster := newSplitScatterTestCluster(t)
 
-	re.NoError(cluster.putRegion(newSplitScatterRegion(90, newSplitScatterIndexKey(42, 7, "a"), newSplitScatterIndexKey(42, 7, "j"), 0)))
-	re.NoError(cluster.putRegion(newSplitScatterRegion(91, newSplitScatterIndexKey(42, 7, "j"), newSplitScatterIndexKey(42, 7, "t"), 0)))
-	re.NoError(cluster.putRegion(newSplitScatterRegion(100, newSplitScatterIndexKey(42, 7, "t"), newSplitScatterIndexKey(42, 7, "z"), 0)))
+	re.NoError(cluster.putRegion(newSplitScatterRegion(90, newSplitScatterIndexKey("a"), newSplitScatterIndexKey("j"), 0)))
+	re.NoError(cluster.putRegion(newSplitScatterRegion(91, newSplitScatterIndexKey("j"), newSplitScatterIndexKey("t"), 0)))
+	re.NoError(cluster.putRegion(newSplitScatterRegion(100, newSplitScatterIndexKey("t"), newSplitScatterIndexKey("z"), 0)))
 
 	request := &pdpb.AskBatchSplitRequest{
 		Region:     cluster.GetRegion(100).GetMeta(),
@@ -90,10 +90,10 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 	splitRegionID := resp.GetIds()[0].GetNewRegionId()
 	re.NoError(cluster.processRegionHeartbeat(
 		core.ContextTODO(),
-		newSplitScatterRegion(splitRegionID, newSplitScatterIndexKey(42, 7, "t"), newSplitScatterIndexKey(42, 7, "w"), 120),
+		newSplitScatterRegion(splitRegionID, newSplitScatterIndexKey("t"), newSplitScatterIndexKey("w"), 120),
 	))
 
-	cluster.GetCoordinator().GetCheckerController().CheckSplitScatterRegions()
+	cluster.GetCoordinator().GetCheckerController().DispatchSplitScatterRegionsForTest()
 
 	op := cluster.GetOperatorController().GetOperator(splitRegionID)
 	re.NotNil(op)
@@ -145,11 +145,11 @@ func newSplitScatterRegion(regionID uint64, start, end []byte, cpu uint64) *core
 	return core.NewRegionInfo(region, peers[0], core.SetCPUUsage(cpu))
 }
 
-func newSplitScatterIndexKey(tableID, indexID int64, suffix string) []byte {
+func newSplitScatterIndexKey(suffix string) []byte {
 	key := []byte{'t'}
-	key = codec.EncodeInt(key, tableID)
+	key = codec.EncodeInt(key, 42)
 	key = append(key, '_', 'i')
-	key = codec.EncodeInt(key, indexID)
+	key = codec.EncodeInt(key, 7)
 	key = append(key, suffix...)
 	return codec.EncodeBytes(key)
 }

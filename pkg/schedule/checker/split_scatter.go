@@ -45,6 +45,7 @@ type splitScatterPriorityItem struct {
 	last     time.Time
 }
 
+// ID implements the priority queue item interface.
 func (i *splitScatterPriorityItem) ID() uint64 {
 	return i.regionID
 }
@@ -241,21 +242,23 @@ func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
 	return fmt.Sprintf("split-scatter-%d-%d", sourceRegionID, firstNewRegionID)
 }
 
+// RecordSplitScatterBatch records a newly split batch for later scatter.
 func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
 	c.splitScatter.recordBatch(sourceRegionID, newRegionIDs)
 }
 
+// ObserveSplitScatterRegion updates split-scatter priority using the latest region stats.
 func (c *Controller) ObserveSplitScatterRegion(region *core.RegionInfo) {
 	c.splitScatter.observe(region)
 }
 
-// CheckSplitScatterRegions dispatches recently split regions.
+// DispatchSplitScatterRegionsForTest dispatches pending split-scatter regions.
 // The function is exposed for test purpose.
-func (c *Controller) CheckSplitScatterRegions() {
-	c.checkSplitScatterRegions()
+func (c *Controller) DispatchSplitScatterRegionsForTest() {
+	c.dispatchSplitScatterRegions()
 }
 
-func (c *Controller) checkSplitScatterRegions() {
+func (c *Controller) dispatchSplitScatterRegions() {
 	if c.splitScatterer == nil {
 		return
 	}

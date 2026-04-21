@@ -72,7 +72,7 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	group, ok := controller.splitScatter.getPendingGroup(101)
 	re.True(ok)
 
-	controller.checkSplitScatterRegions()
+	controller.dispatchSplitScatterRegions()
 
 	op := oc.GetOperator(101)
 	if op == nil {
