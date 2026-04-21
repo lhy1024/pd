@@ -750,11 +750,12 @@ func (r *RegionInfo) GetCPUUsage() uint64 {
 }
 
 // GetReadCPUUsage returns the region-level unified-read CPU usage reported in cpu_stats.
+// It falls back to the legacy cpu_usage field when cpu_stats is unavailable.
 func (r *RegionInfo) GetReadCPUUsage() uint64 {
-	if r.cpuStats == nil {
-		return 0
+	if r.cpuStats != nil {
+		return r.cpuStats.GetUnifiedRead()
 	}
-	return r.cpuStats.GetUnifiedRead()
+	return r.cpuUsage
 }
 
 // GetBytesRead returns the read bytes of the region.
