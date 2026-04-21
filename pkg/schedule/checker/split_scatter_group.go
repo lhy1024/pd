@@ -49,7 +49,7 @@ type splitScatterEntity struct {
 }
 
 func resolveSplitScatterGroup(region *core.RegionInfo, fallbackGroup string) splitScatterGroupHint {
-	entity, ok := parseSplitScatterEntity(region.GetStartKey())
+	entity, ok := resolveStrictSplitScatterEntity(region.GetStartKey(), region.GetEndKey())
 	if !ok {
 		return splitScatterGroupHint{group: fallbackGroup}
 	}
@@ -70,6 +70,28 @@ func resolveSplitScatterGroup(region *core.RegionInfo, fallbackGroup string) spl
 		hint.group = fallbackGroup
 	}
 	return hint
+}
+
+func resolveStrictSplitScatterEntity(startKey, endKey []byte) (splitScatterEntity, bool) {
+	entity, ok := parseSplitScatterEntity(startKey)
+	if !ok {
+		return splitScatterEntity{}, false
+	}
+	// We intentionally give up ambiguous ranges here. Without schema metadata or
+	// split-key hints, PD cannot safely decide whether a bare table-boundary key
+	// or a cross-entity/cross-table merged region belongs to a single index or
+	// record space, so those regions fall back to the family-scoped group.
+	if len(endKey) == 0 {
+		return splitScatterEntity{}, false
+	}
+	entityRange := splitScatterPrefixRange(entity.rawPrefix)
+	if !entityRange.valid() || len(entityRange.endKey) == 0 {
+		return splitScatterEntity{}, false
+	}
+	if bytes.Compare(endKey, entityRange.endKey) > 0 {
+		return splitScatterEntity{}, false
+	}
+	return entity, true
 }
 
 func parseSplitScatterEntity(key []byte) (splitScatterEntity, bool) {
