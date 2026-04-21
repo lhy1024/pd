@@ -753,6 +753,129 @@ func TestSeedGroupDistributionByRange(t *testing.T) {
 	re.Equal(group, val)
 }
 
+func TestSeedGroupDistributionByRangeKeepsNoopDistribution(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 3; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "f", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(2, "f", "k", 2, 1, 3)
+	tc.AddLeaderRegionWithRange(3, "k", "p", 2, 1, 3)
+	tc.AddLeaderRegionWithRange(4, "p", "u", 3, 1, 2)
+	tc.AddLeaderRegionWithRange(5, "u", "z", 3, 1, 2)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "seeded-noop"
+	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
+
+	op, err := scatterer.Scatter(tc.GetRegion(1), group, true)
+	re.NoError(err)
+	re.Nil(op)
+
+	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(peerSnapshot, peerAfter)
+	re.Equal(leaderSnapshot, leaderAfter)
+}
+
+func TestSeedGroupDistributionByRangeAppliesNetChange(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(2, "j", "t", 2, 1, 3)
+	tc.AddLeaderRegionWithRange(3, "t", "z", 3, 1, 2)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "seeded-net-change"
+	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+
+	region := tc.GetRegion(1)
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
+
+	op, err := scatterer.Scatter(region, group, true)
+	re.NoError(err)
+	re.NotNil(op)
+	finalPeers := make(map[uint64]struct{}, len(region.GetPeers()))
+	for _, peer := range region.GetPeers() {
+		finalPeers[peer.GetStoreId()] = struct{}{}
+	}
+	finalLeaderStoreID := region.GetLeader().GetStoreId()
+	for i := range op.Len() {
+		switch step := op.Step(i).(type) {
+		case operator.TransferLeader:
+			finalLeaderStoreID = step.ToStore
+		case operator.AddPeer:
+			finalPeers[step.ToStore] = struct{}{}
+		case operator.AddLearner:
+			finalPeers[step.ToStore] = struct{}{}
+		case operator.RemovePeer:
+			delete(finalPeers, step.FromStore)
+		}
+	}
+
+	expectedPeerDistribution := cloneDistribution(peerSnapshot)
+	for _, peer := range region.GetPeers() {
+		expectedPeerDistribution[peer.GetStoreId()]--
+	}
+	for storeID := range finalPeers {
+		expectedPeerDistribution[storeID]++
+	}
+
+	expectedLeaderDistribution := cloneDistribution(leaderSnapshot)
+	expectedLeaderDistribution[region.GetLeader().GetStoreId()]--
+	expectedLeaderDistribution[finalLeaderStoreID]++
+	removeZeroCountEntries(expectedPeerDistribution)
+	removeZeroCountEntries(expectedLeaderDistribution)
+
+	peerDistribution, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedPeerDistribution, peerDistribution)
+
+	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedLeaderDistribution, leaderDistribution)
+}
+
+func removeZeroCountEntries(distribution map[uint64]uint64) {
+	for storeID, count := range distribution {
+		if count == 0 {
+			delete(distribution, storeID)
+		}
+	}
+}
+
 // TestSelectedStoresTooManyPeers tests if the peer count has changed due to the picking strategy.
 // Ref https://github.com/tikv/pd/issues/5909
 func TestSelectedStoresTooManyPeers(t *testing.T) {
