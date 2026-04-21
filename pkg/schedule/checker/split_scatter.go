@@ -129,7 +129,7 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	item.group = hint.group
 	item.rangeHint = hint.rangeHint
 	m.mu.pending.Put(region.GetID(), item)
-	priority := splitScatterPriority(region.GetReadCPUUsage())
+	priority := splitScatterPriority(splitScatterReadCPUUsage(region))
 	m.compactQueueLocked()
 	if entry := m.mu.queue.Get(region.GetID()); entry != nil {
 		item := entry.Value.(*splitScatterPriorityItem)
@@ -281,6 +281,16 @@ func splitScatterPriority(score uint64) int {
 		return -maxInt
 	}
 	return -int(score)
+}
+
+func splitScatterReadCPUUsage(region *core.RegionInfo) uint64 {
+	if readCPU := region.GetReadCPUUsage(); readCPU > 0 {
+		return readCPU
+	}
+	// Split-scatter still falls back to the legacy heartbeat cpu_usage field to
+	// keep mixed-version/old-TiKV clusters schedulable without changing the
+	// global RegionReadCPU semantics used by hot-region logic.
+	return region.GetCPUUsage()
 }
 
 func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {

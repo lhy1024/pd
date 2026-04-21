@@ -85,3 +85,18 @@ func TestGetLoads(t *testing.T) {
 	re.Equal(float64(regionA.GetWriteQueryNum()), loads[RegionWriteQueryNum])
 	re.Equal(0.0, loads[RegionReadCPU])
 }
+
+func TestGetLoadsWithoutCPUStatsKeepsReadCPUZero(t *testing.T) {
+	re := require.New(t)
+	peer := &metapb.Peer{Id: 1, StoreId: 1}
+	region := core.RegionFromHeartbeat(&pdpb.RegionHeartbeatRequest{
+		Region:   &metapb.Region{Id: 101, Peers: []*metapb.Peer{peer}},
+		Leader:   peer,
+		CpuUsage: 12,
+	}, 0)
+
+	loads := region.GetLoads()
+	re.Equal(uint64(12), region.GetCPUUsage())
+	re.Equal(uint64(0), region.GetReadCPUUsage())
+	re.Equal(0.0, loads[RegionReadCPU])
+}
