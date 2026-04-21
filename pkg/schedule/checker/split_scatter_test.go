@@ -32,13 +32,13 @@ import (
 	"github.com/tikv/pd/pkg/schedule/scatter"
 )
 
-func TestRecordSplitScatterBatchAndObserveQueueByReadCPU(t *testing.T) {
+func TestRecordSplitScatterBatchAndObserveQueueByCPUScore(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
-	controller.RecordSplitScatterBatch(100, []uint64{101, 102})
-	re.Equal(3, controller.splitScatter.pendingCount())
+	controller.RecordSplitScatterBatch(100, []uint64{101, 102, 103})
+	re.Equal(4, controller.splitScatter.pendingCount())
 
 	sourceGroup, ok := controller.splitScatter.getPendingGroup(100)
 	re.True(ok)
@@ -48,16 +48,19 @@ func TestRecordSplitScatterBatchAndObserveQueueByReadCPU(t *testing.T) {
 		re.Equal(sourceGroup, group)
 	}
 
-	putSplitScatterRegion(tc, 101, "m", "t", 120)
-	putSplitScatterRegionWithLegacyCPU(tc, 102, "t", "", 80, 999)
+	putSplitScatterRegionWithCPUStats(tc, 101, "m", "n", 70, 60, 0)
+	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "n", "o", 120)
+	putSplitScatterRegionWithCPUStats(tc, 103, "o", "", 0, 80, 999)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
+	controller.ObserveSplitScatterRegion(tc.GetRegion(103))
 
-	candidates := controller.splitScatter.getCandidates(2)
-	re.Len(candidates, 2)
+	candidates := controller.splitScatter.getCandidates(3)
+	re.Len(candidates, 3)
 	re.Equal(uint64(101), candidates[0].regionID)
 	re.Equal(uint64(102), candidates[1].regionID)
+	re.Equal(uint64(103), candidates[2].regionID)
 }
 
 func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
@@ -164,14 +167,14 @@ func TestObserveSplitScatterRegionCompactsExpiredQueueEntries(t *testing.T) {
 	re.Nil(controller.splitScatter.mu.queue.Get(101))
 }
 
-func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenReadCPUMissing(t *testing.T) {
+func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101, 102})
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 101, "m", "t", 120)
-	putSplitScatterRegionWithLegacyCPU(tc, 102, "t", "", 80, 999)
+	putSplitScatterRegionWithCPUStats(tc, 102, "t", "", 0, 80, 999)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
@@ -205,14 +208,18 @@ func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Clus
 }
 
 func putSplitScatterRegion(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, cpu uint64) {
-	putSplitScatterRegionWithLegacyCPU(tc, regionID, startKey, endKey, cpu, 0)
+	putSplitScatterRegionWithCPUStats(tc, regionID, startKey, endKey, cpu, 0, 0)
 }
 
 func putSplitScatterRegionWithLegacyCPU(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, readCPU, legacyCPU uint64) {
+	putSplitScatterRegionWithCPUStats(tc, regionID, startKey, endKey, readCPU, 0, legacyCPU)
+}
+
+func putSplitScatterRegionWithCPUStats(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, readCPU, schedulerCPU, legacyCPU uint64) {
 	tc.AddLeaderRegionWithRange(regionID, startKey, endKey, 1, 2, 3)
 	region := tc.GetRegion(regionID).Clone(
 		core.SetCPUUsage(legacyCPU),
-		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: readCPU}),
+		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: readCPU, Scheduler: schedulerCPU}),
 	)
 	tc.PutRegion(region)
 }

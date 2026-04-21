@@ -17,6 +17,7 @@ package checker
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/tikv/pd/pkg/cache"
@@ -129,7 +130,7 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	item.group = hint.group
 	item.rangeHint = hint.rangeHint
 	m.mu.pending.Put(region.GetID(), item)
-	priority := splitScatterPriority(splitScatterReadCPUUsage(region))
+	priority := splitScatterPriority(splitScatterCPUScore(region))
 	m.compactQueueLocked()
 	if entry := m.mu.queue.Get(region.GetID()); entry != nil {
 		item := entry.Value.(*splitScatterPriorityItem)
@@ -283,14 +284,19 @@ func splitScatterPriority(score uint64) int {
 	return -int(score)
 }
 
-func splitScatterReadCPUUsage(region *core.RegionInfo) uint64 {
-	if readCPU := region.GetReadCPUUsage(); readCPU > 0 {
-		return readCPU
+func splitScatterCPUScore(region *core.RegionInfo) uint64 {
+	if !region.HasCPUStats() {
+		// Split-scatter falls back to the legacy heartbeat cpu_usage field only
+		// when cpu_stats is entirely unavailable, so cpu_stats-reported zeroes
+		// still mean zero instead of implicitly reviving the deprecated metric.
+		return region.GetCPUUsage()
 	}
-	// Split-scatter still falls back to the legacy heartbeat cpu_usage field to
-	// keep mixed-version/old-TiKV clusters schedulable without changing the
-	// global RegionReadCPU semantics used by hot-region logic.
-	return region.GetCPUUsage()
+	readCPU := region.GetReadCPUUsage()
+	schedulerCPU := region.GetSchedulerCPUUsage()
+	if schedulerCPU > math.MaxUint64-readCPU {
+		return math.MaxUint64
+	}
+	return readCPU + schedulerCPU
 }
 
 func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
