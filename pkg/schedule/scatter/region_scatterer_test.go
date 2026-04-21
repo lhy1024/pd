@@ -27,6 +27,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
@@ -1004,6 +1005,60 @@ func TestUnseededDistributionSkipsUpdateWhenAddOperatorRejected(t *testing.T) {
 	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
 	re.True(ok)
 	re.Equal(leaderSnapshot, leaderAfter)
+}
+
+func TestCreateScatterRegionOperatorFailureAccountsCurrentPlacement(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	region := tc.GetRegion(1)
+	region = region.Clone(core.WithRole(region.GetPeers()[1].GetId(), metapb.PeerRole_IncomingVoter))
+	tc.PutRegion(region)
+	region = tc.GetRegion(1)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "create-fail"
+	for _, storeID := range []uint64{1, 2, 3} {
+		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{storeID})
+	}
+	scatterer.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{1})
+
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
+
+	op, err := scatterer.Scatter(region, group, true)
+	re.Nil(op)
+	re.Error(err)
+	re.Contains(err.Error(), "failed to create scatter region operator")
+
+	expectedPeerDistribution := cloneDistribution(peerSnapshot)
+	for _, peer := range region.GetPeers() {
+		expectedPeerDistribution[peer.GetStoreId()]++
+	}
+	expectedLeaderDistribution := cloneDistribution(leaderSnapshot)
+	expectedLeaderDistribution[region.GetLeader().GetStoreId()]++
+
+	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedPeerDistribution, peerAfter)
+
+	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedLeaderDistribution, leaderAfter)
 }
 
 func TestScatterWithoutSeedKeepsLegacyGroupAccounting(t *testing.T) {

@@ -343,6 +343,10 @@ func (c *Controller) dispatchSplitScatterRegions() {
 				c.splitScatter.recordFailure(candidate.regionID)
 				continue
 			}
+			if c.opController.GetOperator(region.GetID()) != op {
+				c.splitScatter.recordFailure(candidate.regionID)
+				continue
+			}
 			c.splitScatterer.Commit(region, op, candidate.group)
 		}
 		c.splitScatter.remove(candidate.regionID)

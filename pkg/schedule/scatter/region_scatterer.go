@@ -539,6 +539,11 @@ func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, s
 	op, err := operator.CreateScatterRegionOperator(scatterOperatorDesc, r.cluster, region, targetPeers, targetLeader, skipStoreLimit)
 	if err != nil {
 		scatterFailCounter.Inc()
+		currentPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
+		for _, peer := range region.GetPeers() {
+			currentPeers[peer.GetStoreId()] = peer
+		}
+		r.Update(region, currentPeers, region.GetLeader().GetStoreId(), group)
 		log.Debug("fail to create scatter region operator", errs.ZapError(err))
 		return nil, errs.ErrCreateOperator.FastGenByArgs(fmt.Sprintf("failed to create scatter region operator for region %v", region.GetID()))
 	}
