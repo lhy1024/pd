@@ -96,6 +96,9 @@ func NewCoordinator(parentCtx context.Context, cluster sche.ClusterInformer, hbS
 		},
 	)
 
+	regionScatterer := scatter.NewRegionScatterer(ctx, cluster, opController, checkers.AddPendingProcessedRegions)
+	checkers.SetSplitScatterer(regionScatterer)
+
 	return &Coordinator{
 		ctx:                   ctx,
 		cancel:                cancel,
@@ -103,7 +106,7 @@ func NewCoordinator(parentCtx context.Context, cluster sche.ClusterInformer, hbS
 		cluster:               cluster,
 		prepareChecker:        newPrepareChecker(cluster.GetPrepareRegionCount),
 		checkers:              checkers,
-		regionScatterer:       scatter.NewRegionScatterer(ctx, cluster, opController, checkers.AddPendingProcessedRegions),
+		regionScatterer:       regionScatterer,
 		regionSplitter:        splitter.NewRegionSplitter(cluster, splitter.NewSplitRegionsHandler(cluster, opController), checkers.AddPendingProcessedRegions),
 		schedulers:            schedulers,
 		opController:          opController,

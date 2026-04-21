@@ -35,6 +35,7 @@ import (
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/operator"
+	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/logutil"
 )
@@ -76,6 +77,8 @@ type Controller struct {
 	affinityChecker         *AffinityChecker
 	jointStateChecker       *JointStateChecker
 	priorityInspector       *PriorityInspector
+	splitScatter            *splitScatterManager
+	splitScatterer          *scatter.RegionScatterer
 	pendingProcessedRegions *cache.TTLUint64
 	suspectKeyRanges        *cache.TTLString // suspect key-range regions that may need fix
 	patrolRegionContext     *PatrolRegionContext
@@ -120,8 +123,14 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		patrolRegionScanLimit:   calculateScanLimit(cluster),
 		metrics:                 newCheckerControllerMetrics(),
 	}
+	c.splitScatter = newSplitScatterManager(ctx)
 	c.duration.Store(time.Duration(0))
 	return c
+}
+
+// SetSplitScatterer wires the shared region scatterer used by split-scatter dispatch.
+func (c *Controller) SetSplitScatterer(splitScatterer *scatter.RegionScatterer) {
+	c.splitScatterer = splitScatterer
 }
 
 // PatrolRegions is used to scan regions.
@@ -167,6 +176,7 @@ func (c *Controller) PatrolRegions() {
 			})
 
 			measure(c.metrics.patrolPhaseHistograms[phaseCheckPending], func() {
+				c.checkSplitScatterRegions()
 				c.checkPendingProcessedRegions()
 			})
 

@@ -224,6 +224,26 @@ func (sc *schedulingController) GetLabelStats() *statistics.LabelStatistics {
 	return sc.labelStats
 }
 
+func (sc *schedulingController) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
+	sc.mu.RLock()
+	coordinator := sc.coordinator
+	sc.mu.RUnlock()
+	if coordinator == nil {
+		return
+	}
+	coordinator.GetCheckerController().RecordSplitScatterBatch(sourceRegionID, newRegionIDs)
+}
+
+func (sc *schedulingController) ObserveSplitScatterRegion(region *core.RegionInfo) {
+	sc.mu.RLock()
+	coordinator := sc.coordinator
+	sc.mu.RUnlock()
+	if coordinator == nil {
+		return
+	}
+	coordinator.GetCheckerController().ObserveSplitScatterRegion(region)
+}
+
 // GetRegionStatsByType gets the status of the region by types.
 func (sc *schedulingController) GetRegionStatsByType(typ statistics.RegionStatisticType) []*core.RegionInfo {
 	if sc.regionStats == nil {

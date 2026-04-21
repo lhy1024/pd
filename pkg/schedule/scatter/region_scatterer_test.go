@@ -709,6 +709,54 @@ func TestSelectedStoresTooFewPeers(t *testing.T) {
 	}
 }
 
+func TestSeedGroupDistributionByRange(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(2, "j", "t", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(3, "t", "z", 1, 2, 3)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+
+	op, err := scatterer.Scatter(tc.GetRegion(3), "unseeded", true)
+	re.NoError(err)
+	re.Nil(op)
+
+	group := "seeded"
+	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+
+	peerDistribution, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(uint64(3), peerDistribution[1])
+	re.Equal(uint64(3), peerDistribution[2])
+	re.Equal(uint64(3), peerDistribution[3])
+	re.Equal(uint64(0), peerDistribution[4])
+
+	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(uint64(3), leaderDistribution[1])
+	re.Equal(uint64(0), leaderDistribution[2])
+	re.Equal(uint64(0), leaderDistribution[3])
+	re.Equal(uint64(0), leaderDistribution[4])
+
+	op, err = scatterer.Scatter(tc.GetRegion(3), group, true)
+	re.NoError(err)
+	re.NotNil(op)
+	val, exist := op.GetAdditionalInfo("group")
+	re.True(exist)
+	re.Equal(group, val)
+}
+
 // TestSelectedStoresTooManyPeers tests if the peer count has changed due to the picking strategy.
 // Ref https://github.com/tikv/pd/issues/5909
 func TestSelectedStoresTooManyPeers(t *testing.T) {

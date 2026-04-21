@@ -81,6 +81,14 @@ func newSelectedStores(ctx context.Context) *selectedStores {
 	}
 }
 
+func cloneDistribution(distribution map[uint64]uint64) map[uint64]uint64 {
+	cloned := make(map[uint64]uint64, len(distribution))
+	for id, count := range distribution {
+		cloned[id] = count
+	}
+	return cloned
+}
+
 // Put plus count by storeID and group
 func (s *selectedStores) Put(id uint64, group string) {
 	s.mu.Lock()
@@ -114,6 +122,18 @@ func (s *selectedStores) GetGroupDistribution(group string) (map[uint64]uint64, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.getDistributionByGroupLocked(group)
+}
+
+// InitGroupDistribution seeds the distribution for a group if the group has not
+// been tracked yet.
+func (s *selectedStores) InitGroupDistribution(group string, distribution map[uint64]uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.getDistributionByGroupLocked(group); ok {
+		return false
+	}
+	s.groupDistribution.Put(group, cloneDistribution(distribution))
+	return true
 }
 
 // getDistributionByGroupLocked should be called with lock
@@ -168,6 +188,55 @@ func newEngineContext(ctx context.Context, filterFuncs ...filterFunc) engineCont
 		filterFuncs:    filterFuncs,
 		selectedPeer:   newSelectedStores(ctx),
 		selectedLeader: newSelectedStores(ctx),
+	}
+}
+
+func (r *RegionScatterer) getOrCreateSpecialEngineContext(engine string) engineContext {
+	if ctx, ok := r.specialEngines.Load(engine); ok {
+		return ctx.(engineContext)
+	}
+	ctx := newEngineContext(r.ctx, func() filter.Filter {
+		return filter.NewEngineFilter(r.name, placement.LabelConstraint{Key: core.EngineKey, Op: placement.In, Values: []string{engine}})
+	})
+	r.specialEngines.Store(engine, ctx)
+	return ctx
+}
+
+// SeedGroupDistributionByRange seeds the scatter group with the current peer and
+// leader distribution of the specified key range. Existing group history is kept.
+func (r *RegionScatterer) SeedGroupDistributionByRange(group string, startKey, endKey []byte) {
+	if group == "" || len(startKey) == 0 {
+		return
+	}
+
+	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
+	ordinaryPeer := make(map[uint64]uint64)
+	ordinaryLeader := make(map[uint64]uint64)
+	specialPeer := make(map[string]map[uint64]uint64)
+	for _, store := range r.cluster.GetStores() {
+		if store == nil {
+			continue
+		}
+		storeID := store.GetID()
+		peerCount := uint64(r.cluster.GetStorePeerCountByRange(storeID, startKey, endKey))
+		if engineFilter.Target(r.cluster.GetSharedConfig(), store).IsOK() {
+			ordinaryPeer[storeID] = peerCount
+			ordinaryLeader[storeID] = uint64(r.cluster.GetStoreLeaderCountByRange(storeID, startKey, endKey))
+			continue
+		}
+
+		engine := store.GetLabelValue(core.EngineKey)
+		if _, ok := specialPeer[engine]; !ok {
+			specialPeer[engine] = make(map[uint64]uint64)
+		}
+		specialPeer[engine][storeID] = peerCount
+	}
+
+	r.ordinaryEngine.selectedPeer.InitGroupDistribution(group, ordinaryPeer)
+	r.ordinaryEngine.selectedLeader.InitGroupDistribution(group, ordinaryLeader)
+	for engine, distribution := range specialPeer {
+		ctx := r.getOrCreateSpecialEngineContext(engine)
+		ctx.selectedPeer.InitGroupDistribution(group, distribution)
 	}
 }
 
@@ -418,14 +487,7 @@ func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, s
 	}
 
 	for engine, peers := range specialPeers {
-		ctx, ok := r.specialEngines.Load(engine)
-		if !ok {
-			ctx = newEngineContext(r.ctx, func() filter.Filter {
-				return filter.NewEngineFilter(r.name, placement.LabelConstraint{Key: core.EngineKey, Op: placement.In, Values: []string{engine}})
-			})
-			r.specialEngines.Store(engine, ctx)
-		}
-		scatterWithSameEngine(peers, ctx.(engineContext))
+		scatterWithSameEngine(peers, r.getOrCreateSpecialEngineContext(engine))
 	}
 
 	if isSameDistribution(region, targetPeers, targetLeader) {
