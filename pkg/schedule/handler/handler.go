@@ -680,9 +680,9 @@ func (h *Handler) AddScatterRegionOperator(regionID uint64, group string) error 
 		return nil
 	}
 	if err := h.addOperator(op); err != nil {
-		s.Rollback(region, op, group)
 		return err
 	}
+	s.Commit(region, op, group)
 	return nil
 }
 

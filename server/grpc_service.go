@@ -2023,12 +2023,12 @@ func (s *GrpcServer) ScatterRegion(ctx context.Context, request *pdpb.ScatterReg
 
 	if op != nil {
 		if !rc.GetOperatorController().AddOperator(op) {
-			rc.GetRegionScatterer().Rollback(region, op, request.GetGroup())
 			return &pdpb.ScatterRegionResponse{
 				Header: grpcutil.WrapErrorToHeader(pdpb.ErrorType_UNKNOWN,
 					"operator canceled because cannot add an operator to the execute queue"),
 			}, nil
 		}
+		rc.GetRegionScatterer().Commit(region, op, request.GetGroup())
 	}
 
 	return &pdpb.ScatterRegionResponse{

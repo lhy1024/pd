@@ -27,8 +27,6 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/kvproto/pkg/metapb"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
@@ -581,7 +579,7 @@ func TestSelectedStoreGC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	stores := newSelectedStores(ctx)
-	stores.Put(1, "testgroup")
+	stores.Update("testgroup", nil, []uint64{1})
 	_, ok := stores.GetGroupDistribution("testgroup")
 	re.True(ok)
 	_, ok = stores.GetGroupDistribution("testgroup")
@@ -704,11 +702,10 @@ func TestSelectedStoresTooFewPeers(t *testing.T) {
 	// Put a lot of regions in Store 1/2/3.
 	for i := uint64(1); i < 100; i++ {
 		region := tc.AddLeaderRegion(i+10, i%3+1, (i+1)%3+1, (i+2)%3+1)
-		peers := make(map[uint64]*metapb.Peer, 3)
 		for _, peer := range region.GetPeers() {
-			peers[peer.GetStoreId()] = peer
+			scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{peer.GetStoreId()})
 		}
-		scatterer.Put(peers, i%3+1, group)
+		scatterer.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{i%3 + 1})
 	}
 
 	// Try to scatter a region with peer store id 2/3/4
@@ -861,9 +858,20 @@ func TestSeedGroupDistributionByRangeAppliesNetChange(t *testing.T) {
 
 	peerDistribution, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
 	re.True(ok)
-	re.Equal(expectedPeerDistribution, peerDistribution)
+	re.Equal(peerSnapshot, peerDistribution)
 
 	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(leaderSnapshot, leaderDistribution)
+
+	re.True(oc.AddOperator(op))
+	scatterer.Commit(region, op, group)
+
+	peerDistribution, ok = scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedPeerDistribution, peerDistribution)
+
+	leaderDistribution, ok = scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
 	re.True(ok)
 	re.Equal(expectedLeaderDistribution, leaderDistribution)
 }
@@ -900,7 +908,7 @@ func TestSeedGroupDistributionByRangeSkipsRepeatedRangeCount(t *testing.T) {
 	re.Equal(firstLeaderCalls, tc.leaderCountCalls)
 }
 
-func TestRollbackRestoresSeededDistributionWhenAddOperatorRejected(t *testing.T) {
+func TestSeededDistributionSkipsUpdateWhenAddOperatorRejected(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -938,8 +946,6 @@ func TestRollbackRestoresSeededDistributionWhenAddOperatorRejected(t *testing.T)
 	re.NotNil(op)
 	re.False(oc.AddOperator(op))
 
-	scatterer.Rollback(region, op, group)
-
 	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
 	re.True(ok)
 	for i := uint64(1); i <= 4; i++ {
@@ -953,7 +959,7 @@ func TestRollbackRestoresSeededDistributionWhenAddOperatorRejected(t *testing.T)
 	}
 }
 
-func TestRollbackClearsUnseededDistributionWhenAddOperatorRejected(t *testing.T) {
+func TestUnseededDistributionSkipsUpdateWhenAddOperatorRejected(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -971,9 +977,9 @@ func TestRollbackClearsUnseededDistributionWhenAddOperatorRejected(t *testing.T)
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	group := "unseeded-rollback"
 	for _, storeID := range []uint64{1, 2, 3} {
-		scatterer.ordinaryEngine.selectedPeer.Put(storeID, group)
+		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{storeID})
 	}
-	scatterer.ordinaryEngine.selectedLeader.Put(1, group)
+	scatterer.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{1})
 	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
 	re.True(ok)
 	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
@@ -990,8 +996,6 @@ func TestRollbackClearsUnseededDistributionWhenAddOperatorRejected(t *testing.T)
 	re.NoError(err)
 	re.NotNil(op)
 	re.False(oc.AddOperator(op))
-
-	scatterer.Rollback(region, op, group)
 
 	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
 	re.True(ok)
@@ -1019,22 +1023,49 @@ func TestScatterWithoutSeedKeepsLegacyGroupAccounting(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	group := "legacy-unseeded"
 	region := tc.GetRegion(1)
+	for _, storeID := range []uint64{1, 2, 3} {
+		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{storeID})
+	}
+	scatterer.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{1})
+
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
 
 	op, err := scatterer.Scatter(region, group, true)
 	re.NoError(err)
+	re.NotNil(op)
 
 	finalPeers, finalLeaderStoreID := finalPlacementAfterScatter(region, op)
 	expectedPeerDistribution := make(map[uint64]uint64, len(finalPeers))
+	for storeID, count := range peerSnapshot {
+		expectedPeerDistribution[storeID] = count
+	}
 	for storeID := range finalPeers {
 		expectedPeerDistribution[storeID]++
 	}
-	expectedLeaderDistribution := map[uint64]uint64{finalLeaderStoreID: 1}
+	expectedLeaderDistribution := cloneDistribution(leaderSnapshot)
+	expectedLeaderDistribution[finalLeaderStoreID]++
 
 	peerDistribution, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
 	re.True(ok)
-	re.Equal(expectedPeerDistribution, peerDistribution)
+	re.Equal(peerSnapshot, peerDistribution)
 
 	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(leaderSnapshot, leaderDistribution)
+
+	re.True(oc.AddOperator(op))
+	scatterer.Commit(region, op, group)
+
+	peerDistribution, ok = scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedPeerDistribution, peerDistribution)
+
+	leaderDistribution, ok = scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
 	re.True(ok)
 	re.Equal(expectedLeaderDistribution, leaderDistribution)
 }
@@ -1091,14 +1122,14 @@ func TestSelectedStoresTooManyPeers(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	// priority 4 > 1 > 5 > 2 == 3
 	for range 1200 {
-		scatterer.ordinaryEngine.selectedPeer.Put(2, group)
-		scatterer.ordinaryEngine.selectedPeer.Put(3, group)
+		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{2})
+		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{3})
 	}
 	for range 800 {
-		scatterer.ordinaryEngine.selectedPeer.Put(5, group)
+		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{5})
 	}
 	for range 400 {
-		scatterer.ordinaryEngine.selectedPeer.Put(1, group)
+		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{1})
 	}
 	// test region with peer 1 2 3
 	for i := uint64(1); i < 20; i++ {

@@ -198,30 +198,12 @@ func (m *splitScatterManager) recordFailure(regionID uint64) {
 	m.mu.queue.Put(entry.Priority, item)
 }
 
-func (m *splitScatterManager) markSucceeded(regionID uint64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.mu.pending.Remove(regionID)
-	m.mu.queue.Remove(regionID)
-	m.clearPotentialPendingIfEmptyLocked()
-}
-
 func (m *splitScatterManager) remove(regionID uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mu.pending.Remove(regionID)
 	m.mu.queue.Remove(regionID)
 	m.clearPotentialPendingIfEmptyLocked()
-}
-
-func (m *splitScatterManager) getPendingGroup(regionID uint64) (string, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	item, ok := m.getPendingItemLocked(regionID)
-	if !ok {
-		return "", false
-	}
-	return item.group, true
 }
 
 func (m *splitScatterManager) getPendingItemLocked(regionID uint64) (*splitScatterPendingItem, bool) {
@@ -234,12 +216,6 @@ func (m *splitScatterManager) getPendingItemLocked(regionID uint64) (*splitScatt
 		return nil, false
 	}
 	return item, true
-}
-
-func (m *splitScatterManager) pendingCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.pendingCountLocked()
 }
 
 func (m *splitScatterManager) pendingCountLocked() int {
@@ -362,11 +338,13 @@ func (c *Controller) dispatchSplitScatterRegions() {
 			c.splitScatter.recordFailure(candidate.regionID)
 			continue
 		}
-		if op != nil && c.opController.AddWaitingOperator(op) == 0 {
-			c.splitScatterer.Rollback(region, op, candidate.group)
-			c.splitScatter.recordFailure(candidate.regionID)
-			continue
+		if op != nil {
+			if c.opController.AddWaitingOperator(op) == 0 {
+				c.splitScatter.recordFailure(candidate.regionID)
+				continue
+			}
+			c.splitScatterer.Commit(region, op, candidate.group)
 		}
-		c.splitScatter.markSucceeded(candidate.regionID)
+		c.splitScatter.remove(candidate.regionID)
 	}
 }

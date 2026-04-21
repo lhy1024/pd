@@ -23,9 +23,8 @@ import (
 )
 
 var (
-	splitScatterTablePrefix  = []byte{'t'}
-	splitScatterRecordPrefix = []byte("_r")
-	splitScatterIndexPrefix  = []byte("_i")
+	splitScatterTablePrefix = []byte{'t'}
+	splitScatterIndexPrefix = []byte("_i")
 )
 
 type splitScatterEntityKind uint8

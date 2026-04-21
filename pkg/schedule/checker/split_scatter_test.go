@@ -39,14 +39,11 @@ func TestRecordSplitScatterBatchAndObserveQueueByCPUScore(t *testing.T) {
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101, 102, 103})
-	re.Equal(4, controller.splitScatter.pendingCount())
+	re.Equal(4, splitScatterPendingCount(controller))
 
-	sourceGroup, ok := controller.splitScatter.getPendingGroup(100)
-	re.True(ok)
+	sourceGroup := splitScatterPendingGroup(t, controller, 100)
 	for _, regionID := range []uint64{101, 102} {
-		group, ok := controller.splitScatter.getPendingGroup(regionID)
-		re.True(ok)
-		re.Equal(sourceGroup, group)
+		re.Equal(sourceGroup, splitScatterPendingGroup(t, controller, regionID))
 	}
 
 	putSplitScatterRegionWithCPUStats(tc, 101, "m", "n", 70, 60, 0)
@@ -76,8 +73,7 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 
-	group, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
+	group := splitScatterPendingGroup(t, controller, 101)
 
 	controller.dispatchSplitScatterRegions()
 
@@ -90,7 +86,7 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal(group, opGroup)
-	re.Equal(1, controller.splitScatter.pendingCount())
+	re.Equal(1, splitScatterPendingCount(controller))
 }
 
 func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
@@ -103,8 +99,7 @@ func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
-	group, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
+	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-index-42-7", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
@@ -124,8 +119,7 @@ func TestObserveSplitScatterRegionUsesTableGroupAndRangeHintForRecordKey(t *test
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
-	group, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
+	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-table-42", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
@@ -145,8 +139,7 @@ func TestObserveSplitScatterRegionUsesTableGroupForBareTableBoundary(t *testing.
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
-	group, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
+	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-table-42", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
@@ -166,8 +159,7 @@ func TestObserveSplitScatterRegionUsesTableGroupForCrossEntityRegion(t *testing.
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
-	group, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
+	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-table-42", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
@@ -187,8 +179,7 @@ func TestObserveSplitScatterRegionUsesStartTableGroupForCrossTableRegion(t *test
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
-	group, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
+	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-table-42", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
@@ -397,6 +388,21 @@ func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, regionID uint64, sta
 		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: cpu}),
 	)
 	tc.PutRegion(region)
+}
+
+func splitScatterPendingCount(controller *Controller) int {
+	controller.splitScatter.mu.RLock()
+	defer controller.splitScatter.mu.RUnlock()
+	return controller.splitScatter.pendingCountLocked()
+}
+
+func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uint64) string {
+	t.Helper()
+	controller.splitScatter.mu.RLock()
+	defer controller.splitScatter.mu.RUnlock()
+	item, ok := controller.splitScatter.getPendingItemLocked(regionID)
+	require.True(t, ok)
+	return item.group
 }
 
 func splitScatterIndexKeyPrefix(tableID, indexID int64) []byte {
