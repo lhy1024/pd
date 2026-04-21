@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pingcap/kvproto/pkg/pdpb"
+
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mock/mockcluster"
@@ -46,7 +48,7 @@ func TestRecordSplitScatterBatchAndObserveQueueByReadCPU(t *testing.T) {
 	}
 
 	putSplitScatterRegion(tc, 101, "m", "t", 120)
-	putSplitScatterRegion(tc, 102, "t", "", 80)
+	putSplitScatterRegionWithLegacyCPU(tc, 102, "t", "", 80, 999)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
@@ -107,6 +109,28 @@ func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
 	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
 
+func TestObserveSplitScatterRegionGrowsQueueForLargeBatch(t *testing.T) {
+	re := require.New(t)
+	controller, tc, _, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	const splitCount = splitScatterQueueCapacity + 32
+	regionIDs := make([]uint64, 0, splitCount)
+	for regionID := uint64(1000); regionID < uint64(1000+splitCount); regionID++ {
+		regionIDs = append(regionIDs, regionID)
+	}
+	controller.RecordSplitScatterBatch(100, regionIDs)
+
+	for i, regionID := range regionIDs {
+		putSplitScatterRegionWithLegacyCPU(tc, regionID, "a", "b", uint64(splitCount-i), 0)
+		controller.ObserveSplitScatterRegion(tc.GetRegion(regionID))
+	}
+
+	re.Equal(splitCount, controller.splitScatter.mu.queue.Len())
+	re.GreaterOrEqual(controller.splitScatter.queueCapacity, splitCount+1)
+	re.Len(controller.splitScatter.getCandidates(splitCount), splitCount)
+}
+
 func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Cluster, *operator.Controller, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -130,8 +154,15 @@ func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Clus
 }
 
 func putSplitScatterRegion(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, cpu uint64) {
+	putSplitScatterRegionWithLegacyCPU(tc, regionID, startKey, endKey, cpu, 0)
+}
+
+func putSplitScatterRegionWithLegacyCPU(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, readCPU, legacyCPU uint64) {
 	tc.AddLeaderRegionWithRange(regionID, startKey, endKey, 1, 2, 3)
-	region := tc.GetRegion(regionID).Clone(core.SetCPUUsage(cpu))
+	region := tc.GetRegion(regionID).Clone(
+		core.SetCPUUsage(legacyCPU),
+		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: readCPU}),
+	)
 	tc.PutRegion(region)
 }
 
@@ -139,7 +170,7 @@ func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, regionID uint64, sta
 	region := tc.AddLeaderRegion(regionID, 1, 2, 3).Clone(
 		core.WithStartKey(startKey),
 		core.WithEndKey(endKey),
-		core.SetCPUUsage(cpu),
+		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: cpu}),
 	)
 	tc.PutRegion(region)
 }

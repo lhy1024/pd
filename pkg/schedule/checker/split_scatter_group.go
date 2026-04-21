@@ -75,6 +75,8 @@ func resolveSplitScatterGroup(region *core.RegionInfo, fallbackGroup string) spl
 func parseSplitScatterEntity(key []byte) (splitScatterEntity, bool) {
 	_, decoded, err := codec.DecodeBytes(key)
 	if err != nil || !bytes.HasPrefix(decoded, splitScatterTablePrefix) {
+		// Keyspace-prefixed txn/raw keys (x... / r...) are not classified here yet
+		// and will fall back to the family-scoped split-scatter group.
 		return splitScatterEntity{}, false
 	}
 	rest := decoded[len(splitScatterTablePrefix):]

@@ -84,7 +84,8 @@ func (r splitScatterRangeHint) clone() splitScatterRangeHint {
 }
 
 type splitScatterManager struct {
-	mu struct {
+	queueCapacity int
+	mu            struct {
 		syncutil.RWMutex
 		pending *cache.TTLUint64
 		queue   *cache.PriorityQueue
@@ -92,9 +93,11 @@ type splitScatterManager struct {
 }
 
 func newSplitScatterManager(ctx context.Context) *splitScatterManager {
-	m := &splitScatterManager{}
+	m := &splitScatterManager{
+		queueCapacity: splitScatterQueueCapacity,
+	}
 	m.mu.pending = cache.NewIDTTL(ctx, splitScatterQueueGCInterval, splitScatterPendingTTL)
-	m.mu.queue = cache.NewPriorityQueue(splitScatterQueueCapacity)
+	m.mu.queue = cache.NewPriorityQueue(m.queueCapacity)
 	return m
 }
 
@@ -110,6 +113,7 @@ func (m *splitScatterManager) recordBatch(sourceRegionID uint64, newRegionIDs []
 		m.mu.pending.Put(regionID, &splitScatterPendingItem{group: group})
 	}
 	m.mu.pending.Put(sourceRegionID, &splitScatterPendingItem{group: group})
+	m.growQueueLocked(m.pendingCountLocked())
 }
 
 func (m *splitScatterManager) observe(region *core.RegionInfo) {
@@ -124,7 +128,7 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	item.group = hint.group
 	item.rangeHint = hint.rangeHint
 	m.mu.pending.Put(region.GetID(), item)
-	priority := splitScatterPriority(region.GetCPUUsage())
+	priority := splitScatterPriority(region.GetReadCPUUsage())
 	if entry := m.mu.queue.Get(region.GetID()); entry != nil {
 		item := entry.Value.(*splitScatterPriorityItem)
 		item.group = hint.group
@@ -133,6 +137,13 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 		m.mu.queue.Put(priority, item)
 		return
 	}
+	if ok := m.mu.queue.Put(priority, &splitScatterPriorityItem{
+		regionID: region.GetID(),
+		group:    hint.group,
+	}); ok {
+		return
+	}
+	m.growQueueLocked(m.pendingCountLocked())
 	m.mu.queue.Put(priority, &splitScatterPriorityItem{
 		regionID: region.GetID(),
 		group:    hint.group,
@@ -227,7 +238,27 @@ func (m *splitScatterManager) getPendingItemLocked(regionID uint64) (*splitScatt
 func (m *splitScatterManager) pendingCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.pendingCountLocked()
+}
+
+func (m *splitScatterManager) pendingCountLocked() int {
 	return len(m.mu.pending.GetAllID())
+}
+
+func (m *splitScatterManager) growQueueLocked(minCapacity int) {
+	if minCapacity <= m.queueCapacity {
+		return
+	}
+	newCapacity := m.queueCapacity
+	for newCapacity < minCapacity {
+		newCapacity *= 2
+	}
+	rebuilt := cache.NewPriorityQueue(newCapacity)
+	for _, entry := range m.mu.queue.Elems() {
+		rebuilt.Put(entry.Priority, entry.Value)
+	}
+	m.mu.queue = rebuilt
+	m.queueCapacity = newCapacity
 }
 
 func splitScatterPriority(score uint64) int {

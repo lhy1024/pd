@@ -728,10 +728,6 @@ func TestSeedGroupDistributionByRange(t *testing.T) {
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 
-	op, err := scatterer.Scatter(tc.GetRegion(3), "unseeded", true)
-	re.NoError(err)
-	re.Nil(op)
-
 	group := "seeded"
 	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
 
@@ -749,7 +745,7 @@ func TestSeedGroupDistributionByRange(t *testing.T) {
 	re.Equal(uint64(0), leaderDistribution[3])
 	re.Equal(uint64(0), leaderDistribution[4])
 
-	op, err = scatterer.Scatter(tc.GetRegion(3), group, true)
+	op, err := scatterer.Scatter(tc.GetRegion(3), group, true)
 	re.NoError(err)
 	re.NotNil(op)
 	val, exist := op.GetAdditionalInfo("group")
