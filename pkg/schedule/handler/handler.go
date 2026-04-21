@@ -679,7 +679,11 @@ func (h *Handler) AddScatterRegionOperator(regionID uint64, group string) error 
 	if op == nil {
 		return nil
 	}
-	return h.addOperator(op)
+	if err := h.addOperator(op); err != nil {
+		s.Rollback(region, op, group)
+		return err
+	}
+	return nil
 }
 
 // AddScatterRegionsOperators add operators to scatter regions and return the processed percentage and error

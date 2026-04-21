@@ -17,6 +17,7 @@ package checker
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -283,6 +284,33 @@ func TestObserveSplitScatterRegionDefersExpiredQueueCompactionUntilCandidateSele
 	re.Nil(controller.splitScatter.mu.queue.Get(101))
 }
 
+func TestObserveSplitScatterRegionPreservesRetryBackoffAcrossHeartbeats(t *testing.T) {
+	re := require.New(t)
+	controller, tc, _, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	controller.RecordSplitScatterBatch(100, []uint64{101})
+	putSplitScatterRegion(tc, 101, "a", "b", 90)
+
+	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
+	controller.splitScatter.recordFailure(101)
+	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
+
+	re.Empty(controller.splitScatter.getCandidates(1))
+
+	controller.splitScatter.mu.Lock()
+	entry := controller.splitScatter.mu.queue.Get(101)
+	re.NotNil(entry)
+	item := entry.Value.(*splitScatterPriorityItem)
+	item.last = time.Now().Add(-2 * splitScatterRetryBaseInterval)
+	controller.splitScatter.mu.queue.Put(entry.Priority, item)
+	controller.splitScatter.mu.Unlock()
+
+	candidates := controller.splitScatter.getCandidates(1)
+	re.Len(candidates, 1)
+	re.Equal(uint64(101), candidates[0].regionID)
+}
+
 func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
@@ -299,6 +327,22 @@ func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *tes
 	re.Len(candidates, 2)
 	re.Equal(uint64(101), candidates[0].regionID)
 	re.Equal(uint64(102), candidates[1].regionID)
+}
+
+func TestHasPotentialPendingSplitScatterRegions(t *testing.T) {
+	re := require.New(t)
+	controller, _, _, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	re.False(controller.HasPotentialPendingSplitScatterRegions())
+
+	controller.RecordSplitScatterBatch(100, []uint64{101})
+	re.True(controller.HasPotentialPendingSplitScatterRegions())
+
+	controller.splitScatter.remove(100)
+	re.True(controller.HasPotentialPendingSplitScatterRegions())
+	controller.splitScatter.remove(101)
+	re.False(controller.HasPotentialPendingSplitScatterRegions())
 }
 
 func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Cluster, *operator.Controller, func()) {

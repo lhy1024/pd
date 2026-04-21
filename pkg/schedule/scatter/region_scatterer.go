@@ -91,6 +91,18 @@ func cloneDistribution(distribution map[uint64]uint64) map[uint64]uint64 {
 	return cloned
 }
 
+func decrementDistribution(distribution map[uint64]uint64, id uint64) {
+	count, ok := distribution[id]
+	if !ok {
+		return
+	}
+	if count <= 1 {
+		delete(distribution, id)
+		return
+	}
+	distribution[id] = count - 1
+}
+
 // Put plus count by storeID and group
 func (s *selectedStores) Put(id uint64, group string) {
 	s.mu.Lock()
@@ -151,20 +163,36 @@ func (s *selectedStores) Update(group string, oldIDs, newIDs []uint64) {
 	}
 	if s.isSeededGroupLocked(group) {
 		for _, id := range oldIDs {
-			count, ok := distribution[id]
-			if !ok {
-				continue
-			}
-			if count <= 1 {
-				delete(distribution, id)
-				continue
-			}
-			distribution[id] = count - 1
+			decrementDistribution(distribution, id)
 		}
 		s.seededGroups.Put(group, true)
 	}
 	for _, id := range newIDs {
 		distribution[id]++
+	}
+	s.groupDistribution.Put(group, distribution)
+}
+
+// Revert undoes a previous Update(oldIDs, newIDs) call.
+func (s *selectedStores) Revert(group string, oldIDs, newIDs []uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	distribution, ok := s.getDistributionByGroupLocked(group)
+	if !ok {
+		return
+	}
+	if s.isSeededGroupLocked(group) {
+		for _, id := range newIDs {
+			decrementDistribution(distribution, id)
+		}
+		for _, id := range oldIDs {
+			distribution[id]++
+		}
+		s.seededGroups.Put(group, true)
+	} else {
+		for _, id := range newIDs {
+			decrementDistribution(distribution, id)
+		}
 	}
 	s.groupDistribution.Put(group, distribution)
 }
@@ -380,6 +408,7 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 			opsCount++
 			if op != nil {
 				if ok := r.opController.AddOperator(op); !ok {
+					r.Rollback(region, op, group)
 					// If there existed any operator failed to be added into Operator Controller, add its regions into unProcessedRegions
 					failures[op.RegionID()] = fmt.Errorf("region %v failed to add operator", op.RegionID())
 					continue
@@ -703,8 +732,7 @@ func (r *RegionScatterer) Put(peers map[uint64]*metapb.Peer, leaderStoreID uint6
 		core.EngineTiKV).Inc()
 }
 
-// Update records the group distribution after scattering a region to the target placement.
-func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
+func (r *RegionScatterer) classifyPlacementStores(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer) ([]uint64, []uint64, map[string][]uint64, map[string][]uint64) {
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
 	ordinaryOldStores := make([]uint64, 0, len(region.GetPeers()))
 	ordinaryNewStores := make([]uint64, 0, len(targetPeers))
@@ -728,8 +756,67 @@ func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64
 		classifyStore(peer.GetStoreId(), &ordinaryOldStores, specialOldStores)
 	}
 	for _, peer := range targetPeers {
+		classifyStore(peer.GetStoreId(), &ordinaryNewStores, specialNewStores)
+	}
+	return ordinaryOldStores, ordinaryNewStores, specialOldStores, specialNewStores
+}
+
+func scatterPlacementAfterOperator(region *core.RegionInfo, op *operator.Operator) (map[uint64]*metapb.Peer, uint64) {
+	targetPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
+	for _, peer := range region.GetPeers() {
+		targetPeers[peer.GetStoreId()] = peer
+	}
+	targetLeader := region.GetLeader().GetStoreId()
+	if op == nil {
+		return targetPeers, targetLeader
+	}
+	for i := range op.Len() {
+		switch step := op.Step(i).(type) {
+		case operator.TransferLeader:
+			targetLeader = step.ToStore
+		case operator.AddPeer:
+			targetPeers[step.ToStore] = &metapb.Peer{StoreId: step.ToStore}
+		case operator.AddLearner:
+			targetPeers[step.ToStore] = &metapb.Peer{StoreId: step.ToStore}
+		case operator.RemovePeer:
+			delete(targetPeers, step.FromStore)
+		}
+	}
+	return targetPeers, targetLeader
+}
+
+// Rollback reverts the group distribution update from a scatter operator that
+// failed to enter the operator controller.
+func (r *RegionScatterer) Rollback(region *core.RegionInfo, op *operator.Operator, group string) {
+	if op == nil || region == nil || region.GetLeader() == nil {
+		return
+	}
+	targetPeers, targetLeader := scatterPlacementAfterOperator(region, op)
+	ordinaryOldStores, ordinaryNewStores, specialOldStores, specialNewStores := r.classifyPlacementStores(region, targetPeers)
+
+	r.ordinaryEngine.selectedPeer.Revert(group, ordinaryOldStores, ordinaryNewStores)
+	specialEngines := make(map[string]struct{}, len(specialOldStores)+len(specialNewStores))
+	for engine := range specialOldStores {
+		specialEngines[engine] = struct{}{}
+	}
+	for engine := range specialNewStores {
+		specialEngines[engine] = struct{}{}
+	}
+	for engine := range specialEngines {
+		ctx := r.getOrCreateSpecialEngineContext(engine)
+		ctx.selectedPeer.Revert(group, specialOldStores[engine], specialNewStores[engine])
+	}
+
+	oldLeaderStoreID := region.GetLeader().GetStoreId()
+	r.ordinaryEngine.selectedLeader.Revert(group, []uint64{oldLeaderStoreID}, []uint64{targetLeader})
+}
+
+// Update records the group distribution after scattering a region to the target placement.
+func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
+	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
+	ordinaryOldStores, ordinaryNewStores, specialOldStores, specialNewStores := r.classifyPlacementStores(region, targetPeers)
+	for _, peer := range targetPeers {
 		storeID := peer.GetStoreId()
-		classifyStore(storeID, &ordinaryNewStores, specialNewStores)
 		store := r.cluster.GetStore(storeID)
 		if store == nil {
 			continue

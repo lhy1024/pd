@@ -246,6 +246,18 @@ func (sc *schedulingController) ObserveSplitScatterRegion(region *core.RegionInf
 	coordinator.GetCheckerController().ObserveSplitScatterRegion(region)
 }
 
+// HasPotentialPendingSplitScatterRegions returns whether split-scatter may have
+// pending work and is used as a cheap heartbeat fast-path guard.
+func (sc *schedulingController) HasPotentialPendingSplitScatterRegions() bool {
+	sc.mu.RLock()
+	coordinator := sc.coordinator
+	sc.mu.RUnlock()
+	if coordinator == nil {
+		return false
+	}
+	return coordinator.GetCheckerController().HasPotentialPendingSplitScatterRegions()
+}
+
 // GetRegionStatsByType gets the status of the region by types.
 func (sc *schedulingController) GetRegionStatsByType(typ statistics.RegionStatisticType) []*core.RegionInfo {
 	if sc.regionStats == nil {

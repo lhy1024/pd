@@ -900,6 +900,108 @@ func TestSeedGroupDistributionByRangeSkipsRepeatedRangeCount(t *testing.T) {
 	re.Equal(firstLeaderCalls, tc.leaderCountCalls)
 }
 
+func TestRollbackRestoresSeededDistributionWhenAddOperatorRejected(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(2, "j", "t", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(3, "t", "z", 1, 2, 3)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "seeded-rollback"
+	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
+
+	scheduleCfg := tc.GetScheduleConfig().Clone()
+	scheduleCfg.SchedulerMaxWaitingOperator = 0
+	tc.SetScheduleConfig(scheduleCfg)
+
+	region := tc.GetRegion(1)
+	op, err := scatterer.Scatter(region, group, true)
+	re.NoError(err)
+	re.NotNil(op)
+	re.False(oc.AddOperator(op))
+
+	scatterer.Rollback(region, op, group)
+
+	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	for i := uint64(1); i <= 4; i++ {
+		re.Equal(peerSnapshot[i], peerAfter[i])
+	}
+
+	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	for i := uint64(1); i <= 4; i++ {
+		re.Equal(leaderSnapshot[i], leaderAfter[i])
+	}
+}
+
+func TestRollbackClearsUnseededDistributionWhenAddOperatorRejected(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "unseeded-rollback"
+	for _, storeID := range []uint64{1, 2, 3} {
+		scatterer.ordinaryEngine.selectedPeer.Put(storeID, group)
+	}
+	scatterer.ordinaryEngine.selectedLeader.Put(1, group)
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
+
+	scheduleCfg := tc.GetScheduleConfig().Clone()
+	scheduleCfg.SchedulerMaxWaitingOperator = 0
+	tc.SetScheduleConfig(scheduleCfg)
+
+	region := tc.GetRegion(1)
+	op, err := scatterer.Scatter(region, group, true)
+	re.NoError(err)
+	re.NotNil(op)
+	re.False(oc.AddOperator(op))
+
+	scatterer.Rollback(region, op, group)
+
+	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(peerSnapshot, peerAfter)
+
+	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(leaderSnapshot, leaderAfter)
+}
+
 func TestScatterWithoutSeedKeepsLegacyGroupAccounting(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())

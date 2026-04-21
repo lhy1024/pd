@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/tikv/pd/pkg/cache"
@@ -85,6 +86,7 @@ func (r splitScatterRangeHint) clone() splitScatterRangeHint {
 
 type splitScatterManager struct {
 	queueCapacity int
+	activeUntil   atomic.Int64
 	mu            struct {
 		syncutil.RWMutex
 		pending *cache.TTLUint64
@@ -106,6 +108,7 @@ func (m *splitScatterManager) recordBatch(sourceRegionID uint64, newRegionIDs []
 		return
 	}
 	group := makeSplitScatterGroup(sourceRegionID, newRegionIDs[0])
+	m.extendPotentialPendingTTL(time.Now())
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -129,11 +132,10 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	item.group = hint.group
 	item.rangeHint = hint.rangeHint
 	m.mu.pending.Put(region.GetID(), item)
+	m.extendPotentialPendingTTL(time.Now())
 	priority := splitScatterPriority(splitScatterCPUScore(region))
 	if entry := m.mu.queue.Get(region.GetID()); entry != nil {
 		item := entry.Value.(*splitScatterPriorityItem)
-		item.attempt = 0
-		item.last = time.Time{}
 		m.mu.queue.Put(priority, item)
 		return
 	}
@@ -150,6 +152,10 @@ func (m *splitScatterManager) getCandidates(limit int) []splitScatterCandidate {
 	defer m.mu.Unlock()
 
 	m.compactQueueLocked()
+	if m.pendingCountLocked() == 0 {
+		m.activeUntil.Store(0)
+		return nil
+	}
 	now := time.Now()
 	entries := m.mu.queue.Elems()
 	candidates := make([]splitScatterCandidate, 0, min(limit, len(entries)))
@@ -197,6 +203,7 @@ func (m *splitScatterManager) markSucceeded(regionID uint64) {
 	defer m.mu.Unlock()
 	m.mu.pending.Remove(regionID)
 	m.mu.queue.Remove(regionID)
+	m.clearPotentialPendingIfEmptyLocked()
 }
 
 func (m *splitScatterManager) remove(regionID uint64) {
@@ -204,6 +211,7 @@ func (m *splitScatterManager) remove(regionID uint64) {
 	defer m.mu.Unlock()
 	m.mu.pending.Remove(regionID)
 	m.mu.queue.Remove(regionID)
+	m.clearPotentialPendingIfEmptyLocked()
 }
 
 func (m *splitScatterManager) getPendingGroup(regionID uint64) (string, bool) {
@@ -238,6 +246,10 @@ func (m *splitScatterManager) pendingCountLocked() int {
 	return len(m.mu.pending.GetAllID())
 }
 
+func (m *splitScatterManager) hasPotentialPending() bool {
+	return m.activeUntil.Load() > time.Now().UnixNano()
+}
+
 func (m *splitScatterManager) compactQueueLocked() {
 	for _, entry := range m.mu.queue.Elems() {
 		if _, ok := m.getPendingItemLocked(entry.Value.ID()); !ok {
@@ -269,6 +281,16 @@ func (m *splitScatterManager) putQueueItemLocked(priority int, item *splitScatte
 		}
 		m.compactQueueLocked()
 		m.growQueueLocked(max(m.pendingCountLocked(), m.mu.queue.Len()+1))
+	}
+}
+
+func (m *splitScatterManager) extendPotentialPendingTTL(now time.Time) {
+	m.activeUntil.Store(now.Add(splitScatterPendingTTL).UnixNano())
+}
+
+func (m *splitScatterManager) clearPotentialPendingIfEmptyLocked() {
+	if m.pendingCountLocked() == 0 {
+		m.activeUntil.Store(0)
 	}
 }
 
@@ -309,6 +331,12 @@ func (c *Controller) ObserveSplitScatterRegion(region *core.RegionInfo) {
 	c.splitScatter.observe(region)
 }
 
+// HasPotentialPendingSplitScatterRegions returns whether split-scatter may have
+// pending work. It is a cheap fast-path guard for heartbeat hot paths.
+func (c *Controller) HasPotentialPendingSplitScatterRegions() bool {
+	return c.splitScatter.hasPotentialPending()
+}
+
 // DispatchSplitScatterRegionsForTest dispatches pending split-scatter regions.
 // The function is exposed for test purpose.
 func (c *Controller) DispatchSplitScatterRegionsForTest() {
@@ -335,6 +363,7 @@ func (c *Controller) dispatchSplitScatterRegions() {
 			continue
 		}
 		if op != nil && c.opController.AddWaitingOperator(op) == 0 {
+			c.splitScatterer.Rollback(region, op, candidate.group)
 			c.splitScatter.recordFailure(candidate.regionID)
 			continue
 		}
