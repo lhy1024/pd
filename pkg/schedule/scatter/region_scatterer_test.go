@@ -827,23 +827,7 @@ func TestSeedGroupDistributionByRangeAppliesNetChange(t *testing.T) {
 	op, err := scatterer.Scatter(region, group, true)
 	re.NoError(err)
 	re.NotNil(op)
-	finalPeers := make(map[uint64]struct{}, len(region.GetPeers()))
-	for _, peer := range region.GetPeers() {
-		finalPeers[peer.GetStoreId()] = struct{}{}
-	}
-	finalLeaderStoreID := region.GetLeader().GetStoreId()
-	for i := range op.Len() {
-		switch step := op.Step(i).(type) {
-		case operator.TransferLeader:
-			finalLeaderStoreID = step.ToStore
-		case operator.AddPeer:
-			finalPeers[step.ToStore] = struct{}{}
-		case operator.AddLearner:
-			finalPeers[step.ToStore] = struct{}{}
-		case operator.RemovePeer:
-			delete(finalPeers, step.FromStore)
-		}
-	}
+	finalPeers, finalLeaderStoreID := finalPlacementAfterScatter(region, op)
 
 	expectedPeerDistribution := cloneDistribution(peerSnapshot)
 	for _, peer := range region.GetPeers() {
@@ -866,6 +850,67 @@ func TestSeedGroupDistributionByRangeAppliesNetChange(t *testing.T) {
 	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
 	re.True(ok)
 	re.Equal(expectedLeaderDistribution, leaderDistribution)
+}
+
+func TestScatterWithoutSeedKeepsLegacyGroupAccounting(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "legacy-unseeded"
+	region := tc.GetRegion(1)
+
+	op, err := scatterer.Scatter(region, group, true)
+	re.NoError(err)
+
+	finalPeers, finalLeaderStoreID := finalPlacementAfterScatter(region, op)
+	expectedPeerDistribution := make(map[uint64]uint64, len(finalPeers))
+	for storeID := range finalPeers {
+		expectedPeerDistribution[storeID]++
+	}
+	expectedLeaderDistribution := map[uint64]uint64{finalLeaderStoreID: 1}
+
+	peerDistribution, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedPeerDistribution, peerDistribution)
+
+	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedLeaderDistribution, leaderDistribution)
+}
+
+func finalPlacementAfterScatter(region *core.RegionInfo, op *operator.Operator) (map[uint64]struct{}, uint64) {
+	finalPeers := make(map[uint64]struct{}, len(region.GetPeers()))
+	for _, peer := range region.GetPeers() {
+		finalPeers[peer.GetStoreId()] = struct{}{}
+	}
+	finalLeaderStoreID := region.GetLeader().GetStoreId()
+	if op == nil {
+		return finalPeers, finalLeaderStoreID
+	}
+	for i := range op.Len() {
+		switch step := op.Step(i).(type) {
+		case operator.TransferLeader:
+			finalLeaderStoreID = step.ToStore
+		case operator.AddPeer:
+			finalPeers[step.ToStore] = struct{}{}
+		case operator.AddLearner:
+			finalPeers[step.ToStore] = struct{}{}
+		case operator.RemovePeer:
+			delete(finalPeers, step.FromStore)
+		}
+	}
+	return finalPeers, finalLeaderStoreID
 }
 
 func removeZeroCountEntries(distribution map[uint64]uint64) {
