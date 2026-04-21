@@ -113,7 +113,7 @@ func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
 	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
 
-func TestObserveSplitScatterRegionUsesRecordGroupAndRangeHint(t *testing.T) {
+func TestObserveSplitScatterRegionUsesTableGroupAndRangeHintForRecordKey(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
@@ -125,76 +125,76 @@ func TestObserveSplitScatterRegionUsesRecordGroupAndRangeHint(t *testing.T) {
 
 	group, ok := controller.splitScatter.getPendingGroup(101)
 	re.True(ok)
-	re.Equal("split-scatter-record-42", group)
+	re.Equal("split-scatter-table-42", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
 	re.Len(candidates, 1)
-	expectedRange := splitScatterPrefixRange(splitScatterRecordKeyPrefix(42))
+	expectedRange := splitScatterPrefixRange(codec.GenerateTableKey(42))
 	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
 	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
 
-func TestObserveSplitScatterRegionFallsBackForBareTableBoundary(t *testing.T) {
+func TestObserveSplitScatterRegionUsesTableGroupForBareTableBoundary(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	fallbackGroup, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
 	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterTableBoundaryKey(42), newSplitScatterIndexKey(42, 7, "m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	group, ok := controller.splitScatter.getPendingGroup(101)
 	re.True(ok)
-	re.Equal(fallbackGroup, group)
+	re.Equal("split-scatter-table-42", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
 	re.Len(candidates, 1)
-	re.False(candidates[0].rangeHint.valid())
+	expectedRange := splitScatterPrefixRange(codec.GenerateTableKey(42))
+	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
+	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
 
-func TestObserveSplitScatterRegionFallsBackForCrossEntityRegion(t *testing.T) {
+func TestObserveSplitScatterRegionUsesTableGroupForCrossEntityRegion(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	fallbackGroup, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
 	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterIndexKey(42, 7, "a"), newSplitScatterRecordKey(42, "m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	group, ok := controller.splitScatter.getPendingGroup(101)
 	re.True(ok)
-	re.Equal(fallbackGroup, group)
+	re.Equal("split-scatter-table-42", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
 	re.Len(candidates, 1)
-	re.False(candidates[0].rangeHint.valid())
+	expectedRange := splitScatterPrefixRange(codec.GenerateTableKey(42))
+	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
+	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
 
-func TestObserveSplitScatterRegionFallsBackForCrossTableRegion(t *testing.T) {
+func TestObserveSplitScatterRegionUsesStartTableGroupForCrossTableRegion(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	fallbackGroup, ok := controller.splitScatter.getPendingGroup(101)
-	re.True(ok)
 	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(43, "m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	group, ok := controller.splitScatter.getPendingGroup(101)
 	re.True(ok)
-	re.Equal(fallbackGroup, group)
+	re.Equal("split-scatter-table-42", group)
 
 	candidates := controller.splitScatter.getCandidates(1)
 	re.Len(candidates, 1)
-	re.False(candidates[0].rangeHint.valid())
+	expectedRange := splitScatterPrefixRange(codec.GenerateTableKey(42))
+	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
+	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
 
 func TestObserveSplitScatterRegionGrowsQueueForLargeBatch(t *testing.T) {

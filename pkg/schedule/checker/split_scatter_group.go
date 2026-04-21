@@ -32,7 +32,7 @@ type splitScatterEntityKind uint8
 
 const (
 	splitScatterEntityUnknown splitScatterEntityKind = iota
-	splitScatterEntityRecord
+	splitScatterEntityTable
 	splitScatterEntityIndex
 )
 
@@ -49,7 +49,7 @@ type splitScatterEntity struct {
 }
 
 func resolveSplitScatterGroup(region *core.RegionInfo, fallbackGroup string) splitScatterGroupHint {
-	entity, ok := resolveStrictSplitScatterEntity(region.GetStartKey(), region.GetEndKey())
+	entity, ok := resolveSplitScatterEntity(region.GetStartKey(), region.GetEndKey())
 	if !ok {
 		return splitScatterGroupHint{group: fallbackGroup}
 	}
@@ -60,8 +60,8 @@ func resolveSplitScatterGroup(region *core.RegionInfo, fallbackGroup string) spl
 	switch entity.kind {
 	case splitScatterEntityIndex:
 		hint.group = fmt.Sprintf("split-scatter-index-%d-%d", entity.tableID, entity.indexID)
-	case splitScatterEntityRecord:
-		hint.group = fmt.Sprintf("split-scatter-record-%d", entity.tableID)
+	case splitScatterEntityTable:
+		hint.group = fmt.Sprintf("split-scatter-table-%d", entity.tableID)
 	default:
 		hint.group = fallbackGroup
 		hint.rangeHint = splitScatterRangeHint{}
@@ -72,24 +72,21 @@ func resolveSplitScatterGroup(region *core.RegionInfo, fallbackGroup string) spl
 	return hint
 }
 
-func resolveStrictSplitScatterEntity(startKey, endKey []byte) (splitScatterEntity, bool) {
+func resolveSplitScatterEntity(startKey, endKey []byte) (splitScatterEntity, bool) {
 	entity, ok := parseSplitScatterEntity(startKey)
 	if !ok {
 		return splitScatterEntity{}, false
 	}
-	// We intentionally give up ambiguous ranges here. Without schema metadata or
-	// split-key hints, PD cannot safely decide whether a bare table-boundary key
-	// or a cross-entity/cross-table merged region belongs to a single index or
-	// record space, so those regions fall back to the family-scoped group.
-	if len(endKey) == 0 {
-		return splitScatterEntity{}, false
-	}
-	entityRange := splitScatterPrefixRange(entity.rawPrefix)
-	if !entityRange.valid() || len(entityRange.endKey) == 0 {
-		return splitScatterEntity{}, false
-	}
-	if bytes.Compare(endKey, entityRange.endKey) > 0 {
-		return splitScatterEntity{}, false
+	if entity.kind == splitScatterEntityIndex {
+		// We intentionally over-approximate ambiguous table-key ranges. If PD can
+		// no longer prove the region stays within a single index prefix, it falls
+		// back to the table-scoped group instead of dropping back to the family
+		// group, so table-boundary splits and merged ranges still participate in
+		// the broader scatter continuity/baseline.
+		entityRange := splitScatterPrefixRange(entity.rawPrefix)
+		if len(endKey) == 0 || !entityRange.valid() || len(entityRange.endKey) == 0 || bytes.Compare(endKey, entityRange.endKey) > 0 {
+			entity = splitScatterTableEntity(entity.tableID)
+		}
 	}
 	return entity, true
 }
@@ -110,13 +107,6 @@ func parseSplitScatterEntity(key []byte) (splitScatterEntity, bool) {
 	rawPrefix := append([]byte(nil), splitScatterTablePrefix...)
 	rawPrefix = codec.EncodeInt(rawPrefix, tableID)
 	switch {
-	case bytes.HasPrefix(rest, splitScatterRecordPrefix):
-		rawPrefix = append(rawPrefix, splitScatterRecordPrefix...)
-		return splitScatterEntity{
-			kind:      splitScatterEntityRecord,
-			tableID:   tableID,
-			rawPrefix: rawPrefix,
-		}, true
 	case bytes.HasPrefix(rest, splitScatterIndexPrefix):
 		indexRest := rest[len(splitScatterIndexPrefix):]
 		_, indexID, err := codec.DecodeInt(indexRest)
@@ -132,7 +122,17 @@ func parseSplitScatterEntity(key []byte) (splitScatterEntity, bool) {
 			rawPrefix: rawPrefix,
 		}, true
 	default:
-		return splitScatterEntity{}, false
+		return splitScatterTableEntity(tableID), true
+	}
+}
+
+func splitScatterTableEntity(tableID int64) splitScatterEntity {
+	rawPrefix := append([]byte(nil), splitScatterTablePrefix...)
+	rawPrefix = codec.EncodeInt(rawPrefix, tableID)
+	return splitScatterEntity{
+		kind:      splitScatterEntityTable,
+		tableID:   tableID,
+		rawPrefix: rawPrefix,
 	}
 }
 
