@@ -251,6 +251,38 @@ func TestObserveSplitScatterRegionCompactsExpiredQueueEntries(t *testing.T) {
 	re.Nil(controller.splitScatter.mu.queue.Get(101))
 }
 
+func TestObserveSplitScatterRegionDefersExpiredQueueCompactionUntilCandidateSelection(t *testing.T) {
+	re := require.New(t)
+	controller, tc, _, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	controller.RecordSplitScatterBatch(100, []uint64{101, 102})
+	putSplitScatterRegion(tc, 101, "a", "b", 90)
+	putSplitScatterRegion(tc, 102, "b", "c", 80)
+
+	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
+
+	controller.splitScatter.mu.Lock()
+	controller.splitScatter.mu.pending.Remove(101)
+	controller.splitScatter.mu.Unlock()
+
+	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
+
+	controller.splitScatter.mu.RLock()
+	re.Equal(2, controller.splitScatter.mu.queue.Len())
+	re.NotNil(controller.splitScatter.mu.queue.Get(101))
+	controller.splitScatter.mu.RUnlock()
+
+	candidates := controller.splitScatter.getCandidates(1)
+	re.Len(candidates, 1)
+	re.Equal(uint64(102), candidates[0].regionID)
+
+	controller.splitScatter.mu.RLock()
+	defer controller.splitScatter.mu.RUnlock()
+	re.Equal(1, controller.splitScatter.mu.queue.Len())
+	re.Nil(controller.splitScatter.mu.queue.Get(101))
+}
+
 func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)

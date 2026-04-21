@@ -182,6 +182,14 @@ func (s *selectedStores) isSeededGroupLocked(group string) bool {
 	return ok
 }
 
+// IsSeededGroup returns whether the group has been seeded with a baseline
+// distribution.
+func (s *selectedStores) IsSeededGroup(group string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.isSeededGroupLocked(group)
+}
+
 // RegionScatterer scatters regions.
 type RegionScatterer struct {
 	ctx               context.Context
@@ -244,6 +252,9 @@ func (r *RegionScatterer) getOrCreateSpecialEngineContext(engine string) engineC
 // leader distribution of the specified key range. Existing group history is kept.
 func (r *RegionScatterer) SeedGroupDistributionByRange(group string, startKey, endKey []byte) {
 	if group == "" || len(startKey) == 0 {
+		return
+	}
+	if r.ordinaryEngine.selectedPeer.IsSeededGroup(group) {
 		return
 	}
 

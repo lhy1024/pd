@@ -53,6 +53,22 @@ type sequencer struct {
 	curID uint64
 }
 
+type countingCluster struct {
+	*mockcluster.Cluster
+	peerCountCalls   int
+	leaderCountCalls int
+}
+
+func (c *countingCluster) GetStorePeerCountByRange(storeID uint64, startKey, endKey []byte) int {
+	c.peerCountCalls++
+	return c.Cluster.GetStorePeerCountByRange(storeID, startKey, endKey)
+}
+
+func (c *countingCluster) GetStoreLeaderCountByRange(storeID uint64, startKey, endKey []byte) int {
+	c.leaderCountCalls++
+	return c.Cluster.GetStoreLeaderCountByRange(storeID, startKey, endKey)
+}
+
 func newSequencer(maxID uint64) *sequencer {
 	return newSequencerWithMinID(1, maxID)
 }
@@ -850,6 +866,38 @@ func TestSeedGroupDistributionByRangeAppliesNetChange(t *testing.T) {
 	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
 	re.True(ok)
 	re.Equal(expectedLeaderDistribution, leaderDistribution)
+}
+
+func TestSeedGroupDistributionByRangeSkipsRepeatedRangeCount(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	baseCluster := mockcluster.NewCluster(ctx, opt)
+	tc := &countingCluster{Cluster: baseCluster}
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(2, "j", "t", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(3, "t", "z", 1, 2, 3)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "seeded-repeat"
+	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+
+	firstPeerCalls := tc.peerCountCalls
+	firstLeaderCalls := tc.leaderCountCalls
+	re.Positive(firstPeerCalls)
+	re.Positive(firstLeaderCalls)
+
+	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+	re.Equal(firstPeerCalls, tc.peerCountCalls)
+	re.Equal(firstLeaderCalls, tc.leaderCountCalls)
 }
 
 func TestScatterWithoutSeedKeepsLegacyGroupAccounting(t *testing.T) {

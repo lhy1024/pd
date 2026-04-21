@@ -130,7 +130,6 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	item.rangeHint = hint.rangeHint
 	m.mu.pending.Put(region.GetID(), item)
 	priority := splitScatterPriority(splitScatterCPUScore(region))
-	m.compactQueueLocked()
 	if entry := m.mu.queue.Get(region.GetID()); entry != nil {
 		item := entry.Value.(*splitScatterPriorityItem)
 		item.attempt = 0
