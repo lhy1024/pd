@@ -41,7 +41,6 @@ type splitScatterPendingItem struct {
 
 type splitScatterPriorityItem struct {
 	regionID uint64
-	group    string
 	attempt  int
 	last     time.Time
 }
@@ -134,7 +133,6 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	m.compactQueueLocked()
 	if entry := m.mu.queue.Get(region.GetID()); entry != nil {
 		item := entry.Value.(*splitScatterPriorityItem)
-		item.group = hint.group
 		item.attempt = 0
 		item.last = time.Time{}
 		m.mu.queue.Put(priority, item)
@@ -142,7 +140,6 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	}
 	m.putQueueItemLocked(priority, &splitScatterPriorityItem{
 		regionID: region.GetID(),
-		group:    hint.group,
 	})
 }
 
