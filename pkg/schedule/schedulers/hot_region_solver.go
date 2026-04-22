@@ -322,7 +322,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 		dstStoreID = bs.best.dstStore.GetID()
 	}
 	infl := bs.collectPendingInfluence(bs.best.mainPeerStat)
-	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
+	if !bs.sche.tryAddPendingInfluence(bs.ops[0], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.hotScheduleScopeKey()) {
 		return false
 	}
 	if isSplit {
@@ -331,7 +331,7 @@ func (bs *balanceSolver) tryAddPendingInfluence() bool {
 	// revert peers
 	if bs.best.revertPeerStat != nil && len(bs.ops) > 1 {
 		infl := bs.collectPendingInfluence(bs.best.revertPeerStat)
-		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur) {
+		if !bs.sche.tryAddPendingInfluence(bs.ops[1], srcStoreIDs, dstStoreID, infl, maxZombieDur, bs.hotScheduleScopeKey()) {
 			return false
 		}
 	}
@@ -424,6 +424,7 @@ type hotPeerFilterReason string
 const (
 	readCPUByteRejectedDecisionLogLimitPerReason                     = 5
 	readCPUByteMaxPendingOpsPerSrc                                   = 2
+	readCPUByteTransferLeaderCooldownHits                            = 12
 	hotPeerFilterKept                            hotPeerFilterReason = "kept"
 	hotPeerFilterPending                         hotPeerFilterReason = "pending"
 	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
@@ -495,11 +496,41 @@ func (bs *balanceSolver) isReadCPUByte() bool {
 	}
 }
 
-func (*balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
+func (bs *balanceSolver) hotScheduleScopeKey() hotScheduleScopeKey {
+	return hotScheduleScopeKey{
+		rwTy:           bs.rwTy,
+		resourceTy:     bs.resourceTy,
+		firstPriority:  bs.firstPriority,
+		secondPriority: bs.secondPriority,
+	}
+}
+
+func (bs *balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
 	if detail == nil || detail.LoadPred == nil {
 		return nil
 	}
 	return detail.LoadPred.Min()
+}
+
+func (bs *balanceSolver) shouldRejectReadCPUDst(detail *statistics.StoreLoadDetail) bool {
+	if !bs.isReadCPUByte() || detail == nil || detail.LoadPred == nil {
+		return false
+	}
+	return detail.LoadPred.Future.Loads[utils.CPUDim] >= detail.LoadPred.Expect.Loads[utils.CPUDim]
+}
+
+func (bs *balanceSolver) transferLeaderCooldownHits() int {
+	if bs.isReadCPUByte() && bs.minHotDegree < readCPUByteTransferLeaderCooldownHits {
+		return readCPUByteTransferLeaderCooldownHits
+	}
+	return bs.minHotDegree
+}
+
+func (bs *balanceSolver) shouldCoolDownTransferLeader(item *statistics.HotPeerStat) bool {
+	if item == nil {
+		return false
+	}
+	return item.IsNeedCoolDownTransferLeader(bs.transferLeaderCooldownHits(), bs.rwTy)
 }
 
 func (bs *balanceSolver) logHotOperatorSnapshot() {
@@ -540,6 +571,8 @@ func (bs *balanceSolver) logHotOperatorSnapshot() {
 	fields = append(fields, hotOperatorLoadFields("dst-pending", bs.best.dstStore.LoadPred.Pending().Loads[:])...)
 	fields = append(fields, hotOperatorLoadFields("src-future", bs.best.srcStore.LoadPred.Future.Loads[:])...)
 	fields = append(fields, hotOperatorLoadFields("dst-future", bs.best.dstStore.LoadPred.Future.Loads[:])...)
+	fields = append(fields, zap.Float64("src-future-minus-expect-cpu",
+		bs.best.srcStore.LoadPred.Future.Loads[utils.CPUDim]-bs.best.srcStore.LoadPred.Expect.Loads[utils.CPUDim]))
 	fields = append(fields, hotOperatorStoreSummaryFields("src-summary", srcSummary)...)
 	fields = append(fields, hotOperatorStoreSummaryFields("dst-summary", dstSummary)...)
 	fields = append(fields, hotOperatorFilteredPeerFields("src-filtered-hot", bs.filteredHotPeers[srcID])...)
@@ -586,8 +619,6 @@ func (bs *balanceSolver) calcMaxZombieDur() time.Duration {
 		return bs.sche.conf.getStoreStatZombieDuration()
 	default:
 		dur := bs.sche.conf.getStoreStatZombieDuration()
-		// CPU signal has longer feedback delay due to TimeMedian smoothing (~12.5s),
-		// so pending influence needs to persist longer for accurate accumulation.
 		if bs.isReadCPUByte() {
 			return 2 * dur
 		}
@@ -619,7 +650,6 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 			hotSchedulerResultCounter.WithLabelValues("src-store-pending-cap-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
-
 		if !bs.checkSrcByPriorityAndTolerance(detail.LoadPred.Min(), &detail.LoadPred.Expect, srcToleranceRatio) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
@@ -668,7 +698,7 @@ func (bs *balanceSolver) filterHotPeersWithDecisions(storeLoad *statistics.Store
 		if _, ok := bs.sche.regionPendings[item.ID()]; ok {
 			return hotPeerFilterPending
 		}
-		if item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy) {
+		if bs.shouldCoolDownTransferLeader(item) {
 			return hotPeerFilterCooldown
 		}
 		return hotPeerFilterKept
@@ -922,6 +952,10 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		}
 		if filter.Target(bs.GetSchedulerConfig(), store, filters) {
 			id := store.GetID()
+			if bs.shouldRejectReadCPUDst(detail) {
+				hotSchedulerResultCounter.WithLabelValues("dst-store-cpu-prefilter-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+				continue
+			}
 			if !bs.checkDstByPriorityAndTolerance(detail.LoadPred.Max(), &detail.LoadPred.Expect, dstToleranceRatio) {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 				continue
@@ -1078,7 +1112,6 @@ func (bs *balanceSolver) compareTotalErrorAfterPeer(dim int) int {
 		return 0
 	}
 }
-
 func (bs *balanceSolver) getMinRate(dim int) float64 {
 	switch dim {
 	case utils.KeyDim:
