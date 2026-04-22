@@ -453,6 +453,216 @@ func TestReadCPUDstPrefilter(t *testing.T) {
 	}
 }
 
+func TestReadCPUByteErrorReductionGateAllowsUsefulCPUImprovement(t *testing.T) {
+	re := require.New(t)
+	srcStore := core.NewStoreInfoWithLabel(1, nil)
+	dstStore := core.NewStoreInfoWithLabel(2, nil)
+	src := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: srcStore},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  594,
+				utils.ByteDim: 33160565.2,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  515,
+				utils.ByteDim: 33160565.2,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  184.83333333333334,
+				utils.ByteDim: 101597443.86666667,
+			}},
+		},
+	}
+	dst := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: dstStore},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  108,
+				utils.ByteDim: 110154379.8,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  108,
+				utils.ByteDim: 110154379.8,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  184.83333333333334,
+				utils.ByteDim: 101597443.86666667,
+			}},
+		},
+	}
+	bs := &balanceSolver{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+		cur: &solution{
+			srcStore:     src,
+			dstStore:     dst,
+			mainPeerStat: &statistics.HotPeerStat{Loads: []float64{0, 0, 0, 33}},
+		},
+	}
+	bs.cur.calcPeersRate(utils.CPUDim, utils.ByteDim)
+	re.True(bs.isTolerance(utils.CPUDim, false))
+	re.False(bs.shouldRejectReadCPUByteByErrorReduction())
+}
+
+func TestReadCPUByteErrorReductionGateRejectsReverseOvershoot(t *testing.T) {
+	re := require.New(t)
+	srcStore := core.NewStoreInfoWithLabel(15, nil)
+	dstStore := core.NewStoreInfoWithLabel(1, nil)
+	src := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: srcStore},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  594,
+				utils.ByteDim: 242580736.2,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  582,
+				utils.ByteDim: 228207645.2,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  322.5,
+				utils.ByteDim: 186479448.23333335,
+			}},
+		},
+	}
+	dst := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: dstStore},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  380,
+				utils.ByteDim: 79170347,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  380,
+				utils.ByteDim: 79170347,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  322.5,
+				utils.ByteDim: 186479448.23333335,
+			}},
+		},
+	}
+	bs := &balanceSolver{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+		cur: &solution{
+			srcStore:     src,
+			dstStore:     dst,
+			mainPeerStat: &statistics.HotPeerStat{Loads: []float64{8853662, 0, 0, 8}},
+		},
+	}
+	bs.cur.calcPeersRate(utils.CPUDim, utils.ByteDim)
+	re.True(bs.shouldRejectReadCPUByteByErrorReduction())
+	re.False(bs.isTolerance(utils.CPUDim, false))
+}
+
+func TestFilterSrcStoresReadCPUBytePendingCap(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+	tc.SetClusterVersion(versioninfo.MustParseVersion("8.5.7"))
+	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+
+	store := core.NewStoreInfoWithLabel(1, map[string]string{})
+	src := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: store},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 180,
+				utils.CPUDim:  594,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 120,
+				utils.CPUDim:  513,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 60,
+				utils.CPUDim:  100,
+			}},
+		},
+		HotPeers: []*statistics.HotPeerStat{{
+			StoreID:  1,
+			RegionID: 1,
+			Loads: []float64{
+				utils.ByteDim: 50,
+				utils.CPUDim:  30,
+			},
+		}},
+	}
+	bs := newBalanceSolver(hb, tc, utils.Read, transferLeader)
+	bs.stLoadDetail = map[uint64]*statistics.StoreLoadDetail{1: src}
+
+	re.Len(bs.filterSrcStores(), 1)
+
+	hb.regionPendings[1] = &pendingInfluence{froms: []uint64{1}}
+	re.Len(bs.filterSrcStores(), 1)
+
+	hb.regionPendings[2] = &pendingInfluence{froms: []uint64{1}}
+	re.Empty(bs.filterSrcStores())
+}
+
+func TestReadCPUByteErrorReductionGateDoesNotLetByteRescueCPUTie(t *testing.T) {
+	re := require.New(t)
+	srcStore := core.NewStoreInfoWithLabel(1, nil)
+	dstStore := core.NewStoreInfoWithLabel(2, nil)
+	src := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: srcStore},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  450,
+				utils.ByteDim: 100,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  450,
+				utils.ByteDim: 100,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  440,
+				utils.ByteDim: 100,
+			}},
+		},
+	}
+	dst := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: dstStore},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  445,
+				utils.ByteDim: 100,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  445,
+				utils.ByteDim: 100,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.CPUDim:  440,
+				utils.ByteDim: 100,
+			}},
+		},
+	}
+	bs := &balanceSolver{
+		rwTy:           utils.Read,
+		resourceTy:     readLeader,
+		firstPriority:  utils.CPUDim,
+		secondPriority: utils.ByteDim,
+		cur: &solution{
+			srcStore:     src,
+			dstStore:     dst,
+			mainPeerStat: &statistics.HotPeerStat{Loads: []float64{20, 0, 0, 5}},
+		},
+	}
+	bs.cur.calcPeersRate(utils.CPUDim, utils.ByteDim)
+	re.True(bs.shouldRejectReadCPUByteByErrorReduction())
+	re.False(bs.isTolerance(utils.CPUDim, false))
+}
+
 func TestExpect(t *testing.T) {
 	re := require.New(t)
 	cancel, _, _, oc := prepareSchedulersTest()

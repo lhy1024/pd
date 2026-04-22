@@ -16,7 +16,6 @@ package schedulers
 
 import (
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/pingcap/log"
 
+	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/operator"
@@ -58,6 +58,29 @@ var (
 	topnPosition = defaultTopnPosition
 	// statisticsInterval is the interval to update statistics information.
 	statisticsInterval = time.Second
+
+	hotDirectionCounterTypes = []string{
+		movePeer.String(),
+		moveLeader.String(),
+		transferLeader.String(),
+	}
+	hotDirectionCounterDirections = []string{
+		"in",
+		"out",
+		"in-for-revert",
+		"out-for-revert",
+	}
+	hotDirectionCounterDims = func() []string {
+		dims := make([]string, 0, utils.DimLen*2+1)
+		for dim := range utils.DimLen {
+			name := utils.DimToString(dim)
+			if name == "" {
+				continue
+			}
+			dims = append(dims, name, name+"-only")
+		}
+		return append(dims, "all")
+	}()
 )
 
 type hotScheduleScopeKey struct {
@@ -81,9 +104,10 @@ type baseHotScheduler struct {
 	// be selected if its owner region is tracked in this attribute.
 	regionPendings map[uint64]*pendingInfluence
 	// types is the resource types that the scheduler considers.
-	types           []resourceType
-	updateReadTime  time.Time
-	updateWriteTime time.Time
+	types                         []resourceType
+	updateReadTime                time.Time
+	updateWriteTime               time.Time
+	initializedHotDirectionStores map[uint64]struct{}
 }
 
 func newBaseHotScheduler(
@@ -93,9 +117,10 @@ func newBaseHotScheduler(
 ) *baseHotScheduler {
 	base := NewBaseScheduler(opController, types.BalanceHotRegionScheduler, schedulerConfig)
 	ret := &baseHotScheduler{
-		BaseScheduler:  base,
-		regionPendings: make(map[uint64]*pendingInfluence),
-		stHistoryLoads: statistics.NewStoreHistoryLoads(sampleDuration, sampleInterval),
+		BaseScheduler:                 base,
+		regionPendings:                make(map[uint64]*pendingInfluence),
+		stHistoryLoads:                statistics.NewStoreHistoryLoads(sampleDuration, sampleInterval),
+		initializedHotDirectionStores: make(map[uint64]struct{}),
 	}
 	for ty := resourceType(0); ty < resourceTypeLen; ty++ {
 		ret.types = append(ret.types, ty)
@@ -107,7 +132,9 @@ func newBaseHotScheduler(
 // prepareForBalance calculate the summary of pending Influence for each store and prepare the load detail for
 // each store, only update read or write load detail
 func (s *baseHotScheduler) prepareForBalance(typ resourceType, cluster sche.SchedulerCluster) {
-	storeInfos := statistics.SummaryStoreInfos(cluster.GetStores())
+	stores := cluster.GetStores()
+	s.preInitializeHotDirectionCounters(stores)
+	storeInfos := statistics.SummaryStoreInfos(stores)
 	s.summaryPendingInfluence(storeInfos)
 	storesLoads := cluster.GetStoresLoads()
 	isTraceRegionFlow := cluster.GetSchedulerConfig().IsTraceRegionFlow()
@@ -143,6 +170,26 @@ func (s *baseHotScheduler) prepareForBalance(typ resourceType, cluster sche.Sche
 		}
 	default:
 		log.Error("invalid resource type", zap.String("type", typ.String()))
+	}
+}
+
+func (s *baseHotScheduler) preInitializeHotDirectionCounters(stores []*core.StoreInfo) {
+	for _, store := range stores {
+		storeID := store.GetID()
+		if _, ok := s.initializedHotDirectionStores[storeID]; ok {
+			continue
+		}
+		storeLabel := strconv.FormatUint(storeID, 10)
+		for _, typ := range hotDirectionCounterTypes {
+			for _, rw := range []utils.RWType{utils.Read, utils.Write} {
+				for _, direction := range hotDirectionCounterDirections {
+					for _, dim := range hotDirectionCounterDims {
+						hotDirectionCounter.WithLabelValues(typ, rw.String(), storeLabel, direction, dim)
+					}
+				}
+			}
+		}
+		s.initializedHotDirectionStores[storeID] = struct{}{}
 	}
 }
 
@@ -183,10 +230,6 @@ func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statis
 			})
 		}
 	}
-}
-
-func normalizeHotLoadSignature(load float64) float64 {
-	return math.Round(load*1000) / 1000
 }
 
 func (s *baseHotScheduler) randomType() resourceType {

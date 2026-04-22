@@ -423,6 +423,7 @@ type hotPeerFilterReason string
 
 const (
 	readCPUByteRejectedDecisionLogLimitPerReason                     = 5
+	readCPUByteMaxPendingOpsPerSrc                                   = 2
 	readCPUByteTransferLeaderCooldownHits                            = 12
 	hotPeerFilterKept                            hotPeerFilterReason = "kept"
 	hotPeerFilterPending                         hotPeerFilterReason = "pending"
@@ -504,7 +505,7 @@ func (bs *balanceSolver) hotScheduleScopeKey() hotScheduleScopeKey {
 	}
 }
 
-func (bs *balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
+func (*balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
 	if detail == nil || detail.LoadPred == nil {
 		return nil
 	}
@@ -643,6 +644,10 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 			srcToleranceRatio += tiflashToleranceRatioCorrection
 		}
 		if len(detail.HotPeers) == 0 {
+			continue
+		}
+		if bs.isReadCPUByte() && bs.countPendingOpsFromStore(id) >= readCPUByteMaxPendingOpsPerSrc {
+			hotSchedulerResultCounter.WithLabelValues("src-store-pending-cap-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
 		if !bs.checkSrcByPriorityAndTolerance(detail.LoadPred.Min(), &detail.LoadPred.Expect, srcToleranceRatio) {
@@ -1054,10 +1059,59 @@ func (bs *balanceSolver) isTolerance(dim int, reverse bool) bool {
 	if srcRate <= dstRate {
 		return false
 	}
+	if bs.shouldRejectReadCPUByteByErrorReduction() {
+		return false
+	}
 	pendingAmp := 1 + pendingAmpFactor*srcRate/(srcRate-dstRate)
 	return srcRate-pendingAmp*srcPending > dstRate+pendingAmp*dstPending
 }
 
+// countPendingOpsFromStore counts how many pending ops originate from the given store.
+func (bs *balanceSolver) countPendingOpsFromStore(storeID uint64) int {
+	count := 0
+	for _, p := range bs.sche.regionPendings {
+		for _, from := range p.froms {
+			if from == storeID {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
+// shouldRejectReadCPUByteByErrorReduction only allows ops that strictly reduce the first-priority CPU error.
+// The second-priority byte dimension still participates in the existing rank/score comparison,
+// but it must not rescue an op whose CPU error does not improve.
+func (bs *balanceSolver) shouldRejectReadCPUByteByErrorReduction() bool {
+	if !bs.isReadCPUByte() || bs.cur == nil || bs.cur.srcStore == nil || bs.cur.dstStore == nil {
+		return false
+	}
+	if len(bs.cur.cachedPeersRate) != utils.DimLen {
+		if bs.cur.mainPeerStat == nil {
+			return false
+		}
+		bs.cur.calcPeersRate(bs.firstPriority, bs.secondPriority)
+	}
+	return bs.compareTotalErrorAfterPeer(bs.firstPriority) >= 0
+}
+
+func (bs *balanceSolver) compareTotalErrorAfterPeer(dim int) int {
+	srcRate, dstRate := bs.cur.getExtremeLoad(dim)
+	peerRate := bs.cur.getPeersRateFromCache(dim)
+	srcExpect := bs.cur.srcStore.LoadPred.Expect.Loads[dim]
+	dstExpect := bs.cur.dstStore.LoadPred.Expect.Loads[dim]
+	before := math.Abs(srcRate-srcExpect) + math.Abs(dstRate-dstExpect)
+	after := math.Abs(srcRate-peerRate-srcExpect) + math.Abs(dstRate+peerRate-dstExpect)
+	switch {
+	case after < before-1e-6:
+		return -1
+	case after > before+1e-6:
+		return 1
+	default:
+		return 0
+	}
+}
 func (bs *balanceSolver) getMinRate(dim int) float64 {
 	switch dim {
 	case utils.KeyDim:
