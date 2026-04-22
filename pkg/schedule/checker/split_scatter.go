@@ -23,6 +23,7 @@ import (
 
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
+	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 )
 
@@ -330,7 +331,7 @@ func (c *Controller) dispatchSplitScatterRegions() {
 		if candidate.rangeHint.valid() {
 			c.regionScatterer.SeedGroupDistributionByRange(candidate.group, candidate.rangeHint.startKey, candidate.rangeHint.endKey)
 		}
-		op, err := c.regionScatterer.Scatter(region, candidate.group, false)
+		op, err := c.regionScatterer.ScatterWithDesc(region, candidate.group, false, scatter.InternalScatterOperatorDesc)
 		if err != nil {
 			c.splitScatterQueue.recordFailure(candidate.regionID)
 			continue

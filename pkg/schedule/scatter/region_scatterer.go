@@ -67,7 +67,10 @@ const (
 	maxSleepDuration     = time.Minute
 	initialSleepDuration = 100 * time.Millisecond
 	maxRetryLimit        = 30
-	scatterOperatorDesc  = "scatter-region"
+	// AdminScatterOperatorDesc is used by external admin/API scatter requests.
+	AdminScatterOperatorDesc = "scatter-region"
+	// InternalScatterOperatorDesc is used by PD-internal split-scatter dispatch.
+	InternalScatterOperatorDesc = "internal-scatter-region"
 )
 
 type selectedStores struct {
@@ -396,6 +399,16 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 // Scatter relocates the region. If the group is defined, the regions' leader with the same group would be scattered
 // in a group level instead of cluster level.
 func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
+	return r.ScatterWithDesc(region, group, skipStoreLimit, AdminScatterOperatorDesc)
+}
+
+// ScatterWithDesc relocates the region and tags the created operator with the
+// provided desc so external/admin scatter and internal split-scatter can be
+// distinguished in operator metrics.
+func (r *RegionScatterer) ScatterWithDesc(region *core.RegionInfo, group string, skipStoreLimit bool, desc string) (*operator.Operator, error) {
+	if desc == "" {
+		desc = AdminScatterOperatorDesc
+	}
 	if !filter.IsRegionReplicated(r.cluster, region) {
 		r.addSuspectRegions(false, region.GetID())
 		scatterSkipNotReplicatedCounter.Inc()
@@ -409,7 +422,7 @@ func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipSto
 	if op := r.opController.GetOperator(region.GetID()); op != nil && op.GetPriorityLevel() >= operatorPriorityLevel {
 		val, exist := op.GetAdditionalInfo("group")
 		// If the existing operator is created by the same group scatterer, just skip creating a new one.
-		if strings.Contains(op.Desc(), scatterOperatorDesc) && exist && val == group {
+		if strings.Contains(op.Desc(), "scatter-region") && exist && val == group {
 			scatterOperatorRunningCounter.Inc()
 			log.Debug("scatter operator is already running",
 				zap.Uint64("region-id", region.GetID()))
@@ -450,10 +463,14 @@ func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipSto
 		return nil, errors.Errorf("region %d is hot", region.GetID())
 	}
 
-	return r.scatterRegion(region, group, skipStoreLimit)
+	return r.scatterRegionWithDesc(region, group, skipStoreLimit, desc)
 }
 
 func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
+	return r.scatterRegionWithDesc(region, group, skipStoreLimit, AdminScatterOperatorDesc)
+}
+
+func (r *RegionScatterer) scatterRegionWithDesc(region *core.RegionInfo, group string, skipStoreLimit bool, desc string) (*operator.Operator, error) {
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
 	ordinaryPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
 	specialPeers := make(map[string]map[uint64]*metapb.Peer)
@@ -536,7 +553,7 @@ func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, s
 		r.Update(region, targetPeers, targetLeader, group)
 		return nil, nil
 	}
-	op, err := operator.CreateScatterRegionOperator(scatterOperatorDesc, r.cluster, region, targetPeers, targetLeader, skipStoreLimit)
+	op, err := operator.CreateScatterRegionOperator(desc, r.cluster, region, targetPeers, targetLeader, skipStoreLimit)
 	if err != nil {
 		scatterFailCounter.Inc()
 		currentPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))

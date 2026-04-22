@@ -82,7 +82,7 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 		op = oc.GetOperator(102)
 	}
 	re.NotNil(op)
-	re.Equal("scatter-region", op.Desc())
+	re.Equal(scatter.InternalScatterOperatorDesc, op.Desc())
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal(group, opGroup)
