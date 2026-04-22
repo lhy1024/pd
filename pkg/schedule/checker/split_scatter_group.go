@@ -103,8 +103,7 @@ func parseSplitScatterEntity(key []byte) (splitScatterEntity, bool) {
 		return splitScatterEntity{}, false
 	}
 
-	rawPrefix := append([]byte(nil), splitScatterTablePrefix...)
-	rawPrefix = codec.EncodeInt(rawPrefix, tableID)
+	rawPrefix := splitScatterTablePrefixKey(tableID)
 	switch {
 	case bytes.HasPrefix(rest, splitScatterIndexPrefix):
 		indexRest := rest[len(splitScatterIndexPrefix):]
@@ -126,13 +125,16 @@ func parseSplitScatterEntity(key []byte) (splitScatterEntity, bool) {
 }
 
 func splitScatterTableEntity(tableID int64) splitScatterEntity {
-	rawPrefix := append([]byte(nil), splitScatterTablePrefix...)
-	rawPrefix = codec.EncodeInt(rawPrefix, tableID)
+	rawPrefix := splitScatterTablePrefixKey(tableID)
 	return splitScatterEntity{
 		kind:      splitScatterEntityTable,
 		tableID:   tableID,
 		rawPrefix: rawPrefix,
 	}
+}
+
+func splitScatterTablePrefixKey(tableID int64) []byte {
+	return append([]byte(nil), codec.GenerateTableKey(tableID)...)
 }
 
 func splitScatterPrefixRange(rawPrefix []byte) splitScatterRangeHint {

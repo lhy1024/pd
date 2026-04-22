@@ -54,7 +54,7 @@ func TestRecordSplitScatterBatchAndObserveQueueByCPUScore(t *testing.T) {
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(103))
 
-	candidates := controller.splitScatter.getCandidates(3)
+	candidates := controller.splitScatterQueue.getCandidates(3)
 	re.Len(candidates, 3)
 	re.Equal(uint64(101), candidates[0].regionID)
 	re.Equal(uint64(102), candidates[1].regionID)
@@ -102,7 +102,7 @@ func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
 	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-index-42-7", group)
 
-	candidates := controller.splitScatter.getCandidates(1)
+	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
 	expectedRange := splitScatterPrefixRange(splitScatterIndexKeyPrefix(42, 7))
 	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
@@ -122,7 +122,7 @@ func TestObserveSplitScatterRegionUsesTableGroupAndRangeHintForRecordKey(t *test
 	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-table-42", group)
 
-	candidates := controller.splitScatter.getCandidates(1)
+	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
 	expectedRange := splitScatterPrefixRange(codec.GenerateTableKey(42))
 	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
@@ -142,7 +142,7 @@ func TestObserveSplitScatterRegionUsesTableGroupForBareTableBoundary(t *testing.
 	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-table-42", group)
 
-	candidates := controller.splitScatter.getCandidates(1)
+	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
 	expectedRange := splitScatterPrefixRange(codec.GenerateTableKey(42))
 	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
@@ -162,7 +162,7 @@ func TestObserveSplitScatterRegionUsesTableGroupForCrossEntityRegion(t *testing.
 	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-table-42", group)
 
-	candidates := controller.splitScatter.getCandidates(1)
+	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
 	expectedRange := splitScatterPrefixRange(codec.GenerateTableKey(42))
 	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
@@ -182,19 +182,19 @@ func TestObserveSplitScatterRegionUsesStartTableGroupForCrossTableRegion(t *test
 	group := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-table-42", group)
 
-	candidates := controller.splitScatter.getCandidates(1)
+	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
 	expectedRange := splitScatterPrefixRange(codec.GenerateTableKey(42))
 	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
 	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
 
-func TestObserveSplitScatterRegionGrowsQueueForLargeBatch(t *testing.T) {
+func TestObserveSplitScatterRegionKeepsLargeBatchWithinFixedQueueCapacity(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
-	const splitCount = splitScatterQueueCapacity + 32
+	const splitCount = 2048
 	regionIDs := make([]uint64, 0, splitCount)
 	for regionID := uint64(1000); regionID < uint64(1000+splitCount); regionID++ {
 		regionIDs = append(regionIDs, regionID)
@@ -206,9 +206,8 @@ func TestObserveSplitScatterRegionGrowsQueueForLargeBatch(t *testing.T) {
 		controller.ObserveSplitScatterRegion(tc.GetRegion(regionID))
 	}
 
-	re.Equal(splitCount, controller.splitScatter.mu.queue.Len())
-	re.GreaterOrEqual(controller.splitScatter.queueCapacity, splitCount+1)
-	re.Len(controller.splitScatter.getCandidates(splitCount), splitCount)
+	re.Equal(splitCount, controller.splitScatterQueue.mu.queue.Len())
+	re.Len(controller.splitScatterQueue.getCandidates(splitCount), splitCount)
 }
 
 func TestObserveSplitScatterRegionCompactsExpiredQueueEntries(t *testing.T) {
@@ -216,10 +215,9 @@ func TestObserveSplitScatterRegionCompactsExpiredQueueEntries(t *testing.T) {
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
-	controller.splitScatter.mu.Lock()
-	controller.splitScatter.queueCapacity = 1
-	controller.splitScatter.mu.queue = cache.NewPriorityQueue(1)
-	controller.splitScatter.mu.Unlock()
+	controller.splitScatterQueue.mu.Lock()
+	controller.splitScatterQueue.mu.queue = cache.NewPriorityQueue(1)
+	controller.splitScatterQueue.mu.Unlock()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101, 102})
 	putSplitScatterRegion(tc, 101, "a", "b", 90)
@@ -227,20 +225,20 @@ func TestObserveSplitScatterRegionCompactsExpiredQueueEntries(t *testing.T) {
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
-	controller.splitScatter.mu.Lock()
-	controller.splitScatter.mu.pending.Remove(101)
-	controller.splitScatter.mu.Unlock()
+	controller.splitScatterQueue.mu.Lock()
+	controller.splitScatterQueue.mu.pending.Remove(101)
+	controller.splitScatterQueue.mu.Unlock()
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 
-	candidates := controller.splitScatter.getCandidates(1)
+	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
 	re.Equal(uint64(102), candidates[0].regionID)
 
-	controller.splitScatter.mu.RLock()
-	defer controller.splitScatter.mu.RUnlock()
-	re.Equal(1, controller.splitScatter.mu.queue.Len())
-	re.Nil(controller.splitScatter.mu.queue.Get(101))
+	controller.splitScatterQueue.mu.RLock()
+	defer controller.splitScatterQueue.mu.RUnlock()
+	re.Equal(1, controller.splitScatterQueue.mu.queue.Len())
+	re.Nil(controller.splitScatterQueue.mu.queue.Get(101))
 }
 
 func TestObserveSplitScatterRegionDefersExpiredQueueCompactionUntilCandidateSelection(t *testing.T) {
@@ -254,25 +252,25 @@ func TestObserveSplitScatterRegionDefersExpiredQueueCompactionUntilCandidateSele
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
-	controller.splitScatter.mu.Lock()
-	controller.splitScatter.mu.pending.Remove(101)
-	controller.splitScatter.mu.Unlock()
+	controller.splitScatterQueue.mu.Lock()
+	controller.splitScatterQueue.mu.pending.Remove(101)
+	controller.splitScatterQueue.mu.Unlock()
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 
-	controller.splitScatter.mu.RLock()
-	re.Equal(2, controller.splitScatter.mu.queue.Len())
-	re.NotNil(controller.splitScatter.mu.queue.Get(101))
-	controller.splitScatter.mu.RUnlock()
+	controller.splitScatterQueue.mu.RLock()
+	re.Equal(2, controller.splitScatterQueue.mu.queue.Len())
+	re.NotNil(controller.splitScatterQueue.mu.queue.Get(101))
+	controller.splitScatterQueue.mu.RUnlock()
 
-	candidates := controller.splitScatter.getCandidates(1)
+	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
 	re.Equal(uint64(102), candidates[0].regionID)
 
-	controller.splitScatter.mu.RLock()
-	defer controller.splitScatter.mu.RUnlock()
-	re.Equal(1, controller.splitScatter.mu.queue.Len())
-	re.Nil(controller.splitScatter.mu.queue.Get(101))
+	controller.splitScatterQueue.mu.RLock()
+	defer controller.splitScatterQueue.mu.RUnlock()
+	re.Equal(1, controller.splitScatterQueue.mu.queue.Len())
+	re.Nil(controller.splitScatterQueue.mu.queue.Get(101))
 }
 
 func TestObserveSplitScatterRegionPreservesRetryBackoffAcrossHeartbeats(t *testing.T) {
@@ -284,20 +282,20 @@ func TestObserveSplitScatterRegionPreservesRetryBackoffAcrossHeartbeats(t *testi
 	putSplitScatterRegion(tc, 101, "a", "b", 90)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-	controller.splitScatter.recordFailure(101)
+	controller.splitScatterQueue.recordFailure(101)
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
-	re.Empty(controller.splitScatter.getCandidates(1))
+	re.Empty(controller.splitScatterQueue.getCandidates(1))
 
-	controller.splitScatter.mu.Lock()
-	entry := controller.splitScatter.mu.queue.Get(101)
+	controller.splitScatterQueue.mu.Lock()
+	entry := controller.splitScatterQueue.mu.queue.Get(101)
 	re.NotNil(entry)
-	item := entry.Value.(*splitScatterPriorityItem)
+	item := entry.Value.(*splitScatterQueueItem)
 	item.last = time.Now().Add(-2 * splitScatterRetryBaseInterval)
-	controller.splitScatter.mu.queue.Put(entry.Priority, item)
-	controller.splitScatter.mu.Unlock()
+	controller.splitScatterQueue.mu.queue.Put(entry.Priority, item)
+	controller.splitScatterQueue.mu.Unlock()
 
-	candidates := controller.splitScatter.getCandidates(1)
+	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
 	re.Equal(uint64(101), candidates[0].regionID)
 }
@@ -314,7 +312,7 @@ func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *tes
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 
-	candidates := controller.splitScatter.getCandidates(2)
+	candidates := controller.splitScatterQueue.getCandidates(2)
 	re.Len(candidates, 2)
 	re.Equal(uint64(101), candidates[0].regionID)
 	re.Equal(uint64(102), candidates[1].regionID)
@@ -330,9 +328,9 @@ func TestHasPotentialPendingSplitScatterRegions(t *testing.T) {
 	controller.RecordSplitScatterBatch(100, []uint64{101})
 	re.True(controller.HasPotentialPendingSplitScatterRegions())
 
-	controller.splitScatter.remove(100)
+	controller.splitScatterQueue.remove(100)
 	re.True(controller.HasPotentialPendingSplitScatterRegions())
-	controller.splitScatter.remove(101)
+	controller.splitScatterQueue.remove(101)
 	re.False(controller.HasPotentialPendingSplitScatterRegions())
 }
 
@@ -391,16 +389,16 @@ func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, regionID uint64, sta
 }
 
 func splitScatterPendingCount(controller *Controller) int {
-	controller.splitScatter.mu.RLock()
-	defer controller.splitScatter.mu.RUnlock()
-	return controller.splitScatter.pendingCountLocked()
+	controller.splitScatterQueue.mu.RLock()
+	defer controller.splitScatterQueue.mu.RUnlock()
+	return controller.splitScatterQueue.pendingCountLocked()
 }
 
 func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uint64) string {
 	t.Helper()
-	controller.splitScatter.mu.RLock()
-	defer controller.splitScatter.mu.RUnlock()
-	item, ok := controller.splitScatter.getPendingItemLocked(regionID)
+	controller.splitScatterQueue.mu.RLock()
+	defer controller.splitScatterQueue.mu.RUnlock()
+	item, ok := controller.splitScatterQueue.getPendingItemLocked(regionID)
 	require.True(t, ok)
 	return item.group
 }

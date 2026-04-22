@@ -29,7 +29,10 @@ import (
 const (
 	splitScatterPendingTTL        = 3 * time.Minute
 	splitScatterQueueGCInterval   = time.Minute
-	splitScatterQueueCapacity     = 1024
+	// splitScatterQueueCapacity is a fixed, intentionally generous upper bound.
+	// This queue tracks only pending split-scatter regions, so using a large
+	// static capacity keeps the hot path simpler than incremental growth.
+	splitScatterQueueCapacity     = 65536
 	splitScatterDispatchLimit     = 4
 	splitScatterRetryBaseInterval = time.Second
 	splitScatterRetryMaxInterval  = time.Minute
@@ -37,21 +40,25 @@ const (
 
 type splitScatterPendingItem struct {
 	group     string
+	// rangeHint is the best-effort key range used to seed table/index-scoped
+	// scatter distribution before the first dispatch of this pending region.
 	rangeHint splitScatterRangeHint
 }
 
-type splitScatterPriorityItem struct {
+type splitScatterQueueItem struct {
 	regionID uint64
-	attempt  int
-	last     time.Time
+	// attempt and last implement per-region retry backoff after transient
+	// dispatch failures such as add-operator rejection or temporary limits.
+	attempt int
+	last    time.Time
 }
 
 // ID implements the priority queue item interface.
-func (i *splitScatterPriorityItem) ID() uint64 {
+func (i *splitScatterQueueItem) ID() uint64 {
 	return i.regionID
 }
 
-func (i *splitScatterPriorityItem) ready(now time.Time) bool {
+func (i *splitScatterQueueItem) ready(now time.Time) bool {
 	if i.attempt <= 0 || i.last.IsZero() {
 		return true
 	}
@@ -68,6 +75,9 @@ type splitScatterCandidate struct {
 	rangeHint splitScatterRangeHint
 }
 
+// splitScatterRangeHint is a derived key range for the current table/index
+// group. When available, split-scatter seeds the scatterer's group
+// distribution with the existing region count in this range before dispatch.
 type splitScatterRangeHint struct {
 	startKey []byte
 	endKey   []byte
@@ -85,7 +95,6 @@ func (r splitScatterRangeHint) clone() splitScatterRangeHint {
 }
 
 type splitScatterManager struct {
-	queueCapacity int
 	activeUntil   atomic.Int64
 	mu            struct {
 		syncutil.RWMutex
@@ -95,11 +104,9 @@ type splitScatterManager struct {
 }
 
 func newSplitScatterManager(ctx context.Context) *splitScatterManager {
-	m := &splitScatterManager{
-		queueCapacity: splitScatterQueueCapacity,
-	}
+	m := &splitScatterManager{}
 	m.mu.pending = cache.NewIDTTL(ctx, splitScatterQueueGCInterval, splitScatterPendingTTL)
-	m.mu.queue = cache.NewPriorityQueue(m.queueCapacity)
+	m.mu.queue = cache.NewPriorityQueue(splitScatterQueueCapacity)
 	return m
 }
 
@@ -117,7 +124,6 @@ func (m *splitScatterManager) recordBatch(sourceRegionID uint64, newRegionIDs []
 	}
 	m.mu.pending.Put(sourceRegionID, &splitScatterPendingItem{group: group})
 	m.compactQueueLocked()
-	m.growQueueLocked(m.pendingCountLocked())
 }
 
 func (m *splitScatterManager) observe(region *core.RegionInfo) {
@@ -135,11 +141,11 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	m.extendPotentialPendingTTL(time.Now())
 	priority := splitScatterPriority(splitScatterCPUScore(region))
 	if entry := m.mu.queue.Get(region.GetID()); entry != nil {
-		item := entry.Value.(*splitScatterPriorityItem)
+		item := entry.Value.(*splitScatterQueueItem)
 		m.mu.queue.Put(priority, item)
 		return
 	}
-	m.putQueueItemLocked(priority, &splitScatterPriorityItem{
+	m.putQueueItemLocked(priority, &splitScatterQueueItem{
 		regionID: region.GetID(),
 	})
 }
@@ -160,7 +166,7 @@ func (m *splitScatterManager) getCandidates(limit int) []splitScatterCandidate {
 	entries := m.mu.queue.Elems()
 	candidates := make([]splitScatterCandidate, 0, min(limit, len(entries)))
 	for _, entry := range entries {
-		item := entry.Value.(*splitScatterPriorityItem)
+		item := entry.Value.(*splitScatterQueueItem)
 		pendingItem, ok := m.getPendingItemLocked(item.regionID)
 		if !ok {
 			continue
@@ -192,7 +198,7 @@ func (m *splitScatterManager) recordFailure(regionID uint64) {
 	if entry == nil {
 		return
 	}
-	item := entry.Value.(*splitScatterPriorityItem)
+	item := entry.Value.(*splitScatterQueueItem)
 	item.attempt++
 	item.last = time.Now()
 	m.mu.queue.Put(entry.Priority, item)
@@ -234,30 +240,15 @@ func (m *splitScatterManager) compactQueueLocked() {
 	}
 }
 
-func (m *splitScatterManager) growQueueLocked(minCapacity int) {
-	if minCapacity <= m.queueCapacity {
+func (m *splitScatterManager) putQueueItemLocked(priority int, item *splitScatterQueueItem) {
+	if m.mu.queue.Put(priority, item) {
 		return
 	}
-	newCapacity := m.queueCapacity
-	for newCapacity < minCapacity {
-		newCapacity *= 2
-	}
-	rebuilt := cache.NewPriorityQueue(newCapacity)
-	for _, entry := range m.mu.queue.Elems() {
-		rebuilt.Put(entry.Priority, entry.Value)
-	}
-	m.mu.queue = rebuilt
-	m.queueCapacity = newCapacity
-}
-
-func (m *splitScatterManager) putQueueItemLocked(priority int, item *splitScatterPriorityItem) {
-	for {
-		if m.mu.queue.Put(priority, item) {
-			return
-		}
-		m.compactQueueLocked()
-		m.growQueueLocked(max(m.pendingCountLocked(), m.mu.queue.Len()+1))
-	}
+	m.compactQueueLocked()
+	// With the fixed large queue capacity, a second Put only fails for extreme
+	// oversized batches whose low-priority tail must wait for a later heartbeat
+	// to re-enter the queue.
+	m.mu.queue.Put(priority, item)
 }
 
 func (m *splitScatterManager) extendPotentialPendingTTL(now time.Time) {
@@ -299,18 +290,18 @@ func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
 
 // RecordSplitScatterBatch records a newly split batch for later scatter.
 func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
-	c.splitScatter.recordBatch(sourceRegionID, newRegionIDs)
+	c.splitScatterQueue.recordBatch(sourceRegionID, newRegionIDs)
 }
 
 // ObserveSplitScatterRegion updates split-scatter priority using the latest region stats.
 func (c *Controller) ObserveSplitScatterRegion(region *core.RegionInfo) {
-	c.splitScatter.observe(region)
+	c.splitScatterQueue.observe(region)
 }
 
 // HasPotentialPendingSplitScatterRegions returns whether split-scatter may have
 // pending work. It is a cheap fast-path guard for heartbeat hot paths.
 func (c *Controller) HasPotentialPendingSplitScatterRegions() bool {
-	return c.splitScatter.hasPotentialPending()
+	return c.splitScatterQueue.hasPotentialPending()
 }
 
 // DispatchSplitScatterRegionsForTest dispatches pending split-scatter regions.
@@ -320,35 +311,35 @@ func (c *Controller) DispatchSplitScatterRegionsForTest() {
 }
 
 func (c *Controller) dispatchSplitScatterRegions() {
-	if c.splitScatterer == nil {
+	if c.regionScatterer == nil {
 		return
 	}
-	candidates := c.splitScatter.getCandidates(splitScatterDispatchLimit)
+	candidates := c.splitScatterQueue.getCandidates(splitScatterDispatchLimit)
 	for _, candidate := range candidates {
 		region := c.cluster.GetRegion(candidate.regionID)
 		if region == nil {
-			c.splitScatter.remove(candidate.regionID)
+			c.splitScatterQueue.remove(candidate.regionID)
 			continue
 		}
 		if candidate.rangeHint.valid() {
-			c.splitScatterer.SeedGroupDistributionByRange(candidate.group, candidate.rangeHint.startKey, candidate.rangeHint.endKey)
+			c.regionScatterer.SeedGroupDistributionByRange(candidate.group, candidate.rangeHint.startKey, candidate.rangeHint.endKey)
 		}
-		op, err := c.splitScatterer.Scatter(region, candidate.group, false)
+		op, err := c.regionScatterer.Scatter(region, candidate.group, false)
 		if err != nil {
-			c.splitScatter.recordFailure(candidate.regionID)
+			c.splitScatterQueue.recordFailure(candidate.regionID)
 			continue
 		}
 		if op != nil {
 			if c.opController.AddWaitingOperator(op) == 0 {
-				c.splitScatter.recordFailure(candidate.regionID)
+				c.splitScatterQueue.recordFailure(candidate.regionID)
 				continue
 			}
 			if c.opController.GetOperator(region.GetID()) != op {
-				c.splitScatter.recordFailure(candidate.regionID)
+				c.splitScatterQueue.recordFailure(candidate.regionID)
 				continue
 			}
-			c.splitScatterer.Commit(region, op, candidate.group)
+			c.regionScatterer.Commit(region, op, candidate.group)
 		}
-		c.splitScatter.remove(candidate.regionID)
+		c.splitScatterQueue.remove(candidate.regionID)
 	}
 }
