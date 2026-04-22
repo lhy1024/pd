@@ -26,10 +26,12 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mcs/scheduling/server"
 	"github.com/tikv/pd/pkg/mcs/scheduling/server/apis/v1"
@@ -46,7 +48,6 @@ import (
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/pkg/versioninfo"
 	"github.com/tikv/pd/tests"
-	"go.uber.org/zap"
 )
 
 type apiTestSuite struct {
@@ -561,7 +562,7 @@ func (suite *apiTestSuite) checkFollowerForward(cluster *tests.TestCluster) {
 			return err == nil && len(res.Members) == 1
 		})
 		cluster.DeleteServer(follower.GetConfig().Name)
-		follower.Destroy()
+		re.NoError(follower.Destroy())
 	}()
 	re.NoError(follower.Run())
 	re.NotEmpty(cluster.WaitLeader())
