@@ -39,10 +39,14 @@ const (
 )
 
 type splitScatterPendingItem struct {
-	group     string
+	group string
 	// rangeHint is the best-effort key range used to seed table/index-scoped
 	// scatter distribution before the first dispatch of this pending region.
 	rangeHint splitScatterRangeHint
+	// resolved records whether group/rangeHint have already been derived from the
+	// region key range. Region boundaries stay stable while the split-scatter
+	// item is pending, so later heartbeats only need to refresh the CPU score.
+	resolved bool
 }
 
 type splitScatterQueueItem struct {
@@ -134,10 +138,13 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	if !ok {
 		return
 	}
-	hint := resolveSplitScatterGroup(region, item.group)
-	item.group = hint.group
-	item.rangeHint = hint.rangeHint
-	m.mu.pending.Put(region.GetID(), item)
+	if !item.resolved {
+		hint := resolveSplitScatterGroup(region, item.group)
+		item.group = hint.group
+		item.rangeHint = hint.rangeHint
+		item.resolved = true
+		m.mu.pending.Put(region.GetID(), item)
+	}
 	m.extendPotentialPendingTTL(time.Now())
 	priority := splitScatterPriority(splitScatterCPUScore(region))
 	if entry := m.mu.queue.Get(region.GetID()); entry != nil {

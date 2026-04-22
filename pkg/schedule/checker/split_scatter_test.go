@@ -109,6 +109,37 @@ func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
 	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
 
+func TestObserveSplitScatterRegionCachesResolvedGroupHint(t *testing.T) {
+	re := require.New(t)
+	controller, tc, _, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	controller.RecordSplitScatterBatch(100, []uint64{101})
+	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterIndexKey(42, 7, "a"), newSplitScatterIndexKey(42, 7, "m"), 120)
+
+	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
+
+	firstGroup := splitScatterPendingGroup(t, controller, 101)
+	re.Equal("split-scatter-index-42-7", firstGroup)
+
+	expectedRange := splitScatterPrefixRange(splitScatterIndexKeyPrefix(42, 7))
+	firstCandidate := controller.splitScatterQueue.getCandidates(1)
+	re.Len(firstCandidate, 1)
+	re.Equal(expectedRange.startKey, firstCandidate[0].rangeHint.startKey)
+	re.Equal(expectedRange.endKey, firstCandidate[0].rangeHint.endKey)
+
+	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(42, "m"), 80)
+	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
+
+	secondGroup := splitScatterPendingGroup(t, controller, 101)
+	re.Equal(firstGroup, secondGroup)
+
+	secondCandidate := controller.splitScatterQueue.getCandidates(1)
+	re.Len(secondCandidate, 1)
+	re.Equal(expectedRange.startKey, secondCandidate[0].rangeHint.startKey)
+	re.Equal(expectedRange.endKey, secondCandidate[0].rangeHint.endKey)
+}
+
 func TestObserveSplitScatterRegionUsesTableGroupAndRangeHintForRecordKey(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
