@@ -72,7 +72,7 @@ var (
 	}
 	hotDirectionCounterDims = func() []string {
 		dims := make([]string, 0, utils.DimLen*2+1)
-		for dim := 0; dim < utils.DimLen; dim++ {
+		for dim := range utils.DimLen {
 			name := utils.DimToString(dim)
 			if name == "" {
 				continue

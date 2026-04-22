@@ -486,6 +486,54 @@ func TestReadCPUByteErrorReductionGateRejectsReverseOvershoot(t *testing.T) {
 	re.False(bs.isTolerance(utils.CPUDim, false))
 }
 
+func TestFilterSrcStoresReadCPUBytePendingCap(t *testing.T) {
+	re := require.New(t)
+	cancel, _, tc, oc := prepareSchedulersTest()
+	defer cancel()
+	sche, err := CreateScheduler(types.BalanceHotRegionScheduler, oc, storage.NewStorageWithMemoryBackend(), ConfigJSONDecoder([]byte("null")))
+	re.NoError(err)
+	hb := sche.(*hotScheduler)
+	tc.SetClusterVersion(versioninfo.MustParseVersion("8.5.7"))
+	hb.conf.ReadPriorities = []string{utils.CPUPriority, utils.BytePriority}
+
+	store := core.NewStoreInfoWithLabel(1, map[string]string{})
+	src := &statistics.StoreLoadDetail{
+		StoreSummaryInfo: &statistics.StoreSummaryInfo{StoreInfo: store},
+		LoadPred: &statistics.StoreLoadPred{
+			Current: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 180,
+				utils.CPUDim:  594,
+			}},
+			Future: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 120,
+				utils.CPUDim:  513,
+			}},
+			Expect: statistics.StoreLoad{Loads: statistics.Loads{
+				utils.ByteDim: 60,
+				utils.CPUDim:  100,
+			}},
+		},
+		HotPeers: []*statistics.HotPeerStat{{
+			StoreID:  1,
+			RegionID: 1,
+			Loads: []float64{
+				utils.ByteDim: 50,
+				utils.CPUDim:  30,
+			},
+		}},
+	}
+	bs := newBalanceSolver(hb, tc, utils.Read, transferLeader)
+	bs.stLoadDetail = map[uint64]*statistics.StoreLoadDetail{1: src}
+
+	re.Len(bs.filterSrcStores(), 1)
+
+	hb.regionPendings[1] = &pendingInfluence{froms: []uint64{1}}
+	re.Len(bs.filterSrcStores(), 1)
+
+	hb.regionPendings[2] = &pendingInfluence{froms: []uint64{1}}
+	re.Empty(bs.filterSrcStores())
+}
+
 func TestReadCPUByteErrorReductionGateDoesNotLetByteRescueCPUTie(t *testing.T) {
 	re := require.New(t)
 	srcStore := core.NewStoreInfoWithLabel(1, nil)

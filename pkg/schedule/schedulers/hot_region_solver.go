@@ -423,6 +423,7 @@ type hotPeerFilterReason string
 
 const (
 	readCPUByteRejectedDecisionLogLimitPerReason                     = 5
+	readCPUByteMaxPendingOpsPerSrc                                   = 2
 	hotPeerFilterKept                            hotPeerFilterReason = "kept"
 	hotPeerFilterPending                         hotPeerFilterReason = "pending"
 	hotPeerFilterCooldown                        hotPeerFilterReason = "cooldown"
@@ -494,7 +495,7 @@ func (bs *balanceSolver) isReadCPUByte() bool {
 	}
 }
 
-func (bs *balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
+func (*balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
 	if detail == nil || detail.LoadPred == nil {
 		return nil
 	}
@@ -612,6 +613,10 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 			srcToleranceRatio += tiflashToleranceRatioCorrection
 		}
 		if len(detail.HotPeers) == 0 {
+			continue
+		}
+		if bs.isReadCPUByte() && bs.countPendingOpsFromStore(id) >= readCPUByteMaxPendingOpsPerSrc {
+			hotSchedulerResultCounter.WithLabelValues("src-store-pending-cap-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			continue
 		}
 
@@ -1023,9 +1028,22 @@ func (bs *balanceSolver) isTolerance(dim int, reverse bool) bool {
 	if bs.shouldRejectReadCPUByteByErrorReduction() {
 		return false
 	}
-	ampFactor := pendingAmpFactor
-	pendingAmp := 1 + ampFactor*srcRate/(srcRate-dstRate)
+	pendingAmp := 1 + pendingAmpFactor*srcRate/(srcRate-dstRate)
 	return srcRate-pendingAmp*srcPending > dstRate+pendingAmp*dstPending
+}
+
+// countPendingOpsFromStore counts how many pending ops originate from the given store.
+func (bs *balanceSolver) countPendingOpsFromStore(storeID uint64) int {
+	count := 0
+	for _, p := range bs.sche.regionPendings {
+		for _, from := range p.froms {
+			if from == storeID {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 // shouldRejectReadCPUByteByErrorReduction only allows ops that strictly reduce the first-priority CPU error.
