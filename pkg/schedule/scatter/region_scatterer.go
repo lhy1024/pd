@@ -338,6 +338,12 @@ func (r *RegionScatterer) SeedGroupDistributionByRange(group string, startKey, e
 		ctx := r.getOrCreateSpecialEngineContext(engine)
 		ctx.selectedPeer.InitGroupDistribution(group, distribution)
 	}
+	log.Info("seed internal scatter distribution by range",
+		zap.String("group", group),
+		zap.Binary("start-key", startKey),
+		zap.Binary("end-key", endKey),
+		zap.String("ordinary-peer-distribution", formatStoreCounts(ordinaryPeer)),
+		zap.String("ordinary-leader-distribution", formatStoreCounts(ordinaryLeader)))
 }
 
 // ScatterRegionsByRange directly scatter regions by ScatterRegions
@@ -629,6 +635,13 @@ func (r *RegionScatterer) scatterRegionWithDesc(region *core.RegionInfo, group s
 	}
 
 	if isSameDistribution(region, targetPeers, targetLeader) {
+		if logInternalScatter {
+			log.Info("internal scatter keeps original placement",
+				zap.Uint64("region-id", region.GetID()),
+				zap.String("group", group),
+				zap.Strings("current-peers", formatScatterTargetPeers(scatterPlacementPeers(region))),
+				zap.Uint64("current-leader", region.GetLeader().GetStoreId()))
+		}
 		scatterUnnecessaryCounter.Inc()
 		r.Update(region, targetPeers, targetLeader, group)
 		return nil, nil
@@ -840,6 +853,14 @@ func formatScatterTargetPeers(targetPeers map[uint64]*metapb.Peer) []string {
 	return peers
 }
 
+func scatterPlacementPeers(region *core.RegionInfo) map[uint64]*metapb.Peer {
+	peers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
+	for _, peer := range region.GetPeers() {
+		peers[peer.GetStoreId()] = peer
+	}
+	return peers
+}
+
 func (r *RegionScatterer) classifyPlacementStores(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer) ([]uint64, []uint64, map[string][]uint64, map[string][]uint64) {
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
 	ordinaryOldStores := make([]uint64, 0, len(region.GetPeers()))
@@ -900,6 +921,15 @@ func (r *RegionScatterer) Commit(region *core.RegionInfo, op *operator.Operator,
 		return
 	}
 	targetPeers, targetLeader := scatterPlacementAfterOperator(region, op)
+	if op.Desc() == InternalScatterOperatorDesc {
+		log.Info("internal scatter commit placement",
+			zap.Uint64("region-id", region.GetID()),
+			zap.String("group", group),
+			zap.Strings("old-peers", formatScatterTargetPeers(scatterPlacementPeers(region))),
+			zap.Uint64("old-leader", region.GetLeader().GetStoreId()),
+			zap.Strings("new-peers", formatScatterTargetPeers(targetPeers)),
+			zap.Uint64("new-leader", targetLeader))
+	}
 	r.Update(region, targetPeers, targetLeader, group)
 }
 
