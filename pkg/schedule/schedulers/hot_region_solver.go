@@ -505,7 +505,7 @@ func (bs *balanceSolver) hotScheduleScopeKey() hotScheduleScopeKey {
 	}
 }
 
-func (bs *balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
+func (*balanceSolver) sourceLoadForQualification(detail *statistics.StoreLoadDetail) *statistics.StoreLoad {
 	if detail == nil || detail.LoadPred == nil {
 		return nil
 	}

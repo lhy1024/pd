@@ -16,7 +16,6 @@ package schedulers
 
 import (
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -231,10 +230,6 @@ func (s *baseHotScheduler) summaryPendingInfluence(storeInfos map[uint64]*statis
 			})
 		}
 	}
-}
-
-func normalizeHotLoadSignature(load float64) float64 {
-	return math.Round(load*1000) / 1000
 }
 
 func (s *baseHotScheduler) randomType() resourceType {
