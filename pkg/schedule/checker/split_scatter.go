@@ -27,8 +27,8 @@ import (
 )
 
 const (
-	splitScatterPendingTTL        = 3 * time.Minute
-	splitScatterQueueGCInterval   = time.Minute
+	splitScatterPendingTTL      = 3 * time.Minute
+	splitScatterQueueGCInterval = time.Minute
 	// splitScatterQueueCapacity is a fixed, intentionally generous upper bound.
 	// This queue tracks only pending split-scatter regions, so using a large
 	// static capacity keeps the hot path simpler than incremental growth.
@@ -99,8 +99,8 @@ func (r splitScatterRangeHint) clone() splitScatterRangeHint {
 }
 
 type splitScatterManager struct {
-	activeUntil   atomic.Int64
-	mu            struct {
+	activeUntil atomic.Int64
+	mu          struct {
 		syncutil.RWMutex
 		pending *cache.TTLUint64
 		queue   *cache.PriorityQueue
@@ -127,7 +127,6 @@ func (m *splitScatterManager) recordBatch(sourceRegionID uint64, newRegionIDs []
 		m.mu.pending.Put(regionID, &splitScatterPendingItem{group: group})
 	}
 	m.mu.pending.Put(sourceRegionID, &splitScatterPendingItem{group: group})
-	m.compactQueueLocked()
 }
 
 func (m *splitScatterManager) observe(region *core.RegionInfo) {
