@@ -17,9 +17,10 @@ package api
 import (
 	"net/http"
 
+	"github.com/unrolled/render"
+
 	"github.com/tikv/pd/pkg/versioninfo"
 	"github.com/tikv/pd/server"
-	"github.com/unrolled/render"
 )
 
 type statusHandler struct {
@@ -34,6 +35,7 @@ func newStatusHandler(svr *server.Server, rd *render.Render) *statusHandler {
 	}
 }
 
+// GetPDStatus gets the build info of PD server.
 // @Summary  Get the build info of PD server.
 // @Produce  json
 // @Success  200  {object}  versioninfo.Status
@@ -44,6 +46,7 @@ func (h *statusHandler) GetPDStatus(w http.ResponseWriter, _ *http.Request) {
 		GitHash:        versioninfo.PDGitHash,
 		Version:        versioninfo.PDReleaseVersion,
 		StartTimestamp: h.svr.StartTimestamp(),
+		KernelType:     versioninfo.PDKernelType,
 	}
 
 	h.rd.JSON(w, http.StatusOK, version)

@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,12 +33,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tikv/pd/tools/pd-ut/alloc"
 	"go.uber.org/zap"
+
+	"github.com/tikv/pd/tools/pd-ut/alloc"
 
 	// Set the correct value when it runs inside docker.
 	_ "go.uber.org/automaxprocs"
 )
+
+const (
+	deadlockTag = "deadlock"
+	nextGenTag  = "nextgen"
+)
+
+// initTags sets up the tags.
+func initTags() {
+	tmpTags := []string{deadlockTag}
+
+	if isNextGenEnabled() {
+		tmpTags = append(tmpTags, nextGenTag)
+	}
+
+	tags = strings.Join(tmpTags, " ")
+}
+
+func isNextGenEnabled() bool {
+	return os.Getenv("NEXT_GEN") == "1"
+}
 
 func usage() bool {
 	msg := `// run all tests
@@ -107,9 +128,14 @@ var (
 	coverProfile string
 	ignoreDirs   string
 	cache        bool
+	// tags for tests
+	tags string = deadlockTag
 )
 
 func main() {
+	// Initialize tags
+	initTags()
+
 	race = handleFlag("--race")
 	parallelStr := stripFlag("--parallel")
 	junitFile = stripFlag("--junitfile")
@@ -291,36 +317,27 @@ func cmdRun(args ...string) bool {
 	}
 	tasks := make([]task, 0, 5000)
 	start := time.Now()
-	// run all tests
-	if len(args) == 0 {
+
+	switch len(args) {
+	case 0, 1: // 0: run all tests, 1: run tests for a single package
+		if len(args) == 1 {
+			dirs := strings.Split(args[0], ",")
+			var dirPkgs []string
+			for _, pkg := range pkgs {
+				for _, dir := range dirs {
+					if strings.Contains(pkg, dir) {
+						dirPkgs = append(dirPkgs, pkg)
+					}
+				}
+			}
+			pkgs = dirPkgs
+		}
 		tasks, err = runExistingTestCases(pkgs)
 		if err != nil {
 			fmt.Println("run existing test cases error", err)
 			return false
 		}
-	}
-
-	// run tests for a single package
-	if len(args) == 1 {
-		dirs := strings.Split(args[0], ",")
-		var dirPkgs []string
-		for _, pkg := range pkgs {
-			for _, dir := range dirs {
-				if strings.Contains(pkg, dir) {
-					dirPkgs = append(dirPkgs, pkg)
-				}
-			}
-		}
-
-		tasks, err = runExistingTestCases(dirPkgs)
-		if err != nil {
-			fmt.Println("run existing test cases error", err)
-			return false
-		}
-	}
-
-	// run a single test
-	if len(args) == 2 {
+	case 2:
 		pkg := args[0]
 		err := buildTestBinary(pkg)
 		if err != nil {
@@ -350,7 +367,7 @@ func cmdRun(args ...string) bool {
 	taskCh := make(chan task, 100)
 	works := make([]numa, parallel)
 	var wg sync.WaitGroup
-	for i := 0; i < parallel; i++ {
+	for i := range parallel {
 		wg.Add(1)
 		go works[i].worker(&wg, taskCh)
 	}
@@ -364,6 +381,14 @@ func cmdRun(args ...string) bool {
 	close(taskCh)
 	wg.Wait()
 	fmt.Println("run all tasks takes", time.Since(start))
+
+	success := true
+	for _, work := range works {
+		if work.Fail {
+			success = false
+			break
+		}
+	}
 
 	if junitFile != "" {
 		out := collectTestResults(works)
@@ -382,12 +407,7 @@ func cmdRun(args ...string) bool {
 		collectCoverProfileFile()
 	}
 
-	for _, work := range works {
-		if work.Fail {
-			return false
-		}
-	}
-	return true
+	return success
 }
 
 func runExistingTestCases(pkgs []string) (tasks []task, err error) {
@@ -465,7 +485,7 @@ func stripFlag(flag string) string {
 
 func handleFlag(f string) (found bool) {
 	tmp := os.Args[:0]
-	for i := 0; i < len(os.Args); i++ {
+	for i := range os.Args {
 		if os.Args[i] == f {
 			found = true
 			continue
@@ -482,7 +502,7 @@ type task struct {
 }
 
 func (t *task) String() string {
-	return t.pkg + " " + t.test
+	return t.pkg + "." + t.test
 }
 
 func listTestCases(pkg string, tasks []task) []task {
@@ -585,7 +605,7 @@ func (n *numa) runTestCase(pkg string, fn string) testResult {
 	var buf bytes.Buffer
 	var err error
 	var start time.Time
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		cmd := n.testCommand(pkg, fn)
 		cmd.Dir = filepath.Join(workDir, pkg)
 		// Combine the test case output, so the run result for failed cases can be displayed.
@@ -683,7 +703,7 @@ func (*numa) testCommand(pkg string, fn string) *exec.Cmd {
 		args = append(args, "-test.coverprofile", tmpFile)
 	}
 	if strings.Contains(fn, "Suite") {
-		args = append(args, "-test.cpu", fmt.Sprint(parallel/2))
+		args = append(args, "-test.cpu", strconv.Itoa(parallel/2))
 	} else {
 		args = append(args, "-test.cpu", "1")
 	}
@@ -719,8 +739,8 @@ func generateBuildCache() error {
 		return nil
 	}
 	fmt.Println("generate build cache")
-	// cd cmd/pd-server && go test -tags=tso_function_test,deadlock -exec-=true -vet=off -toolexec=go-compile-without-link
-	cmd := exec.Command("go", "test", "-exec=true", "-vet", "off", "--tags=tso_function_test,deadlock")
+	// cd cmd/pd-server && go test -tags=$(tags) -exec-=true -vet=off -toolexec=go-compile-without-link
+	cmd := exec.Command("go", "test", "-exec=true", "-vet", "off", "--tags="+tags)
 	goCompileWithoutLink := fmt.Sprintf("-toolexec=%s", filepath.Join(workDir, "tools", "pd-ut", "go-compile-without-link.sh"))
 	cmd.Dir = filepath.Join(workDir, "cmd", "pd-server")
 	if strings.Contains(workDir, integrationsTestPath) {
@@ -745,7 +765,7 @@ func buildTestBinaryMulti(pkgs []string) ([]byte, error) {
 		return nil, withTrace(err)
 	}
 
-	// go test --exec=xprog --tags=tso_function_test,deadlock -vet=off --count=0 $(pkgs)
+	// go test --exec=xprog --tags=$(tags) -vet=off --count=0 $(pkgs)
 	// workPath just like `/pd/tests/integrations`
 	xprogPath := filepath.Join(workDir, "bin", "xprog")
 	if strings.Contains(workDir, integrationsTestPath) {
@@ -758,7 +778,7 @@ func buildTestBinaryMulti(pkgs []string) ([]byte, error) {
 
 	// We use 2 * parallel for `go build` to make it faster.
 	p := strconv.Itoa(parallel * 2)
-	cmd := exec.Command("go", "test", "-p", p, "--exec", xprogPath, "-vet", "off", "--tags=tso_function_test,deadlock")
+	cmd := exec.Command("go", "test", "-p", p, "--exec", xprogPath, "-vet", "off", "--tags="+tags)
 	if coverProfile != "" {
 		coverPkg := strings.Join([]string{".", "..."}, string(filepath.Separator))
 		if strings.Contains(workDir, integrationsTestPath) {
@@ -793,7 +813,7 @@ func buildTestBinaryMulti(pkgs []string) ([]byte, error) {
 
 func buildTestBinary(pkg string) error {
 	//nolint:gosec
-	cmd := exec.Command("go", "test", "-c", "-vet", "off", "--tags=tso_function_test,deadlock", "-o", testFileName(pkg), "-v")
+	cmd := exec.Command("go", "test", "-c", "-vet", "off", "--tags="+tags, "-o", testFileName(pkg), "-v")
 	if coverProfile != "" {
 		coverPkg := strings.Join([]string{".", "..."}, string(filepath.Separator))
 		cmd.Args = append(cmd.Args, "-cover", fmt.Sprintf("-coverpkg=%s", coverPkg))
@@ -872,7 +892,7 @@ func filter(input []string, f func(string) bool) []string {
 
 func shuffle(tasks []task) {
 	for i := 0; i < len(tasks); i++ {
-		pos := rand.Intn(len(tasks))
+		pos := rand.IntN(len(tasks))
 		tasks[i], tasks[pos] = tasks[pos], tasks[i]
 	}
 }

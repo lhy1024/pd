@@ -20,17 +20,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/suite"
+	"google.golang.org/grpc"
+
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/kvproto/pkg/tsopb"
-	"github.com/stretchr/testify/suite"
+
 	tso "github.com/tikv/pd/pkg/mcs/tso/server"
-	tsopkg "github.com/tikv/pd/pkg/tso"
+	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/tempurl"
-	tu "github.com/tikv/pd/pkg/utils/testutil"
+	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/pkg/utils/tsoutil"
 	"github.com/tikv/pd/tests"
-	"google.golang.org/grpc"
 )
 
 type tsoConsistencyTestSuite struct {
@@ -73,7 +75,7 @@ func (suite *tsoConsistencyTestSuite) SetupSuite() {
 	if suite.legacy {
 		suite.cluster, err = tests.NewTestCluster(suite.ctx, serverCount)
 	} else {
-		suite.cluster, err = tests.NewTestAPICluster(suite.ctx, serverCount)
+		suite.cluster, err = tests.NewTestClusterWithKeyspaceGroup(suite.ctx, serverCount)
 	}
 	re.NoError(err)
 	err = suite.cluster.RunInitialServers()
@@ -81,9 +83,11 @@ func (suite *tsoConsistencyTestSuite) SetupSuite() {
 	leaderName := suite.cluster.WaitLeader()
 	re.NotEmpty(leaderName)
 	suite.pdLeaderServer = suite.cluster.GetServer(leaderName)
+	err = suite.pdLeaderServer.BootstrapCluster()
+	re.NoError(err)
 	backendEndpoints := suite.pdLeaderServer.GetAddr()
 	if suite.legacy {
-		suite.pdClient = tu.MustNewGrpcClient(re, backendEndpoints)
+		suite.pdClient = testutil.MustNewGrpcClient(re, backendEndpoints)
 	} else {
 		suite.tsoServer, suite.tsoServerCleanup = tests.StartSingleTSOTestServer(suite.ctx, re, backendEndpoints, tempurl.Alloc())
 		suite.tsoClientConn, suite.tsoClient = tso.MustNewGrpcClient(re, suite.tsoServer.GetAddr())
@@ -99,40 +103,37 @@ func (suite *tsoConsistencyTestSuite) TearDownSuite() {
 	suite.cluster.Destroy()
 }
 
-func (suite *tsoConsistencyTestSuite) getClusterID() uint64 {
-	if suite.legacy {
-		return suite.pdLeaderServer.GetServer().ClusterID()
-	}
-	return suite.tsoServer.ClusterID()
-}
-
 func (suite *tsoConsistencyTestSuite) request(ctx context.Context, count uint32) *pdpb.Timestamp {
 	re := suite.Require()
-	clusterID := suite.getClusterID()
+	clusterID := keypath.ClusterID()
 	if suite.legacy {
 		req := &pdpb.TsoRequest{
-			Header:     &pdpb.RequestHeader{ClusterId: clusterID},
-			DcLocation: tsopkg.GlobalDCLocation,
-			Count:      count,
+			Header: &pdpb.RequestHeader{ClusterId: clusterID},
+			Count:  count,
 		}
 		tsoClient, err := suite.pdClient.Tso(ctx)
 		re.NoError(err)
-		defer tsoClient.CloseSend()
+		defer func() {
+			err := tsoClient.CloseSend()
+			re.NoError(err)
+		}()
 		re.NoError(tsoClient.Send(req))
 		resp, err := tsoClient.Recv()
 		re.NoError(err)
 		return checkAndReturnTimestampResponse(re, resp)
 	}
 	req := &tsopb.TsoRequest{
-		Header:     &tsopb.RequestHeader{ClusterId: clusterID},
-		DcLocation: tsopkg.GlobalDCLocation,
-		Count:      count,
+		Header: &tsopb.RequestHeader{ClusterId: clusterID},
+		Count:  count,
 	}
 	var resp *tsopb.TsoResponse
-	tu.Eventually(re, func() bool {
+	testutil.Eventually(re, func() bool {
 		tsoClient, err := suite.tsoClient.Tso(ctx)
 		re.NoError(err)
-		defer tsoClient.CloseSend()
+		defer func() {
+			err := tsoClient.CloseSend()
+			re.NoError(err)
+		}()
 		re.NoError(tsoClient.Send(req))
 		resp, err = tsoClient.Recv()
 		return err == nil && resp != nil
@@ -142,8 +143,8 @@ func (suite *tsoConsistencyTestSuite) request(ctx context.Context, count uint32)
 
 func (suite *tsoConsistencyTestSuite) TestRequestTSOConcurrently() {
 	suite.requestTSOConcurrently()
-	// Test Global TSO after the leader change
-	suite.pdLeaderServer.GetServer().GetMember().ResetLeader()
+	// Test TSO after the leader change
+	suite.pdLeaderServer.GetServer().GetMember().Resign()
 	suite.cluster.WaitLeader()
 	suite.requestTSOConcurrently()
 }
@@ -155,7 +156,7 @@ func (suite *tsoConsistencyTestSuite) requestTSOConcurrently() {
 
 	var wg sync.WaitGroup
 	wg.Add(tsoRequestConcurrencyNumber)
-	for i := 0; i < tsoRequestConcurrencyNumber; i++ {
+	for range tsoRequestConcurrencyNumber {
 		go func() {
 			defer wg.Done()
 			last := &pdpb.Timestamp{
@@ -163,7 +164,7 @@ func (suite *tsoConsistencyTestSuite) requestTSOConcurrently() {
 				Logical:  0,
 			}
 			var ts *pdpb.Timestamp
-			for j := 0; j < tsoRequestRound; j++ {
+			for range tsoRequestRound {
 				ts = suite.request(ctx, tsoCount)
 				// Check whether the TSO fallbacks
 				re.Equal(1, tsoutil.CompareTimestamp(ts, last))
@@ -190,7 +191,7 @@ func (suite *tsoConsistencyTestSuite) TestFallbackTSOConsistency() {
 	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(tsoRequestConcurrencyNumber)
-	for i := 0; i < tsoRequestConcurrencyNumber; i++ {
+	for range tsoRequestConcurrencyNumber {
 		go func() {
 			defer wg.Done()
 			last := &pdpb.Timestamp{
@@ -198,7 +199,7 @@ func (suite *tsoConsistencyTestSuite) TestFallbackTSOConsistency() {
 				Logical:  0,
 			}
 			var ts *pdpb.Timestamp
-			for j := 0; j < tsoRequestRound; j++ {
+			for range tsoRequestRound {
 				ts = suite.request(ctx, tsoCount)
 				re.Equal(1, tsoutil.CompareTimestamp(ts, last))
 				last = ts

@@ -21,16 +21,18 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
+	"github.com/unrolled/render"
+	"go.uber.org/zap"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/errs"
-	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
+	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/server"
-	"github.com/unrolled/render"
-	"go.uber.org/zap"
 )
 
 type memberHandler struct {
@@ -45,6 +47,7 @@ func newMemberHandler(svr *server.Server, rd *render.Render) *memberHandler {
 	}
 }
 
+// GetMembers gets all PD servers in the cluster.
 // @Tags     member
 // @Summary  List all PD servers in the cluster.
 // @Produce  json
@@ -61,7 +64,7 @@ func (h *memberHandler) GetMembers(w http.ResponseWriter, _ *http.Request) {
 }
 
 func getMembers(svr *server.Server) (*pdpb.GetMembersResponse, error) {
-	req := &pdpb.GetMembersRequest{Header: &pdpb.RequestHeader{ClusterId: svr.ClusterID()}}
+	req := &pdpb.GetMembersRequest{Header: &pdpb.RequestHeader{ClusterId: keypath.ClusterID()}}
 	grpcServer := &server.GrpcServer{Server: svr}
 	members, err := grpcServer.GetMembers(context.Background(), req)
 	if err != nil {
@@ -70,22 +73,16 @@ func getMembers(svr *server.Server) (*pdpb.GetMembersResponse, error) {
 	if members.GetHeader().GetError() != nil {
 		return nil, errors.WithStack(errors.New(members.GetHeader().GetError().String()))
 	}
-	dclocationDistribution := make(map[string][]uint64)
-	if !svr.IsAPIServiceMode() {
-		dclocationDistribution, err = svr.GetTSOAllocatorManager().GetClusterDCLocationsFromEtcd()
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-	}
+
 	for _, m := range members.GetMembers() {
 		var e error
 		m.BinaryVersion, e = svr.GetMember().GetMemberBinaryVersion(m.GetMemberId())
 		if e != nil {
-			log.Error("failed to load binary version", zap.Uint64("member", m.GetMemberId()), errs.ZapError(e))
+			log.Warn("failed to load binary version", zap.Uint64("member", m.GetMemberId()), errs.ZapError(e))
 		}
 		m.DeployPath, e = svr.GetMember().GetMemberDeployPath(m.GetMemberId())
 		if e != nil {
-			log.Error("failed to load deploy path", zap.Uint64("member", m.GetMemberId()), errs.ZapError(e))
+			log.Warn("failed to load deploy path", zap.Uint64("member", m.GetMemberId()), errs.ZapError(e))
 		}
 		if svr.GetMember().GetEtcdLeader() == 0 {
 			log.Warn("no etcd leader, skip get leader priority", zap.Uint64("member", m.GetMemberId()))
@@ -93,26 +90,20 @@ func getMembers(svr *server.Server) (*pdpb.GetMembersResponse, error) {
 		}
 		leaderPriority, e := svr.GetMember().GetMemberLeaderPriority(m.GetMemberId())
 		if e != nil {
-			log.Error("failed to load leader priority", zap.Uint64("member", m.GetMemberId()), errs.ZapError(e))
+			log.Warn("failed to load leader priority", zap.Uint64("member", m.GetMemberId()), errs.ZapError(e))
 			continue
 		}
 		m.LeaderPriority = int32(leaderPriority)
 		m.GitHash, e = svr.GetMember().GetMemberGitHash(m.GetMemberId())
 		if e != nil {
-			log.Error("failed to load git hash", zap.Uint64("member", m.GetMemberId()), errs.ZapError(e))
+			log.Warn("failed to load git hash", zap.Uint64("member", m.GetMemberId()), errs.ZapError(e))
 			continue
-		}
-		for dcLocation, serverIDs := range dclocationDistribution {
-			found := slice.Contains(serverIDs, m.MemberId)
-			if found {
-				m.DcLocation = dcLocation
-				break
-			}
 		}
 	}
 	return members, nil
 }
 
+// DeleteMemberByName removes a PD server from the cluster by name.
 // @Tags     member
 // @Summary  Remove a PD server from the cluster.
 // @Param    name  path  string  true  "PD server name"
@@ -151,13 +142,6 @@ func (h *memberHandler) DeleteMemberByName(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Delete dc-location info.
-	err = h.svr.GetMember().DeleteMemberDCLocationInfo(id)
-	if err != nil {
-		h.rd.JSON(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	// Remove member by id
 	_, err = etcdutil.RemoveEtcdMember(client, id)
 	if err != nil {
@@ -167,6 +151,7 @@ func (h *memberHandler) DeleteMemberByName(w http.ResponseWriter, r *http.Reques
 	h.rd.JSON(w, http.StatusOK, fmt.Sprintf("removed, pd: %s", name))
 }
 
+// DeleteMemberByID removes a PD server from the cluster by ID.
 // @Tags     member
 // @Summary  Remove a PD server from the cluster.
 // @Param    id  path  integer  true  "PD server Id"
@@ -190,13 +175,6 @@ func (h *memberHandler) DeleteMemberByID(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Delete dc-location info.
-	err = h.svr.GetMember().DeleteMemberDCLocationInfo(id)
-	if err != nil {
-		h.rd.JSON(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	client := h.svr.GetClient()
 	_, err = etcdutil.RemoveEtcdMember(client, id)
 	if err != nil {
@@ -206,6 +184,7 @@ func (h *memberHandler) DeleteMemberByID(w http.ResponseWriter, r *http.Request)
 	h.rd.JSON(w, http.StatusOK, fmt.Sprintf("removed, pd: %v", id))
 }
 
+// SetMemberPropertyByName sets the leader priority of a PD server.
 // FIXME: details of input json body params
 // @Tags     member
 // @Summary  Set leader priority of a PD member.
@@ -271,6 +250,7 @@ func newLeaderHandler(svr *server.Server, rd *render.Render) *leaderHandler {
 	}
 }
 
+// GetLeader gets the leader PD server of the cluster.
 // @Tags     leader
 // @Summary  Get the leader PD server of the cluster.
 // @Produce  json
@@ -280,6 +260,7 @@ func (h *leaderHandler) GetLeader(w http.ResponseWriter, _ *http.Request) {
 	h.rd.JSON(w, http.StatusOK, h.svr.GetLeader())
 }
 
+// ResignLeader resigns the current etcd leader.
 // @Tags     leader
 // @Summary  Transfer etcd leadership to another PD server.
 // @Produce  json
@@ -296,6 +277,7 @@ func (h *leaderHandler) ResignLeader(w http.ResponseWriter, _ *http.Request) {
 	h.rd.JSON(w, http.StatusOK, "The resign command is submitted.")
 }
 
+// TransferLeader transfers the etcd leadership to the specific PD server.
 // @Tags     leader
 // @Summary  Transfer etcd leadership to the specific PD server.
 // @Param    nextLeader  path  string  true  "PD server that transfer leader to"

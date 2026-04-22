@@ -1,4 +1,4 @@
-// Copyright 2023 TiKV Authors
+// Copyright 2023 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,12 +18,25 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 )
 
-func TestTS(t *testing.T) {
-	re := require.New(t)
+type tsSuite struct {
+	clusterSuite
+}
 
-	db := OpenTestDB(t)
+func TestTS(t *testing.T) {
+	suite.Run(t, &tsSuite{
+		clusterSuite: clusterSuite{
+			suiteName: "ts",
+		},
+	})
+}
+
+func (s *tsSuite) TestTS() {
+	re := require.New(s.T())
+
+	db := OpenTestDB(s.T())
 	db.MustExec("use test")
 	db.MustExec("drop table if exists t")
 	db.MustExec("create table t(a int, index i(a))")
@@ -42,4 +55,13 @@ func TestTS(t *testing.T) {
 	re.NotEqual(0, GetTimeFromTS(ts))
 
 	db.MustClose()
+}
+
+func TestMSTS(t *testing.T) {
+	suite.Run(t, &tsSuite{
+		clusterSuite: clusterSuite{
+			suiteName: "ts",
+			mode:      "ms",
+		},
+	})
 }

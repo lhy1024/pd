@@ -23,11 +23,14 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/schedule"
@@ -43,7 +46,6 @@ import (
 	"github.com/tikv/pd/pkg/statistics/buckets"
 	"github.com/tikv/pd/pkg/statistics/utils"
 	"github.com/tikv/pd/pkg/utils/typeutil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -1015,7 +1017,10 @@ func (h *Handler) GetHotStores() (*HotStoreStats, error) {
 	for _, store := range stores {
 		id := store.GetID()
 		if loads, ok := storesLoads[id]; ok {
-			if store.IsTiFlash() {
+			if store.IsTiFlashCompute() {
+				continue
+			}
+			if store.IsTiFlashWrite() {
 				stats.BytesWriteStats[id] = loads[utils.StoreRegionsWriteBytes]
 				stats.KeysWriteStats[id] = loads[utils.StoreRegionsWriteKeys]
 			} else {
@@ -1032,7 +1037,7 @@ func (h *Handler) GetHotStores() (*HotStoreStats, error) {
 }
 
 // GetStoresLoads gets all hot write stores stats.
-func (h *Handler) GetStoresLoads() (map[uint64][]float64, error) {
+func (h *Handler) GetStoresLoads() (map[uint64]statistics.StoreKindLoads, error) {
 	c := h.GetCluster()
 	if c == nil {
 		return nil, errs.ErrNotBootstrapped.GenWithStackByArgs()

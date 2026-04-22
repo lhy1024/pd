@@ -16,9 +16,8 @@ package core
 
 import (
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"sort"
-	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
@@ -38,10 +37,15 @@ func WithDownPeers(downPeers []*pdpb.PeerStats) RegionCreateOption {
 
 // WithFlowRoundByDigit set the digit, which use to round to the nearest number
 func WithFlowRoundByDigit(digit int) RegionCreateOption {
-	flowRoundDivisor := uint64(math.Pow10(digit))
+	divisor := GetFlowRoundDivisorByDigit(digit)
 	return func(region *RegionInfo) {
-		region.flowRoundDivisor = flowRoundDivisor
+		region.flowRoundDivisor = divisor
 	}
+}
+
+// GetFlowRoundDivisorByDigit get the flow round divisor by digit
+func GetFlowRoundDivisorByDigit(digit int) uint64 {
+	return uint64(math.Pow10(digit))
 }
 
 // WithPendingPeers sets the pending peers for the region.
@@ -396,8 +400,7 @@ func SetSource(source RegionSource) RegionCreateOption {
 
 // RandomKindReadQuery returns query stat with random query kind, only used for unit test.
 func RandomKindReadQuery(queryRead uint64) *pdpb.QueryStats {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	switch r.Intn(3) {
+	switch rand.IntN(3) {
 	case 0:
 		return &pdpb.QueryStats{
 			Coprocessor: queryRead,
@@ -417,8 +420,7 @@ func RandomKindReadQuery(queryRead uint64) *pdpb.QueryStats {
 
 // RandomKindWriteQuery returns query stat with random query kind, only used for unit test.
 func RandomKindWriteQuery(queryWrite uint64) *pdpb.QueryStats {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	switch r.Intn(7) {
+	switch rand.IntN(7) {
 	case 0:
 		return &pdpb.QueryStats{
 			Put: queryWrite,

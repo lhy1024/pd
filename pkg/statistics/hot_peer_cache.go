@@ -18,11 +18,14 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/smallnest/chanx"
+
+	"github.com/pingcap/kvproto/pkg/metapb"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/pkg/statistics/utils"
@@ -46,9 +49,18 @@ const (
 // the refresh interval should be less than store heartbeat interval to keep the next calculate must use the latest threshold.
 var ThresholdsUpdateInterval = 8 * time.Second
 
-// Denoising is an option to calculate flow base on the real heartbeats. Should
-// only turn off by the simulator and the test.
-var Denoising = true
+// denoising is an option to calculate flow base on the real heartbeats.
+var denoising uint32 = 1
+
+func isDenoisingEnabled() bool {
+	return atomic.LoadUint32(&denoising) == 1
+}
+
+// DisableDenoising disables the denoising feature.
+// It is used for the simulator and test.
+func DisableDenoising() {
+	atomic.CompareAndSwapUint32(&denoising, 1, 0)
+}
 
 type thresholds struct {
 	updatedTime time.Time
@@ -60,6 +72,7 @@ type thresholds struct {
 // HotPeerCache saves the hot peer's statistics.
 type HotPeerCache struct {
 	kind              utils.RWType
+	cluster           *core.BasicCluster
 	peersOfStore      map[uint64]*utils.TopN         // storeID -> hot peers
 	storesOfRegion    map[uint64]map[uint64]struct{} // regionID -> storeIDs
 	regionsOfStore    map[uint64]map[uint64]struct{} // storeID -> regionIDs
@@ -67,13 +80,14 @@ type HotPeerCache struct {
 	taskQueue         *chanx.UnboundedChan[func(*HotPeerCache)]
 	thresholdsOfStore map[uint64]*thresholds                           // storeID -> thresholds
 	metrics           map[uint64][utils.ActionTypeLen]prometheus.Gauge // storeID -> metrics
-	// TODO: consider to remove store info when store is offline.
+	lastGCTime        time.Time
 }
 
 // NewHotPeerCache creates a HotPeerCache
-func NewHotPeerCache(ctx context.Context, kind utils.RWType) *HotPeerCache {
+func NewHotPeerCache(ctx context.Context, cluster *core.BasicCluster, kind utils.RWType) *HotPeerCache {
 	return &HotPeerCache{
 		kind:              kind,
+		cluster:           cluster,
 		peersOfStore:      make(map[uint64]*utils.TopN),
 		storesOfRegion:    make(map[uint64]map[uint64]struct{}),
 		regionsOfStore:    make(map[uint64]map[uint64]struct{}),
@@ -84,9 +98,9 @@ func NewHotPeerCache(ctx context.Context, kind utils.RWType) *HotPeerCache {
 	}
 }
 
-// TODO: rename RegionStats as PeerStats
-// RegionStats returns hot items
-func (f *HotPeerCache) RegionStats(minHotDegree int) map[uint64][]*HotPeerStat {
+// GetHotPeerStats returns the read or write statistics for hot regions.
+// It returns a map where the keys are store IDs and the values are slices of HotPeerStat.
+func (f *HotPeerCache) GetHotPeerStats(minHotDegree int) map[uint64][]*HotPeerStat {
 	res := make(map[uint64][]*HotPeerStat)
 	defaultAntiCount := f.kind.DefaultAntiCount()
 	for storeID, peers := range f.peersOfStore {
@@ -115,6 +129,7 @@ func (f *HotPeerCache) UpdateStat(item *HotPeerStat) {
 		return
 	}
 	f.incMetrics(item.actionType, item.StoreID)
+	f.gc()
 }
 
 func (f *HotPeerCache) incMetrics(action utils.ActionType, storeID uint64) {
@@ -128,30 +143,6 @@ func (f *HotPeerCache) incMetrics(action utils.ActionType, storeID uint64) {
 		}
 	}
 	f.metrics[storeID][action].Inc()
-}
-
-func (f *HotPeerCache) collectPeerMetrics(loads []float64, interval uint64) {
-	regionHeartbeatIntervalHist.Observe(float64(interval))
-	if interval == 0 {
-		return
-	}
-	// TODO: use unified metrics. (keep backward compatibility at the same time)
-	for _, k := range f.kind.RegionStats() {
-		switch k {
-		case utils.RegionReadBytes:
-			readByteHist.Observe(loads[int(k)])
-		case utils.RegionReadKeys:
-			readKeyHist.Observe(loads[int(k)])
-		case utils.RegionWriteBytes:
-			writeByteHist.Observe(loads[int(k)])
-		case utils.RegionWriteKeys:
-			writeKeyHist.Observe(loads[int(k)])
-		case utils.RegionWriteQueryNum:
-			writeQueryHist.Observe(loads[int(k)])
-		case utils.RegionReadQueryNum:
-			readQueryHist.Observe(loads[int(k)])
-		}
-	}
 }
 
 // CollectExpiredItems collects expired items, mark them as needDelete and puts them into inherit items
@@ -176,11 +167,10 @@ func (f *HotPeerCache) CollectExpiredItems(region *core.RegionInfo) []*HotPeerSt
 // Notice: CheckPeerFlow couldn't be used concurrently.
 // CheckPeerFlow will update oldItem's rollingLoads into newItem, thus we should use write lock here.
 func (f *HotPeerCache) CheckPeerFlow(region *core.RegionInfo, peers []*metapb.Peer, deltaLoads []float64, interval uint64) []*HotPeerStat {
-	if Denoising && interval < HotRegionReportMinInterval { // for test or simulator purpose
+	if isDenoisingEnabled() && interval < HotRegionReportMinInterval { // for test or simulator purpose
 		return nil
 	}
 
-	f.collectPeerMetrics(deltaLoads, interval) // update metrics
 	regionID := region.GetID()
 
 	regionPeers := region.GetPeers()
@@ -235,7 +225,7 @@ func (f *HotPeerCache) CheckPeerFlow(region *core.RegionInfo, peers []*metapb.Pe
 // CheckColdPeer checks the collect the un-heartbeat peer and maintain it.
 func (f *HotPeerCache) CheckColdPeer(storeID uint64, reportRegions map[uint64]*core.RegionInfo, interval uint64) (ret []*HotPeerStat) {
 	// for test or simulator purpose
-	if Denoising && interval < HotRegionReportMinInterval {
+	if isDenoisingEnabled() && interval < HotRegionReportMinInterval {
 		return
 	}
 	previousHotStat, ok := f.regionsOfStore[storeID]
@@ -545,6 +535,36 @@ func (f *HotPeerCache) removeItem(item *HotPeerStat) {
 	}
 	if regions, ok := f.regionsOfStore[item.StoreID]; ok {
 		delete(regions, item.RegionID)
+	}
+}
+
+func (f *HotPeerCache) gc() {
+	if time.Since(f.lastGCTime) < f.topNTTL {
+		return
+	}
+	f.lastGCTime = time.Now()
+	// remove tombstone stores
+	stores := make(map[uint64]struct{})
+	for _, storeID := range f.cluster.GetStores() {
+		stores[storeID.GetID()] = struct{}{}
+	}
+	for storeID := range f.peersOfStore {
+		if _, ok := stores[storeID]; !ok {
+			delete(f.peersOfStore, storeID)
+			delete(f.regionsOfStore, storeID)
+			delete(f.thresholdsOfStore, storeID)
+			delete(f.metrics, storeID)
+		}
+	}
+	// remove expired items
+	for _, peers := range f.peersOfStore {
+		regions := peers.RemoveExpired()
+		for _, regionID := range regions {
+			delete(f.storesOfRegion, regionID)
+			for storeID := range f.regionsOfStore {
+				delete(f.regionsOfStore[storeID], regionID)
+			}
+		}
 	}
 }
 

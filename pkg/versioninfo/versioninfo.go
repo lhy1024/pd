@@ -19,9 +19,12 @@ import (
 	"strings"
 
 	"github.com/coreos/go-semver/semver"
-	"github.com/pingcap/log"
-	"github.com/tikv/pd/pkg/errs"
 	"go.uber.org/zap"
+
+	"github.com/pingcap/log"
+
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/versioninfo/kerneltype"
 )
 
 // Status is the status of PD server.
@@ -31,6 +34,7 @@ type Status struct {
 	Version        string `json:"version"`
 	GitHash        string `json:"git_hash"`
 	StartTimestamp int64  `json:"start_timestamp"`
+	KernelType     string `json:"kernel_type"`
 }
 
 const (
@@ -45,6 +49,7 @@ var (
 	PDGitHash        = "None"
 	PDGitBranch      = "None"
 	PDEdition        = CommunityEdition
+	PDKernelType     = kerneltype.KernelType // KernelType is Next Generation or Classic, see doc.go for more info.
 )
 
 // ParseVersion wraps semver.NewVersion and handles compatibility issues.
@@ -98,6 +103,7 @@ func Log(serviceMode string) {
 	log.Info(fmt.Sprintf("Welcome to Placement Driver (%s)", mode))
 	log.Info(mode, zap.String("release-version", PDReleaseVersion))
 	log.Info(mode, zap.String("edition", PDEdition))
+	log.Info(mode, zap.String("kernel-type", PDKernelType))
 	log.Info(mode, zap.String("git-hash", PDGitHash))
 	log.Info(mode, zap.String("git-branch", PDGitBranch))
 	log.Info(mode, zap.String("utc-build-time", PDBuildTS))
@@ -107,6 +113,7 @@ func Log(serviceMode string) {
 func Print() {
 	fmt.Println("Release Version:", PDReleaseVersion)
 	fmt.Println("Edition:", PDEdition)
+	fmt.Println("Kernel Type:", PDKernelType)
 	fmt.Println("Git Commit Hash:", PDGitHash)
 	fmt.Println("Git Branch:", PDGitBranch)
 	fmt.Println("UTC Build Time: ", PDBuildTS)

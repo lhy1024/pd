@@ -15,12 +15,14 @@
 package checker
 
 import (
+	"go.uber.org/zap"
+
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/filter"
-	"go.uber.org/zap"
 )
 
 // ReplicaStrategy collects some utilities to manipulate region peers. It

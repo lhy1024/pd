@@ -20,12 +20,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/suite"
+
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/stretchr/testify/suite"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mcs/scheduling/server/meta"
 	"github.com/tikv/pd/pkg/utils/testutil"
+	"github.com/tikv/pd/server/cluster"
 	"github.com/tikv/pd/tests"
 )
 
@@ -50,7 +53,7 @@ func (suite *metaTestSuite) SetupSuite() {
 	re.NoError(failpoint.Enable("github.com/tikv/pd/server/cluster/highFrequencyClusterJobs", `return(true)`))
 	var err error
 	suite.ctx, suite.cancel = context.WithCancel(context.Background())
-	suite.cluster, err = tests.NewTestAPICluster(suite.ctx, 1)
+	suite.cluster, err = tests.NewTestClusterWithKeyspaceGroup(suite.ctx, 1)
 	re.NoError(err)
 	err = suite.cluster.RunInitialServers()
 	re.NoError(err)
@@ -75,17 +78,18 @@ func (suite *metaTestSuite) TestStoreWatch() {
 	_, err := meta.NewWatcher(
 		suite.ctx,
 		suite.pdLeaderServer.GetEtcdClient(),
-		suite.cluster.GetCluster().GetId(),
 		cluster,
 	)
 	re.NoError(err)
 	for i := uint64(1); i <= 4; i++ {
-		suite.pdLeaderServer.GetServer().GetRaftCluster().PutMetaStore(
-			&metapb.Store{Id: i, Address: fmt.Sprintf("mock-%d", i), State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving, LastHeartbeat: time.Now().UnixNano()},
+		err = suite.getRaftCluster().PutMetaStore(
+			&metapb.Store{Id: i, Address: fmt.Sprintf("mock://tikv-%d:%d", i, i), State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving, LastHeartbeat: time.Now().UnixNano()},
 		)
+		re.NoError(err)
 	}
 
-	suite.pdLeaderServer.GetRaftCluster().RemoveStore(2, false)
+	re.NoError(failpoint.Enable("github.com/tikv/pd/server/cluster/doNotBuryStore", `return(true)`))
+	re.NoError(suite.getRaftCluster().RemoveStore(2, false))
 	testutil.Eventually(re, func() bool {
 		s := cluster.GetStore(2)
 		if s == nil {
@@ -94,22 +98,34 @@ func (suite *metaTestSuite) TestStoreWatch() {
 		return s.GetState() == metapb.StoreState_Offline
 	})
 	re.Len(cluster.GetStores(), 4)
+	re.NoError(failpoint.Disable("github.com/tikv/pd/server/cluster/doNotBuryStore"))
 	testutil.Eventually(re, func() bool {
 		return cluster.GetStore(2).GetState() == metapb.StoreState_Tombstone
 	})
-	re.NoError(suite.pdLeaderServer.GetRaftCluster().RemoveTombStoneRecords())
+	re.NoError(suite.getRaftCluster().RemoveTombStoneRecords())
 	testutil.Eventually(re, func() bool {
 		return cluster.GetStore(2) == nil
 	})
 
 	// test synchronized store labels
-	suite.pdLeaderServer.GetServer().GetRaftCluster().PutMetaStore(
-		&metapb.Store{Id: 5, Address: "mock-5", State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving, LastHeartbeat: time.Now().UnixNano(), Labels: []*metapb.StoreLabel{{Key: "zone", Value: "z1"}}},
+	err = suite.getRaftCluster().PutMetaStore(
+		&metapb.Store{Id: 5, Address: "mock://tikv-5:5", State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving, LastHeartbeat: time.Now().UnixNano(), Labels: []*metapb.StoreLabel{{Key: "zone", Value: "z1"}}},
 	)
+	re.NoError(err)
 	testutil.Eventually(re, func() bool {
 		if len(cluster.GetStore(5).GetLabels()) == 0 {
 			return false
 		}
 		return cluster.GetStore(5).GetLabels()[0].GetValue() == "z1"
 	})
+}
+
+func (suite *metaTestSuite) getRaftCluster() *cluster.RaftCluster {
+	re := suite.Require()
+	leaderName := suite.cluster.WaitLeader()
+	re.NotEmpty(leaderName)
+	leaderServer := suite.cluster.GetServer(leaderName)
+	cluster := leaderServer.GetServer().GetRaftCluster()
+	re.NotNil(cluster)
+	return cluster
 }

@@ -17,6 +17,7 @@ package schedulers
 import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/errs"
@@ -64,7 +65,7 @@ func (s *transferWitnessLeaderScheduler) Schedule(cluster sche.SchedulerCluster,
 func (s *transferWitnessLeaderScheduler) scheduleTransferWitnessLeaderBatch(name string, cluster sche.SchedulerCluster, batchSize int) []*operator.Operator {
 	var ops []*operator.Operator
 batchLoop:
-	for i := 0; i < batchSize; i++ {
+	for range batchSize {
 		select {
 		case region := <-s.regions:
 			op, err := scheduleTransferWitnessLeader(name, cluster, region)

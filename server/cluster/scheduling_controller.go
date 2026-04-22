@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule"
 	"github.com/tikv/pd/pkg/schedule/checker"
@@ -68,7 +69,7 @@ func newSchedulingController(parentCtx context.Context, basicCluster *core.Basic
 		BasicCluster: basicCluster,
 		opt:          opt,
 		labelStats:   statistics.NewLabelStatistics(),
-		hotStat:      statistics.NewHotStat(parentCtx),
+		hotStat:      statistics.NewHotStat(parentCtx, basicCluster),
 		slowStat:     statistics.NewSlowStat(),
 		regionStats:  statistics.NewRegionStatistics(basicCluster, opt, ruleManager),
 	}
@@ -236,6 +237,7 @@ func (sc *schedulingController) UpdateRegionsLabelLevelStats(regions []*core.Reg
 	for _, region := range regions {
 		sc.labelStats.Observe(region, sc.getStoresWithoutLabelLocked(region, core.EngineKey, core.EngineTiFlash), sc.opt.GetLocationLabels())
 	}
+	sc.labelStats.ClearDefunctRegions()
 }
 
 func (sc *schedulingController) getStoresWithoutLabelLocked(region *core.RegionInfo, key, value string) []*core.StoreInfo {
@@ -255,7 +257,7 @@ func (sc *schedulingController) GetStoresStats() *statistics.StoresStats {
 }
 
 // GetStoresLoads returns load stats of all stores.
-func (sc *schedulingController) GetStoresLoads() map[uint64][]float64 {
+func (sc *schedulingController) GetStoresLoads() map[uint64]statistics.StoreKindLoads {
 	return sc.hotStat.GetStoresLoads()
 }
 
@@ -269,21 +271,17 @@ func (sc *schedulingController) GetHotPeerStat(rw utils.RWType, regionID, storeI
 	return sc.hotStat.GetHotPeerStat(rw, regionID, storeID)
 }
 
-// RegionReadStats returns hot region's read stats.
+// GetHotPeerStats returns the read or write statistics for hot regions.
+// It returns a map where the keys are store IDs and the values are slices of HotPeerStat.
 // The result only includes peers that are hot enough.
-// RegionStats is a thread-safe method
-func (sc *schedulingController) RegionReadStats() map[uint64][]*statistics.HotPeerStat {
-	// As read stats are reported by store heartbeat, the threshold needs to be adjusted.
-	threshold := sc.opt.GetHotRegionCacheHitsThreshold() *
-		(utils.RegionHeartBeatReportInterval / utils.StoreHeartBeatReportInterval)
-	return sc.hotStat.RegionStats(utils.Read, threshold)
-}
-
-// RegionWriteStats returns hot region's write stats.
-// The result only includes peers that are hot enough.
-func (sc *schedulingController) RegionWriteStats() map[uint64][]*statistics.HotPeerStat {
-	// RegionStats is a thread-safe method
-	return sc.hotStat.RegionStats(utils.Write, sc.opt.GetHotRegionCacheHitsThreshold())
+func (sc *schedulingController) GetHotPeerStats(rw utils.RWType) map[uint64][]*statistics.HotPeerStat {
+	// GetHotPeerStats is a thread-safe method
+	threshold := sc.opt.GetHotRegionCacheHitsThreshold()
+	if rw == utils.Read {
+		threshold = sc.opt.GetHotRegionCacheHitsThreshold() *
+			(utils.RegionHeartBeatReportInterval / utils.StoreHeartBeatReportInterval)
+	}
+	return sc.hotStat.GetHotPeerStats(rw, threshold)
 }
 
 // BucketsStats returns hot region's buckets stats.
@@ -471,6 +469,9 @@ func (sc *schedulingController) getEvictLeaderStores() (evictStores []uint64) {
 
 // IsPrepared return true if the prepare checker is ready.
 func (sc *schedulingController) IsPrepared() bool {
+	if sc == nil || sc.coordinator == nil {
+		return false
+	}
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
 	return sc.coordinator.GetPrepareChecker().IsPrepared()

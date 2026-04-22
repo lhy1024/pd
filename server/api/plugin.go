@@ -13,7 +13,6 @@
 // limitations under the License.
 
 //go:build with_plugin
-// +build with_plugin
 
 package api
 
@@ -40,6 +39,7 @@ func newPluginHandler(handler *server.Handler, rd *render.Render) *pluginHandler
 	}
 }
 
+// LoadPlugin loads a plugin.
 // FIXME: details of input json body params
 // @Tags     plugin
 // @Summary  Load plugin.
@@ -54,6 +54,7 @@ func (h *pluginHandler) LoadPlugin(w http.ResponseWriter, r *http.Request) {
 	h.processPluginCommand(w, r, schedule.PluginLoad)
 }
 
+// UnloadPlugin unloads a plugin.
 // FIXME: details of input json body params
 // @Tags     plugin
 // @Summary  Unload plugin.

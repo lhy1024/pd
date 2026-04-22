@@ -19,9 +19,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/spf13/cobra"
+
 	"github.com/tikv/pd/server/apiv2/handlers"
 )
 
@@ -100,7 +102,7 @@ func showKeyspaceNameCommandFunc(cmd *cobra.Command, args []string) {
 	}
 	resp, err := doRequest(cmd, url, http.MethodGet, http.Header{})
 	// Retry without the force_refresh_group_id if the keyspace group manager is not initialized.
-	// This can happen when PD is not running in API mode.
+	// This can happen when PD is not running in microservice env.
 	if err != nil && refreshGroupID && strings.Contains(err.Error(), handlers.GroupManagerUninitializedErr) {
 		resp, err = doRequest(cmd, fmt.Sprintf("%s/%s", keyspacePrefix, args[0]), http.MethodGet, http.Header{})
 	}
@@ -283,24 +285,32 @@ func listKeyspaceCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	url := keyspacePrefix
+	u := keyspacePrefix
+	query := make(url.Values)
 	limit, err := cmd.Flags().GetString(nmLimit)
 	if err != nil {
 		cmd.PrintErrln("Failed to parse flag: ", err)
 		return
 	}
 	if limit != "" {
-		url += fmt.Sprintf("?limit=%s", limit)
+		query.Set("limit", limit)
 	}
+
 	pageToken, err := cmd.Flags().GetString(nmPageToken)
 	if err != nil {
 		cmd.PrintErrln("Failed to parse flag: ", err)
 		return
 	}
 	if pageToken != "" {
-		url += fmt.Sprintf("&page_token=%s", pageToken)
+		query.Set("page_token", pageToken)
 	}
-	resp, err := doRequest(cmd, url, http.MethodGet, http.Header{})
+
+	if len(query) > 0 {
+		u += "?"
+		u += query.Encode()
+	}
+
+	resp, err := doRequest(cmd, u, http.MethodGet, http.Header{})
 	if err != nil {
 		cmd.PrintErrln("Failed to list keyspace: ", err)
 		return

@@ -17,10 +17,11 @@ package api
 import (
 	"net/http"
 
+	"github.com/unrolled/render"
+
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 	"github.com/tikv/pd/server"
-	"github.com/unrolled/render"
 )
 
 type unsafeOperationHandler struct {
@@ -35,6 +36,7 @@ func newUnsafeOperationHandler(svr *server.Server, rd *render.Render) *unsafeOpe
 	}
 }
 
+// RemoveFailedStores removes failed stores unsafely.
 // @Tags     unsafe
 // @Summary  Remove failed stores unsafely.
 // @Accept   json
@@ -77,6 +79,7 @@ func (h *unsafeOperationHandler) RemoveFailedStores(w http.ResponseWriter, r *ht
 	h.rd.JSON(w, http.StatusOK, "Request has been accepted.")
 }
 
+// GetFailedStoresRemovalStatus gets the current status of failed stores removal.
 // @Tags     unsafe
 // @Summary  Show the current status of failed stores removal.
 // @Produce  json

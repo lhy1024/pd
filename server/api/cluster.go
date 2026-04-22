@@ -17,8 +17,9 @@ package api
 import (
 	"net/http"
 
-	"github.com/tikv/pd/server"
 	"github.com/unrolled/render"
+
+	"github.com/tikv/pd/server"
 )
 
 type clusterHandler struct {
@@ -33,6 +34,7 @@ func newClusterHandler(svr *server.Server, rd *render.Render) *clusterHandler {
 	}
 }
 
+// GetCluster gets the cluster info.
 // @Tags     cluster
 // @Summary  Get cluster info.
 // @Produce  json
@@ -42,6 +44,7 @@ func (h *clusterHandler) GetCluster(w http.ResponseWriter, _ *http.Request) {
 	h.rd.JSON(w, http.StatusOK, h.svr.GetCluster())
 }
 
+// GetClusterStatus gets the cluster status.
 // @Tags     cluster
 // @Summary  Get cluster status.
 // @Produce  json

@@ -17,17 +17,19 @@ package simulator
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/cases"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/simutil"
-	"go.uber.org/zap"
 )
 
 // Event affects the status of the cluster.
@@ -222,8 +224,8 @@ func (e *DownNode) Run(raft *RaftEngine, _ int64) bool {
 	var node *Node
 	if e.ID == 0 {
 		arrNodes := raft.conn.getNodes()
-		i := rand.Intn(len(arrNodes))
-		node = nodes[arrNodes[i].Store.GetId()]
+		i := rand.IntN(len(arrNodes))
+		node = nodes[arrNodes[i].GetId()]
 	} else {
 		node = nodes[uint64(e.ID)]
 	}

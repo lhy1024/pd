@@ -25,10 +25,14 @@ import (
 	"unsafe"
 
 	"github.com/coreos/go-semver/semver"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
@@ -38,8 +42,6 @@ import (
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.uber.org/zap"
 )
 
 // PersistOptions wraps all configurations that need to persist to storage and
@@ -53,7 +55,7 @@ type PersistOptions struct {
 	replicationMode atomic.Value
 	labelProperty   atomic.Value
 	keyspace        atomic.Value
-	microService    atomic.Value
+	microservice    atomic.Value
 	storeConfig     atomic.Value
 	clusterVersion  unsafe.Pointer
 }
@@ -67,7 +69,7 @@ func NewPersistOptions(cfg *Config) *PersistOptions {
 	o.replicationMode.Store(&cfg.ReplicationMode)
 	o.labelProperty.Store(cfg.LabelProperty)
 	o.keyspace.Store(&cfg.Keyspace)
-	o.microService.Store(&cfg.MicroService)
+	o.microservice.Store(&cfg.Microservice)
 	// storeConfig will be fetched from TiKV later,
 	// set it to an empty config here first.
 	o.storeConfig.Store(&sc.StoreConfig{})
@@ -136,14 +138,14 @@ func (o *PersistOptions) SetKeyspaceConfig(cfg *KeyspaceConfig) {
 	o.keyspace.Store(cfg)
 }
 
-// GetMicroServiceConfig returns the micro service configuration.
-func (o *PersistOptions) GetMicroServiceConfig() *MicroServiceConfig {
-	return o.microService.Load().(*MicroServiceConfig)
+// GetMicroserviceConfig returns the microservice configuration.
+func (o *PersistOptions) GetMicroserviceConfig() *MicroserviceConfig {
+	return o.microservice.Load().(*MicroserviceConfig)
 }
 
-// SetMicroServiceConfig sets the micro service configuration.
-func (o *PersistOptions) SetMicroServiceConfig(cfg *MicroServiceConfig) {
-	o.microService.Store(cfg)
+// SetMicroserviceConfig sets the microservice configuration.
+func (o *PersistOptions) SetMicroserviceConfig(cfg *MicroserviceConfig) {
+	o.microservice.Store(cfg)
 }
 
 // GetStoreConfig returns the store config.
@@ -191,6 +193,18 @@ func (o *PersistOptions) GetIsolationLevel() string {
 // IsPlacementRulesEnabled returns if the placement rules is enabled.
 func (o *PersistOptions) IsPlacementRulesEnabled() bool {
 	return o.GetReplicationConfig().EnablePlacementRules
+}
+
+// IsAffinitySchedulingEnabled returns if the affinity scheduling is enabled.
+func (o *PersistOptions) IsAffinitySchedulingEnabled() bool {
+	return o.GetScheduleConfig().EnableAffinityScheduling
+}
+
+// SetEnableAffinityScheduling set EnableAffinityScheduling
+func (o *PersistOptions) SetEnableAffinityScheduling(enabled bool) {
+	v := o.GetScheduleConfig().Clone()
+	v.EnableAffinityScheduling = enabled
+	o.SetScheduleConfig(v)
 }
 
 // SetPlacementRuleEnabled set PlacementRuleEnabled
@@ -271,6 +285,11 @@ func (o *PersistOptions) GetMaxMergeRegionSize() uint64 {
 	return o.getTTLNumberOr(sc.MaxMergeRegionSizeKey, o.GetScheduleConfig().MaxMergeRegionSize)
 }
 
+// GetMaxAffinityMergeRegionSize returns the max affinity merge region size.
+func (o *PersistOptions) GetMaxAffinityMergeRegionSize() uint64 {
+	return o.GetScheduleConfig().GetMaxAffinityMergeRegionSize()
+}
+
 // GetMaxMergeRegionKeys returns the max number of keys.
 // It returns size * 10000 if the key of max-merge-region-Keys doesn't exist.
 func (o *PersistOptions) GetMaxMergeRegionKeys() uint64 {
@@ -337,6 +356,13 @@ func (o *PersistOptions) SetMaxStoreDownTime(time time.Duration) {
 func (o *PersistOptions) SetMaxMergeRegionSize(maxMergeRegionSize uint64) {
 	v := o.GetScheduleConfig().Clone()
 	v.MaxMergeRegionSize = maxMergeRegionSize
+	o.SetScheduleConfig(v)
+}
+
+// SetMaxAffinityMergeRegionSize sets the max affinity merge region size.
+func (o *PersistOptions) SetMaxAffinityMergeRegionSize(maxAffinityMergeRegionSize uint64) {
+	v := o.GetScheduleConfig().Clone()
+	v.MaxAffinityMergeRegionSize = maxAffinityMergeRegionSize
 	o.SetScheduleConfig(v)
 }
 
@@ -491,10 +517,12 @@ func (o *PersistOptions) GetStoreLimit(storeID uint64) (returnSC sc.StoreLimitCo
 // GetStoreLimitByType returns the limit of a store with a given type.
 func (o *PersistOptions) GetStoreLimitByType(storeID uint64, typ storelimit.Type) (returned float64) {
 	defer func() {
-		if typ == storelimit.RemovePeer {
-			returned = o.getTTLFloatOr(fmt.Sprintf("remove-peer-%v", storeID), returned)
-		} else if typ == storelimit.AddPeer {
+		switch typ {
+		case storelimit.AddPeer:
 			returned = o.getTTLFloatOr(fmt.Sprintf("add-peer-%v", storeID), returned)
+		case storelimit.RemovePeer:
+			returned = o.getTTLFloatOr(fmt.Sprintf("remove-peer-%v", storeID), returned)
+		default:
 		}
 	}()
 	limit := o.GetStoreLimit(storeID)
@@ -659,6 +687,11 @@ func (o *PersistOptions) GetHotRegionCacheHitsThreshold() int {
 	return int(o.GetScheduleConfig().HotRegionCacheHitsThreshold)
 }
 
+// GetPatrolRegionWorkerCount returns the worker count of the patrol.
+func (o *PersistOptions) GetPatrolRegionWorkerCount() int {
+	return o.GetScheduleConfig().PatrolRegionWorkerCount
+}
+
 // GetStoresLimit gets the stores' limit.
 func (o *PersistOptions) GetStoresLimit() map[uint64]sc.StoreLimitConfig {
 	return o.GetScheduleConfig().StoreLimit
@@ -784,7 +817,7 @@ func (o *PersistOptions) Persist(storage endpoint.ConfigStorage) error {
 			ReplicationMode: *o.GetReplicationModeConfig(),
 			LabelProperty:   o.GetLabelPropertyConfig(),
 			Keyspace:        *o.GetKeyspaceConfig(),
-			MicroService:    *o.GetMicroServiceConfig(),
+			Microservice:    *o.GetMicroserviceConfig(),
 			ClusterVersion:  *o.GetClusterVersion(),
 		},
 		StoreConfig: *o.GetStoreConfig(),
@@ -810,7 +843,6 @@ func (o *PersistOptions) Reload(storage endpoint.ConfigStorage) error {
 	adjustScheduleCfg(&cfg.Schedule)
 	// Some fields may not be stored in the storage, we need to calculate them manually.
 	cfg.StoreConfig.Adjust()
-	cfg.PDServerCfg.MigrateDeprecatedFlags()
 	if isExist {
 		o.schedule.Store(&cfg.Schedule)
 		o.replication.Store(&cfg.Replication)
@@ -818,7 +850,7 @@ func (o *PersistOptions) Reload(storage endpoint.ConfigStorage) error {
 		o.replicationMode.Store(&cfg.ReplicationMode)
 		o.labelProperty.Store(cfg.LabelProperty)
 		o.keyspace.Store(&cfg.Keyspace)
-		o.microService.Store(&cfg.MicroService)
+		o.microservice.Store(&cfg.Microservice)
 		o.storeConfig.Store(&cfg.StoreConfig)
 		o.SetClusterVersion(&cfg.ClusterVersion)
 	}

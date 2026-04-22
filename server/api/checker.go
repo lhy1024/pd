@@ -18,9 +18,10 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/unrolled/render"
+
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/server"
-	"github.com/unrolled/render"
 )
 
 type checkerHandler struct {
@@ -35,6 +36,7 @@ func newCheckerHandler(svr *server.Server, r *render.Render) *checkerHandler {
 	}
 }
 
+// PauseOrResumeChecker pauses or resumes a specific checker.
 // FIXME: details of input json body params
 // @Tags     checker
 // @Summary  Pause or resume region merge.
@@ -73,6 +75,7 @@ func (c *checkerHandler) PauseOrResumeChecker(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// GetCheckerStatus gets the status of a specific checker.
 // FIXME: details of input json body params
 // @Tags     checker
 // @Summary  Get if checker is paused

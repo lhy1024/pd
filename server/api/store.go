@@ -23,10 +23,13 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/unrolled/render"
+
 	"github.com/pingcap/errcode"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core/storelimit"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/response"
@@ -34,7 +37,6 @@ import (
 	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/server"
-	"github.com/unrolled/render"
 )
 
 type storeHandler struct {
@@ -49,6 +51,7 @@ func newStoreHandler(handler *server.Handler, rd *render.Render) *storeHandler {
 	}
 }
 
+// GetStore gets the store's information.
 // @Tags        store
 // @Summary  Get a store's information.
 // @Param    id  path  integer  true  "Store Id"
@@ -77,6 +80,7 @@ func (h *storeHandler) GetStore(w http.ResponseWriter, r *http.Request) {
 	h.rd.JSON(w, http.StatusOK, storeInfo)
 }
 
+// DeleteStore offline a store.
 // @Tags     store
 // @Summary  Take down a store from the cluster.
 // @Param    id     path   integer  true  "Store Id"
@@ -108,6 +112,7 @@ func (h *storeHandler) DeleteStore(w http.ResponseWriter, r *http.Request) {
 	h.rd.JSON(w, http.StatusOK, "The store is set as Offline.")
 }
 
+// SetStoreState sets the store's state.
 // @Tags     store
 // @Summary  Set the store's state.
 // @Param    id     path   integer  true  "Store Id"
@@ -160,6 +165,7 @@ func (h *storeHandler) responseStoreErr(w http.ResponseWriter, err error, storeI
 	}
 }
 
+// SetStoreLabel sets the store's label.
 // FIXME: details of input json body params
 // @Tags     store
 // @Summary  Set the store's label.
@@ -206,6 +212,7 @@ func (h *storeHandler) SetStoreLabel(w http.ResponseWriter, r *http.Request) {
 	h.rd.JSON(w, http.StatusOK, "The store's label is updated.")
 }
 
+// DeleteStoreLabel deletes the store's label.
 // @Tags     store
 // @Summary  delete the store's label.
 // @Param    id    path  integer  true  "Store Id"
@@ -240,6 +247,7 @@ func (h *storeHandler) DeleteStoreLabel(w http.ResponseWriter, r *http.Request) 
 	h.rd.JSON(w, http.StatusOK, fmt.Sprintf("The label %s is deleted for store %d.", labelKey, storeID))
 }
 
+// SetStoreWeight sets the store's leader/region weight.
 // FIXME: details of input json body params
 // @Tags     store
 // @Summary  Set the store's leader/region weight.
@@ -293,6 +301,7 @@ func (h *storeHandler) SetStoreWeight(w http.ResponseWriter, r *http.Request) {
 	h.rd.JSON(w, http.StatusOK, "The store's weight is updated.")
 }
 
+// SetStoreLimit sets the store's limit.
 // FIXME: details of input json body params
 // @Tags     store
 // @Summary  Set the store's limit.
@@ -384,6 +393,7 @@ func newStoresHandler(handler *server.Handler, rd *render.Render) *storesHandler
 	}
 }
 
+// RemoveTombStone removes tombstone records in the cluster.
 // @Tags     store
 // @Summary  Remove tombstone records in the cluster.
 // @Produce  json
@@ -400,6 +410,7 @@ func (h *storesHandler) RemoveTombStone(w http.ResponseWriter, r *http.Request) 
 	h.rd.JSON(w, http.StatusOK, "Remove tombstone successfully.")
 }
 
+// SetAllStoresLimit sets the limit of all stores in the cluster.
 // FIXME: details of input json body params
 // @Tags     store
 // @Summary  Set limit of all stores in the cluster.
@@ -488,6 +499,7 @@ func (h *storesHandler) SetAllStoresLimit(w http.ResponseWriter, r *http.Request
 	h.rd.JSON(w, http.StatusOK, "Set store limit successfully.")
 }
 
+// GetAllStoresLimit gets the limit of all stores in the cluster.
 // FIXME: details of output json body
 // @Tags     store
 // @Summary  Get limit of all stores in the cluster.
@@ -528,46 +540,6 @@ func (h *storesHandler) GetAllStoresLimit(w http.ResponseWriter, r *http.Request
 	h.rd.JSON(w, http.StatusOK, limits)
 }
 
-// @Tags     store
-// @Summary  Set limit scene in the cluster.
-// @Accept   json
-// @Param    body  body  storelimit.Scene  true  "Store limit scene"
-// @Produce  json
-// @Success  200  {string}  string  "Set store limit scene successfully."
-// @Failure  400  {string}  string  "The input is invalid."
-// @Failure  500  {string}  string  "PD server failed to proceed the request."
-// @Router   /stores/limit/scene [post]
-func (h *storesHandler) SetStoreLimitScene(w http.ResponseWriter, r *http.Request) {
-	typeName := r.URL.Query().Get("type")
-	typeValue, err := parseStoreLimitType(typeName)
-	if err != nil {
-		h.rd.JSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	scene := h.Handler.GetStoreLimitScene(typeValue)
-	if err := apiutil.ReadJSONRespondError(h.rd, w, r.Body, &scene); err != nil {
-		return
-	}
-	h.Handler.SetStoreLimitScene(scene, typeValue)
-	h.rd.JSON(w, http.StatusOK, "Set store limit scene successfully.")
-}
-
-// @Tags     store
-// @Summary  Get limit scene in the cluster.
-// @Produce  json
-// @Success  200  {string}  string  "Get store limit scene successfully."
-// @Router   /stores/limit/scene [get]
-func (h *storesHandler) GetStoreLimitScene(w http.ResponseWriter, r *http.Request) {
-	typeName := r.URL.Query().Get("type")
-	typeValue, err := parseStoreLimitType(typeName)
-	if err != nil {
-		h.rd.JSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	scene := h.Handler.GetStoreLimitScene(typeValue)
-	h.rd.JSON(w, http.StatusOK, scene)
-}
-
 // Progress contains status about a progress.
 type Progress struct {
 	Action       string  `json:"action"`
@@ -577,6 +549,7 @@ type Progress struct {
 	LeftSeconds  float64 `json:"left_seconds"`
 }
 
+// GetStoresProgress gets the progress of stores in the cluster.
 // @Tags     stores
 // @Summary  Get store progress in the cluster.
 // @Produce  json
@@ -592,33 +565,33 @@ func (h *storesHandler) GetStoresProgress(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		action, progress, leftSeconds, currentSpeed, err := h.Handler.GetProgressByID(v)
+		p, err := h.GetProgressByID(storeID)
 		if err != nil {
 			h.rd.JSON(w, http.StatusNotFound, err.Error())
 			return
 		}
 		sp := &Progress{
 			StoreID:      storeID,
-			Action:       action,
-			Progress:     progress,
-			CurrentSpeed: currentSpeed,
-			LeftSeconds:  leftSeconds,
+			Action:       string(p.Action),
+			Progress:     p.ProgressPercent,
+			CurrentSpeed: p.CurrentSpeed,
+			LeftSeconds:  p.LeftSecond,
 		}
 
 		h.rd.JSON(w, http.StatusOK, sp)
 		return
 	}
 	if v := r.URL.Query().Get("action"); v != "" {
-		progress, leftSeconds, currentSpeed, err := h.Handler.GetProgressByAction(v)
+		p, err := h.GetProgressByAction(v)
 		if err != nil {
 			h.rd.JSON(w, http.StatusNotFound, err.Error())
 			return
 		}
 		sp := &Progress{
 			Action:       v,
-			Progress:     progress,
-			CurrentSpeed: currentSpeed,
-			LeftSeconds:  leftSeconds,
+			Progress:     p.ProgressPercent,
+			CurrentSpeed: p.CurrentSpeed,
+			LeftSeconds:  p.LeftSecond,
 		}
 
 		h.rd.JSON(w, http.StatusOK, sp)
@@ -627,6 +600,7 @@ func (h *storesHandler) GetStoresProgress(w http.ResponseWriter, r *http.Request
 	h.rd.JSON(w, http.StatusBadRequest, "need query parameters")
 }
 
+// GetAllStores gets all stores in the cluster.
 // @Tags     store
 // @Summary     Get all stores in the cluster.
 // @Param       state  query  array  true  "Specify accepted store states."
@@ -642,13 +616,13 @@ func (h *storesHandler) GetAllStores(w http.ResponseWriter, r *http.Request) {
 		Stores: make([]*response.StoreInfo, 0, len(stores)),
 	}
 
-	urlFilter, err := newStoreStateFilter(r.URL)
+	urlFilter, err := NewStoreStateFilter(r.URL)
 	if err != nil {
 		h.rd.JSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	stores = urlFilter.filter(stores)
+	stores = urlFilter.Filter(stores)
 	for _, s := range stores {
 		storeID := s.GetId()
 		store := rc.GetStore(storeID)
@@ -665,6 +639,7 @@ func (h *storesHandler) GetAllStores(w http.ResponseWriter, r *http.Request) {
 	h.rd.JSON(w, http.StatusOK, StoresInfo)
 }
 
+// GetStoresByState gets stores by states in the cluster.
 // @Tags     store
 // @Summary  Get all stores by states in the cluster.
 // @Param    state  query  array  true  "Specify accepted store states."
@@ -720,7 +695,8 @@ type storeStateFilter struct {
 	accepts []metapb.StoreState
 }
 
-func newStoreStateFilter(u *url.URL) (*storeStateFilter, error) {
+// NewStoreStateFilter creates a new store state filter.
+func NewStoreStateFilter(u *url.URL) (*storeStateFilter, error) {
 	var acceptStates []metapb.StoreState
 	if v, ok := u.Query()["state"]; ok {
 		for _, s := range v {
@@ -747,7 +723,8 @@ func newStoreStateFilter(u *url.URL) (*storeStateFilter, error) {
 	}, nil
 }
 
-func (filter *storeStateFilter) filter(stores []*metapb.Store) []*metapb.Store {
+// Filter filters the stores by state.
+func (filter *storeStateFilter) Filter(stores []*metapb.Store) []*metapb.Store {
 	ret := make([]*metapb.Store, 0, len(stores))
 	for _, s := range stores {
 		state := s.GetState()

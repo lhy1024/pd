@@ -16,18 +16,20 @@ package operator
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
+
+	"go.uber.org/zap"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/placement"
 	"github.com/tikv/pd/pkg/utils/logutil"
-	"go.uber.org/zap"
 )
 
 // CreateAddPeerOperator creates an operator that adds a new peer.
@@ -244,7 +246,7 @@ func CreateScatterRegionOperator(desc string, ci sche.SharedCluster, origin *cor
 	}
 	var leader uint64
 	if len(ids) > 0 {
-		leader = ids[rand.Intn(len(ids))]
+		leader = ids[rand.IntN(len(ids))]
 	}
 	if targetLeader != 0 {
 		leader = targetLeader

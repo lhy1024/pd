@@ -15,14 +15,19 @@
 package schedulers
 
 import (
+	"math/rand/v2"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/unrolled/render"
+	"go.uber.org/zap"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/errs"
@@ -36,8 +41,6 @@ import (
 	"github.com/tikv/pd/pkg/statistics/utils"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
-	"github.com/unrolled/render"
-	"go.uber.org/zap"
 )
 
 type grantHotRegionSchedulerConfig struct {
@@ -49,17 +52,14 @@ type grantHotRegionSchedulerConfig struct {
 	StoreLeaderID uint64   `json:"store-leader-id"`
 }
 
-func (conf *grantHotRegionSchedulerConfig) setStore(leaderID uint64, peers []uint64) bool {
+func (conf *grantHotRegionSchedulerConfig) setStore(leaderID uint64, peers []uint64) {
 	conf.Lock()
 	defer conf.Unlock()
-	ret := slice.AnyOf(peers, func(i int) bool {
-		return leaderID == peers[i]
-	})
-	if ret {
-		conf.StoreLeaderID = leaderID
-		conf.StoreIDs = peers
+	if !slice.Contains(peers, leaderID) {
+		peers = append(peers, leaderID)
 	}
-	return ret
+	conf.StoreLeaderID = leaderID
+	conf.StoreIDs = peers
 }
 
 func (conf *grantHotRegionSchedulerConfig) getStoreLeaderID() uint64 {
@@ -194,10 +194,7 @@ func (handler *grantHotRegionHandler) updateConfig(w http.ResponseWriter, r *htt
 		handler.rd.JSON(w, http.StatusBadRequest, errs.ErrBytesToUint64)
 		return
 	}
-	if !handler.config.setStore(leaderID, storeIDs) {
-		handler.rd.JSON(w, http.StatusBadRequest, errs.ErrSchedulerConfig)
-		return
-	}
+	handler.config.setStore(leaderID, storeIDs)
 
 	if err = handler.config.persist(); err != nil {
 		handler.config.setStoreLeaderID(0)
@@ -246,7 +243,7 @@ func (s *grantHotRegionScheduler) dispatch(typ resourceType, cluster sche.Schedu
 }
 
 func (s *grantHotRegionScheduler) randomSchedule(cluster sche.SchedulerCluster, srcStores []*statistics.StoreLoadDetail) (ops []*operator.Operator) {
-	isLeader := s.r.Int()%2 == 1
+	isLeader := rand.Int()%2 == 1
 	for _, srcStore := range srcStores {
 		srcStoreID := srcStore.GetID()
 		if isLeader {
@@ -266,7 +263,7 @@ func (s *grantHotRegionScheduler) randomSchedule(cluster sche.SchedulerCluster, 
 			op, err := s.transfer(cluster, peer.RegionID, srcStoreID, isLeader)
 			if err != nil {
 				log.Debug("fail to create grant hot region operator", zap.Uint64("region-id", peer.RegionID),
-					zap.Uint64("src store id", srcStoreID), errs.ZapError(err))
+					zap.Uint64("src-store-id", srcStoreID), errs.ZapError(err))
 				continue
 			}
 			return []*operator.Operator{op}
@@ -316,13 +313,17 @@ func (s *grantHotRegionScheduler) transfer(cluster sche.SchedulerCluster, region
 	if srcPeer == nil {
 		return nil, errs.ErrStoreNotFound
 	}
-	i := s.r.Int() % len(destStoreIDs)
+	i := rand.Int() % len(destStoreIDs)
 	dstStore := &metapb.Peer{StoreId: destStoreIDs[i]}
 
 	if isLeader {
 		op, err = operator.CreateTransferLeaderOperator(s.GetName()+"-leader", cluster, srcRegion, dstStore.StoreId, []uint64{}, operator.OpLeader)
 	} else {
 		op, err = operator.CreateMovePeerOperator(s.GetName()+"-move", cluster, srcRegion, operator.OpRegion|operator.OpLeader, srcStore.GetID(), dstStore)
+	}
+	if err != nil {
+		log.Debug("fail to create grant hot leader operator", errs.ZapError(err))
+		return
 	}
 	op.SetPriorityLevel(constant.High)
 	return

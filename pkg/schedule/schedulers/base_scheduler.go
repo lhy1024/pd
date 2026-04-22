@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/errs"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/operator"
@@ -138,8 +139,12 @@ func (s *BaseScheduler) SetDisable(disable bool) error {
 
 // IsDefault returns if the scheduler is a default scheduler.
 func (s *BaseScheduler) IsDefault() bool {
-	if _, ok := s.conf.(defaultSchedulerConfig); ok {
-		return true
+	// Check if the scheduler is in the current DefaultSchedulers list
+	// which dynamically adjusts based on NextGen vs Classic
+	for _, schedulerType := range types.DefaultSchedulers {
+		if s.tp == schedulerType {
+			return true
+		}
 	}
 	return false
 }

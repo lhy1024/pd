@@ -15,9 +15,8 @@
 package filter
 
 import (
-	"math/rand"
+	"math/rand/v2"
 	"sort"
-	"time"
 
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/config"
@@ -27,13 +26,12 @@ import (
 // StoreCandidates wraps store list and provide utilities to select source or
 // target store to schedule.
 type StoreCandidates struct {
-	r      *rand.Rand
 	Stores []*core.StoreInfo
 }
 
 // NewCandidates creates StoreCandidates with store list.
 func NewCandidates(stores []*core.StoreInfo) *StoreCandidates {
-	return &StoreCandidates{r: rand.New(rand.NewSource(time.Now().UnixNano())), Stores: stores}
+	return &StoreCandidates{Stores: stores}
 }
 
 // FilterSource keeps stores that can pass all source filters.
@@ -56,7 +54,7 @@ func (c *StoreCandidates) Sort(less StoreComparer) *StoreCandidates {
 
 // Shuffle reorders all candidates randomly.
 func (c *StoreCandidates) Shuffle() *StoreCandidates {
-	c.r.Shuffle(len(c.Stores), func(i, j int) { c.Stores[i], c.Stores[j] = c.Stores[j], c.Stores[i] })
+	rand.Shuffle(len(c.Stores), func(i, j int) { c.Stores[i], c.Stores[j] = c.Stores[j], c.Stores[i] })
 	return c
 }
 
@@ -110,7 +108,7 @@ func (c *StoreCandidates) RandomPick() *core.StoreInfo {
 	if len(c.Stores) == 0 {
 		return nil
 	}
-	return c.Stores[c.r.Intn(len(c.Stores))]
+	return c.Stores[rand.IntN(len(c.Stores))]
 }
 
 // PickAll return all stores in candidate list.

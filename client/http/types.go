@@ -22,7 +22,8 @@ import (
 	"github.com/pingcap/kvproto/pkg/encryptionpb"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	pd "github.com/tikv/pd/client"
+
+	pd "github.com/tikv/pd/client/clients/router"
 )
 
 // ServiceSafePoint is the safepoint for a specific service
@@ -56,6 +57,7 @@ type State struct {
 	Version        string `json:"version"`
 	GitHash        string `json:"git_hash"`
 	StartTimestamp int64  `json:"start_timestamp"`
+	KernelType     string `json:"kernel_type"`
 }
 
 // KeyRange alias pd.KeyRange to avoid break client compatibility.
@@ -79,6 +81,8 @@ type RegionInfo struct {
 	PendingPeers    []RegionPeer     `json:"pending_peers"`
 	WrittenBytes    uint64           `json:"written_bytes"`
 	ReadBytes       uint64           `json:"read_bytes"`
+	WrittenKeys     uint64           `json:"written_keys"`
+	ReadKeys        uint64           `json:"read_keys"`
 	ApproximateSize int64            `json:"approximate_size"`
 	ApproximateKeys int64            `json:"approximate_keys"`
 
@@ -200,6 +204,34 @@ type HistoryHotRegionsRequest struct {
 	HotRegionTypes []string `json:"hot_region_type,omitempty"`
 }
 
+// RegionDistributions wraps region distribution info
+type RegionDistributions struct {
+	RegionDistributions []*RegionDistribution `json:"region_distribution"`
+}
+
+// RegionDistribution wraps region distribution info
+// it is storage format of region_distribution_storage
+type RegionDistribution struct {
+	StoreID           uint64 `json:"store_id"`
+	EngineType        string `json:"engine_type"`
+	RegionLeaderCount int    `json:"region_leader_count"`
+	RegionPeerCount   int    `json:"region_peer_count"`
+	ApproximateSize   int64  `json:"approximate_size"`
+	ApproximateKeys   int64  `json:"approximate_keys"`
+	// write
+	RegionWriteBytes uint64 `json:"region_write_bytes"`
+	RegionWriteKeys  uint64 `json:"region_write_keys"`
+	RegionWriteQuery uint64 `json:"region_write_query"`
+	// leader read
+	RegionLeaderReadBytes uint64 `json:"region_leader_read_bytes"`
+	RegionLeaderReadKeys  uint64 `json:"region_leader_read_keys"`
+	RegionLeaderReadQuery uint64 `json:"region_leader_read_query"`
+	// peer read
+	RegionPeerReadBytes uint64 `json:"region_peer_read_bytes"`
+	RegionPeerReadKeys  uint64 `json:"region_peer_read_keys"`
+	RegionPeerReadQuery uint64 `json:"region_peer_read_query"`
+}
+
 // HistoryHotRegions wraps historyHotRegion
 type HistoryHotRegions struct {
 	HistoryHotRegion []*HistoryHotRegion `json:"history_hot_region"`
@@ -278,12 +310,24 @@ type StoreStatus struct {
 
 // RegionStats stores the statistics of regions.
 type RegionStats struct {
-	Count            int            `json:"count"`
-	EmptyCount       int            `json:"empty_count"`
-	StorageSize      int64          `json:"storage_size"`
-	StorageKeys      int64          `json:"storage_keys"`
-	StoreLeaderCount map[uint64]int `json:"store_leader_count"`
-	StorePeerCount   map[uint64]int `json:"store_peer_count"`
+	Count                int               `json:"count"`
+	EmptyCount           int               `json:"empty_count"`
+	StorageSize          int64             `json:"storage_size"`
+	StorageKeys          int64             `json:"storage_keys"`
+	StoreLeaderCount     map[uint64]int    `json:"store_leader_count"`
+	StorePeerCount       map[uint64]int    `json:"store_peer_count"`
+	StorePeerSize        map[uint64]int64  `json:"store_peer_size,omitempty"`
+	StorePeerKeys        map[uint64]int64  `json:"store_peer_keys,omitempty"`
+	StoreWriteBytes      map[uint64]uint64 `json:"store_write_bytes,omitempty"`
+	StoreWriteKeys       map[uint64]uint64 `json:"store_write_keys,omitempty"`
+	StoreWriteQuery      map[uint64]uint64 `json:"store_write_query,omitempty"`
+	StoreLeaderReadBytes map[uint64]uint64 `json:"store_leader_read_bytes,omitempty"`
+	StoreLeaderReadKeys  map[uint64]uint64 `json:"store_leader_read_keys,omitempty"`
+	StoreLeaderReadQuery map[uint64]uint64 `json:"store_leader_read_query,omitempty"`
+	StorePeerReadBytes   map[uint64]uint64 `json:"store_peer_read_bytes,omitempty"`
+	StorePeerReadKeys    map[uint64]uint64 `json:"store_peer_read_keys,omitempty"`
+	StorePeerReadQuery   map[uint64]uint64 `json:"store_peer_read_query,omitempty"`
+	StoreEngine          map[uint64]string `json:"store_engine,omitempty"`
 }
 
 // PeerRoleType is the expected peer type of the placement rule.
@@ -459,7 +503,7 @@ type RuleOp struct {
 	DeleteByIDPrefix bool       `json:"delete_by_id_prefix"` // if action == delete, delete by the prefix of id
 }
 
-func (r RuleOp) String() string {
+func (r *RuleOp) String() string {
 	b, _ := json.Marshal(r)
 	return string(b)
 }
@@ -604,8 +648,8 @@ type MembersInfo struct {
 	EtcdLeader *pdpb.Member         `json:"etcd_leader,omitempty"`
 }
 
-// MicroServiceMember is the member info of a micro service.
-type MicroServiceMember struct {
+// MicroserviceMember is the member info of a microservice.
+type MicroserviceMember struct {
 	ServiceAddr    string `json:"service-addr"`
 	Version        string `json:"version"`
 	GitHash        string `json:"git-hash"`
@@ -658,4 +702,82 @@ type Health struct {
 	MemberID   uint64   `json:"member_id"`
 	ClientUrls []string `json:"client_urls"`
 	Health     bool     `json:"health"`
+}
+
+// AffinityGroupKeyRange represents a key range for affinity group operations.
+type AffinityGroupKeyRange struct {
+	StartKey []byte `json:"start_key"`
+	EndKey   []byte `json:"end_key"`
+}
+
+// CreateAffinityGroupInput defines the input for a single group in the creation request.
+type CreateAffinityGroupInput struct {
+	Ranges []AffinityGroupKeyRange `json:"ranges"`
+}
+
+// CreateAffinityGroupsRequest defines the body for the POST request to create affinity groups.
+type CreateAffinityGroupsRequest struct {
+	AffinityGroups map[string]CreateAffinityGroupInput `json:"affinity_groups"`
+}
+
+// AffinityGroup defines an affinity group.
+type AffinityGroup struct {
+	ID              string   `json:"id"`
+	CreateTimestamp uint64   `json:"create_timestamp"`
+	LeaderStoreID   uint64   `json:"leader_store_id,omitempty"`
+	VoterStoreIDs   []uint64 `json:"voter_store_ids,omitempty"`
+}
+
+// AffinityGroupState defines the runtime state of an affinity group.
+type AffinityGroupState struct {
+	AffinityGroup
+	Phase               string `json:"phase"`
+	RangeCount          int    `json:"range_count"`
+	RegionCount         int    `json:"region_count"`
+	AffinityRegionCount int    `json:"affinity_region_count"`
+}
+
+// IsPending indicates that the Group is still determining the StoreIDs.
+// If the Group has no KeyRanges, it remains in pending forever.
+func (s *AffinityGroupState) IsPending() bool {
+	return s.Phase == "pending"
+}
+
+// IsPreparing indicates that the Group is scheduling Regions according to the required Peers.
+func (s *AffinityGroupState) IsPreparing() bool {
+	return s.Phase == "preparing"
+}
+
+// IsStable indicates that the Group has completed the required scheduling and is currently in a stable state.
+func (s *AffinityGroupState) IsStable() bool {
+	return s.Phase == "stable"
+}
+
+// AffinityGroupsResponse defines the success response for affinity group operations.
+type AffinityGroupsResponse struct {
+	AffinityGroups map[string]*AffinityGroupState `json:"affinity_groups"`
+}
+
+// BatchDeleteAffinityGroupsRequest defines the body for batch delete request.
+type BatchDeleteAffinityGroupsRequest struct {
+	IDs   []string `json:"ids"`
+	Force bool     `json:"force,omitempty"`
+}
+
+// GroupRangesModification defines add or remove operations for a specific group.
+type GroupRangesModification struct {
+	ID     string                  `json:"id"`
+	Ranges []AffinityGroupKeyRange `json:"ranges"`
+}
+
+// BatchModifyAffinityGroupsRequest defines the body for batch modify request.
+type BatchModifyAffinityGroupsRequest struct {
+	Add    []GroupRangesModification `json:"add,omitempty"`
+	Remove []GroupRangesModification `json:"remove,omitempty"`
+}
+
+// UpdateAffinityGroupPeersRequest defines the body for updating peer distribution of an affinity group.
+type UpdateAffinityGroupPeersRequest struct {
+	LeaderStoreID uint64   `json:"leader_store_id"`
+	VoterStoreIDs []uint64 `json:"voter_store_ids"`
 }
