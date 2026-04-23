@@ -548,7 +548,7 @@ func (r *RegionScatterer) scatterRegionWithDesc(region *core.RegionInfo, group s
 			}
 			filters[filterLen-1] = filter.NewPlacementSafeguard(r.name, r.cluster.GetSharedConfig(), r.cluster.GetBasicCluster(), r.cluster.GetRuleManager(), region, sourceStore, oldFit)
 			for {
-				newPeer, peerTrace := r.selectNewPeerWithTrace(context, group, peer, filters)
+				newPeer, peerTrace := r.selectNewPeerWithTrace(context, group, peer, filters, logInternalScatter)
 				targetPeers[newPeer.GetStoreId()] = newPeer
 				selectedStores[newPeer.GetStoreId()] = struct{}{}
 				if logInternalScatter {
@@ -582,7 +582,7 @@ func (r *RegionScatterer) scatterRegionWithDesc(region *core.RegionInfo, group s
 	// FIXME: target leader only considers the ordinary stores, maybe we need to consider the
 	// special engine stores if the engine supports to become a leader. But now there is only
 	// one engine, tiflash, which does not support the leader, so don't consider it for now.
-	targetLeader, leaderStorePickedCount, leaderTrace := r.selectAvailableLeaderStoreWithTrace(group, region, leaderCandidateStores, r.ordinaryEngine)
+	targetLeader, leaderStorePickedCount, leaderTrace := r.selectAvailableLeaderStoreWithTrace(group, region, leaderCandidateStores, r.ordinaryEngine, logInternalScatter)
 	if targetLeader == 0 {
 		scatterSkipNoLeaderCounter.Inc()
 		return nil, errs.ErrGetTargetStore.FastGenByArgs(fmt.Sprintf("no target leader store found, region: %v", region))
@@ -684,7 +684,16 @@ type peerSelectionTrace struct {
 	candidates             []string
 }
 
-func (r *RegionScatterer) selectNewPeerWithTrace(context engineContext, group string, peer *metapb.Peer, filters []filter.Filter) (*metapb.Peer, peerSelectionTrace) {
+type peerCandidateTrace struct {
+	storeID        uint64
+	pickedCount    uint64
+	allowedByCount bool
+	passedFilters  bool
+	filterReasons  []string
+	origin         bool
+}
+
+func (r *RegionScatterer) selectNewPeerWithTrace(context engineContext, group string, peer *metapb.Peer, filters []filter.Filter, internalScatter bool) (*metapb.Peer, peerSelectionTrace) {
 	stores := r.cluster.GetStores()
 	maxStoreTotalCount := uint64(0)
 	minStoreTotalCount := uint64(math.MaxUint64)
@@ -699,13 +708,14 @@ func (r *RegionScatterer) selectNewPeerWithTrace(context engineContext, group st
 	}
 
 	var newPeer *metapb.Peer
+	var uncoveredPeer *metapb.Peer
 	minCount := uint64(math.MaxUint64)
 	originStorePickedCount := uint64(math.MaxUint64)
 	trace := peerSelectionTrace{
 		maxStorePickedCount: maxStoreTotalCount,
 		minStorePickedCount: minStoreTotalCount,
-		candidates:          make([]string, 0, len(stores)),
 	}
+	rawCandidates := make([]peerCandidateTrace, 0, len(stores))
 	for _, store := range stores {
 		storeCount := context.selectedPeer.Get(store.GetID(), group)
 		if store.GetID() == peer.GetStoreId() {
@@ -720,52 +730,162 @@ func (r *RegionScatterer) selectNewPeerWithTrace(context engineContext, group st
 		if allowedByCount {
 			filterReasons = collectTargetFilterReasons(r.cluster.GetSharedConfig(), store, filters)
 			passedFilters = len(filterReasons) == 0
-			if passedFilters && storeCount < minCount {
-				minCount = storeCount
-				newPeer = &metapb.Peer{
+			if passedFilters {
+				candidate := &metapb.Peer{
 					StoreId: store.GetID(),
 					Role:    peer.GetRole(),
 				}
+				if internalScatter && store.GetID() != peer.GetStoreId() && storeCount == 0 {
+					if uncoveredPeer == nil || store.GetID() < uncoveredPeer.GetStoreId() {
+						uncoveredPeer = candidate
+					}
+				}
+				if storeCount < minCount {
+					minCount = storeCount
+					newPeer = candidate
+				}
 			}
 		}
-		trace.candidates = append(trace.candidates, formatPeerCandidateTrace(store.GetID(), storeCount, allowedByCount, passedFilters, filterReasons, peer.GetStoreId(), newPeer))
+		rawCandidates = append(rawCandidates, peerCandidateTrace{
+			storeID:        store.GetID(),
+			pickedCount:    storeCount,
+			allowedByCount: allowedByCount,
+			passedFilters:  passedFilters,
+			filterReasons:  append([]string(nil), filterReasons...),
+			origin:         store.GetID() == peer.GetStoreId(),
+		})
 	}
 	trace.originStorePickedCount = originStorePickedCount
+	finalPeer := peer
+	if internalScatter && uncoveredPeer != nil {
+		finalPeer = uncoveredPeer
+		trace.candidates = formatPeerCandidateTraces(rawCandidates, finalPeer.GetStoreId())
+		return finalPeer, trace
+	}
+	if internalScatter && newPeer != nil && peer.GetStoreId() != newPeer.GetStoreId() &&
+		!peerMoveImprovesGroupGap(stores, context.selectedPeer, group, peer.GetStoreId(), newPeer.GetStoreId()) {
+		trace.candidates = formatPeerCandidateTraces(rawCandidates, finalPeer.GetStoreId())
+		return finalPeer, trace
+	}
 	if originStorePickedCount <= minCount {
-		return peer, trace
+		trace.candidates = formatPeerCandidateTraces(rawCandidates, finalPeer.GetStoreId())
+		return finalPeer, trace
 	}
 	if newPeer == nil {
-		return peer, trace
+		trace.candidates = formatPeerCandidateTraces(rawCandidates, finalPeer.GetStoreId())
+		return finalPeer, trace
 	}
-	return newPeer, trace
+	finalPeer = newPeer
+	trace.candidates = formatPeerCandidateTraces(rawCandidates, finalPeer.GetStoreId())
+	return finalPeer, trace
 }
 
 // selectAvailableLeaderStoreWithTrace selects the target leader store from the candidates. The candidates are collected by
 // the existed peers store depended on the leader counts in the group level. Please use this func before scatter spacial engines.
 func (r *RegionScatterer) selectAvailableLeaderStoreWithTrace(group string, region *core.RegionInfo,
-	leaderCandidateStores []uint64, context engineContext) (leaderID uint64, leaderStorePickedCount uint64, trace []string) {
+	leaderCandidateStores []uint64, context engineContext, internalScatter bool) (leaderID uint64, leaderStorePickedCount uint64, trace []string) {
 	sourceStore := r.cluster.GetStore(region.GetLeader().GetStoreId())
 	if sourceStore == nil {
 		log.Error("failed to get the store", zap.Uint64("store-id", region.GetLeader().GetStoreId()), errs.ZapError(errs.ErrGetSourceStore))
 		return 0, 0, nil
 	}
+	type leaderCandidateTrace struct {
+		storeID      uint64
+		leaderPicked uint64
+		peerPicked   uint64
+		missing      bool
+	}
 	minStoreGroupLeader := uint64(math.MaxUint64)
+	minStoreGroupPeer := uint64(math.MaxUint64)
 	id := uint64(0)
-	trace = make([]string, 0, len(leaderCandidateStores))
+	unusedAlternativeID := uint64(0)
+	unusedAlternativePeerCount := uint64(math.MaxUint64)
+	rawCandidates := make([]leaderCandidateTrace, 0, len(leaderCandidateStores))
 	for _, storeID := range leaderCandidateStores {
 		store := r.cluster.GetStore(storeID)
 		if store == nil {
-			trace = append(trace, fmt.Sprintf("store=%d,missing=true", storeID))
+			rawCandidates = append(rawCandidates, leaderCandidateTrace{storeID: storeID, missing: true})
 			continue
 		}
 		storeGroupLeaderCount := context.selectedLeader.Get(storeID, group)
-		trace = append(trace, fmt.Sprintf("store=%d,picked=%d,selected=%t", storeID, storeGroupLeaderCount, id == 0 || minStoreGroupLeader > storeGroupLeaderCount))
-		if minStoreGroupLeader > storeGroupLeaderCount {
+		storeGroupPeerCount := context.selectedPeer.Get(storeID, group)
+		rawCandidates = append(rawCandidates, leaderCandidateTrace{
+			storeID:      storeID,
+			leaderPicked: storeGroupLeaderCount,
+			peerPicked:   storeGroupPeerCount,
+		})
+		if internalScatter && storeID != region.GetLeader().GetStoreId() && storeGroupLeaderCount == 0 {
+			if unusedAlternativeID == 0 || storeGroupPeerCount < unusedAlternativePeerCount ||
+				(storeGroupPeerCount == unusedAlternativePeerCount && storeID < unusedAlternativeID) {
+				unusedAlternativeID = storeID
+				unusedAlternativePeerCount = storeGroupPeerCount
+			}
+		}
+		if id == 0 || minStoreGroupLeader > storeGroupLeaderCount ||
+			(internalScatter && minStoreGroupLeader == storeGroupLeaderCount && minStoreGroupPeer > storeGroupPeerCount) {
 			minStoreGroupLeader = storeGroupLeaderCount
+			minStoreGroupPeer = storeGroupPeerCount
 			id = storeID
 		}
 	}
-	return id, minStoreGroupLeader, trace
+	selectedID := id
+	if internalScatter && unusedAlternativeID != 0 {
+		selectedID = unusedAlternativeID
+		leaderStorePickedCount = 0
+	} else {
+		leaderStorePickedCount = minStoreGroupLeader
+	}
+	trace = make([]string, 0, len(rawCandidates))
+	for _, candidate := range rawCandidates {
+		if candidate.missing {
+			trace = append(trace, fmt.Sprintf("store=%d,missing=true", candidate.storeID))
+			continue
+		}
+		trace = append(trace, fmt.Sprintf(
+			"store=%d,leader-picked=%d,peer-picked=%d,selected=%t",
+			candidate.storeID,
+			candidate.leaderPicked,
+			candidate.peerPicked,
+			candidate.storeID == selectedID,
+		))
+	}
+	return selectedID, leaderStorePickedCount, trace
+}
+
+func peerMoveImprovesGroupGap(stores []*core.StoreInfo, selectedPeers *selectedStores, group string, fromStoreID, toStoreID uint64) bool {
+	beforeMax := uint64(0)
+	beforeMin := uint64(math.MaxUint64)
+	afterMax := uint64(0)
+	afterMin := uint64(math.MaxUint64)
+	for _, store := range stores {
+		storeID := store.GetID()
+		count := selectedPeers.Get(storeID, group)
+		if count > beforeMax {
+			beforeMax = count
+		}
+		if count < beforeMin {
+			beforeMin = count
+		}
+		afterCount := count
+		if storeID == fromStoreID {
+			if afterCount > 0 {
+				afterCount--
+			}
+		}
+		if storeID == toStoreID {
+			afterCount++
+		}
+		if afterCount > afterMax {
+			afterMax = afterCount
+		}
+		if afterCount < afterMin {
+			afterMin = afterCount
+		}
+	}
+	if beforeMin == uint64(math.MaxUint64) || afterMin == uint64(math.MaxUint64) {
+		return false
+	}
+	return afterMax-afterMin < beforeMax-beforeMin
 }
 
 func collectTargetFilterReasons(conf config.SharedConfigProvider, store *core.StoreInfo, filters []filter.Filter) []string {
@@ -784,18 +904,25 @@ func collectTargetFilterReasons(conf config.SharedConfigProvider, store *core.St
 	return reasons
 }
 
-func formatPeerCandidateTrace(storeID, pickedCount uint64, allowedByCount, passedFilters bool, filterReasons []string, originStoreID uint64, selectedPeer *metapb.Peer) string {
-	selected := selectedPeer != nil && selectedPeer.GetStoreId() == storeID
-	parts := []string{
-		fmt.Sprintf("store=%d", storeID),
-		fmt.Sprintf("picked=%d", pickedCount),
-		fmt.Sprintf("allowed-by-count=%t", allowedByCount),
-		fmt.Sprintf("passed-filters=%t", passedFilters),
-		fmt.Sprintf("origin=%t", storeID == originStoreID),
-		fmt.Sprintf("selected=%t", selected),
+func formatPeerCandidateTraces(candidates []peerCandidateTrace, selectedStoreID uint64) []string {
+	formatted := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		formatted = append(formatted, formatPeerCandidateTrace(candidate, selectedStoreID))
 	}
-	if len(filterReasons) > 0 {
-		parts = append(parts, "filter-reasons="+strings.Join(filterReasons, "|"))
+	return formatted
+}
+
+func formatPeerCandidateTrace(candidate peerCandidateTrace, selectedStoreID uint64) string {
+	parts := []string{
+		fmt.Sprintf("store=%d", candidate.storeID),
+		fmt.Sprintf("picked=%d", candidate.pickedCount),
+		fmt.Sprintf("allowed-by-count=%t", candidate.allowedByCount),
+		fmt.Sprintf("passed-filters=%t", candidate.passedFilters),
+		fmt.Sprintf("origin=%t", candidate.origin),
+		fmt.Sprintf("selected=%t", candidate.storeID == selectedStoreID),
+	}
+	if len(candidate.filterReasons) > 0 {
+		parts = append(parts, "filter-reasons="+strings.Join(candidate.filterReasons, "|"))
 	}
 	return strings.Join(parts, ",")
 }

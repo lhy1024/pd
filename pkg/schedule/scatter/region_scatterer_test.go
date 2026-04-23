@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"github.com/tikv/pd/pkg/mock/mockcluster"
 	"github.com/tikv/pd/pkg/mock/mockconfig"
 	"github.com/tikv/pd/pkg/schedule/affinity"
+	"github.com/tikv/pd/pkg/schedule/filter"
 	"github.com/tikv/pd/pkg/schedule/hbstream"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
@@ -1477,4 +1479,171 @@ func TestScatterWithDescSkipsHotOnlyForAdmin(t *testing.T) {
 	if op != nil {
 		re.Equal(InternalScatterOperatorDesc, op.Desc())
 	}
+}
+
+func TestInternalScatterPrefersUnusedPeerStore(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 5; i++ {
+		tc.AddRegionStore(i, 0)
+	}
+	region := tc.AddLeaderRegion(1, 1, 2, 3)
+	peer := region.GetStorePeer(1)
+	re.NotNil(peer)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "test-peer-coverage"
+	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{}))
+	filters := []filter.Filter{filter.NewExcludedFilter("test", nil, map[uint64]struct{}{
+		2: {},
+		3: {},
+	})}
+
+	adminPeer, _ := scatterer.selectNewPeerWithTrace(scatterer.ordinaryEngine, group, peer, filters, false)
+	re.Equal(uint64(1), adminPeer.GetStoreId())
+
+	internalPeer, internalTrace := scatterer.selectNewPeerWithTrace(scatterer.ordinaryEngine, group, peer, filters, true)
+	re.Equal(uint64(4), internalPeer.GetStoreId())
+	re.True(anyTraceLineMatches(internalTrace.candidates, "store=4", "selected=true"))
+}
+
+func TestInternalScatterPeerKeepsOriginAfterCoverageWithoutImprovement(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 5; i++ {
+		tc.AddRegionStore(i, 0)
+	}
+	region := tc.AddLeaderRegion(1, 1, 2, 3)
+	peer := region.GetStorePeer(1)
+	re.NotNil(peer)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "test-peer-post-coverage"
+	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
+		1: 2,
+		2: 2,
+		3: 2,
+		4: 1,
+		5: 1,
+	}))
+
+	internalPeer, _ := scatterer.selectNewPeerWithTrace(scatterer.ordinaryEngine, group, peer, nil, true)
+	re.Equal(uint64(1), internalPeer.GetStoreId())
+}
+
+func TestInternalScatterPeerMovesOnlyWhenGapImproves(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 5; i++ {
+		tc.AddRegionStore(i, 0)
+	}
+	region := tc.AddLeaderRegion(1, 1, 2, 3)
+	peer := region.GetStorePeer(1)
+	re.NotNil(peer)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "test-peer-strict-improvement"
+	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
+		1: 6,
+		2: 4,
+		3: 4,
+		4: 1,
+		5: 1,
+	}))
+
+	internalPeer, _ := scatterer.selectNewPeerWithTrace(scatterer.ordinaryEngine, group, peer, nil, true)
+	re.Contains([]uint64{4, 5}, internalPeer.GetStoreId())
+}
+
+func TestInternalScatterLeaderPrefersUnusedStore(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 5; i++ {
+		tc.AddRegionStore(i, 0)
+	}
+	region := tc.AddLeaderRegion(1, 1, 2, 3)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "test-leader-coverage"
+
+	adminLeader, _, _ := scatterer.selectAvailableLeaderStoreWithTrace(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
+	re.Equal(uint64(1), adminLeader)
+
+	internalLeader, _, internalTrace := scatterer.selectAvailableLeaderStoreWithTrace(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
+	re.Equal(uint64(4), internalLeader)
+	re.True(anyTraceLineMatches(internalTrace, "store=4", "selected=true"))
+}
+
+func TestInternalScatterLeaderBreaksTiesByPeerDeficit(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 5; i++ {
+		tc.AddRegionStore(i, 0)
+	}
+	region := tc.AddLeaderRegion(1, 1, 2, 3)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "test-leader-peer-deficit"
+	re.True(scatterer.ordinaryEngine.selectedLeader.InitGroupDistribution(group, map[uint64]uint64{
+		1: 1,
+		4: 1,
+		5: 1,
+	}))
+	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
+		1: 10,
+		4: 9,
+		5: 2,
+	}))
+
+	adminLeader, _, _ := scatterer.selectAvailableLeaderStoreWithTrace(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
+	re.Equal(uint64(1), adminLeader)
+
+	internalLeader, _, _ := scatterer.selectAvailableLeaderStoreWithTrace(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
+	re.Equal(uint64(5), internalLeader)
+}
+
+func anyTraceLineMatches(lines []string, substrings ...string) bool {
+	for _, line := range lines {
+		matched := true
+		for _, substring := range substrings {
+			if !strings.Contains(line, substring) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }

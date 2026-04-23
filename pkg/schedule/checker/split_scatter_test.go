@@ -106,7 +106,7 @@ func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	group := splitScatterPendingGroup(t, controller, 101)
-	re.Equal("split-scatter-index-42-7", group)
+	re.Equal(makeSplitScatterGroup(100, 101), group)
 
 	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
@@ -126,7 +126,7 @@ func TestObserveSplitScatterRegionCachesResolvedGroupHint(t *testing.T) {
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	firstGroup := splitScatterPendingGroup(t, controller, 101)
-	re.Equal("split-scatter-index-42-7", firstGroup)
+	re.Equal(makeSplitScatterGroup(100, 101), firstGroup)
 
 	expectedRange := splitScatterPrefixRange(splitScatterIndexKeyPrefix())
 	firstCandidate := controller.splitScatterQueue.getCandidates(1)
@@ -157,7 +157,7 @@ func TestObserveSplitScatterRegionUsesTableGroupAndRangeHintForRecordKey(t *test
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	group := splitScatterPendingGroup(t, controller, 101)
-	re.Equal("split-scatter-table-42", group)
+	re.Equal(makeSplitScatterGroup(100, 101), group)
 
 	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
@@ -177,7 +177,7 @@ func TestObserveSplitScatterRegionUsesTableGroupForBareTableBoundary(t *testing.
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	group := splitScatterPendingGroup(t, controller, 101)
-	re.Equal("split-scatter-table-42", group)
+	re.Equal(makeSplitScatterGroup(100, 101), group)
 
 	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
@@ -197,7 +197,7 @@ func TestObserveSplitScatterRegionUsesTableGroupForCrossEntityRegion(t *testing.
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	group := splitScatterPendingGroup(t, controller, 101)
-	re.Equal("split-scatter-table-42", group)
+	re.Equal(makeSplitScatterGroup(100, 101), group)
 
 	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
@@ -217,7 +217,7 @@ func TestObserveSplitScatterRegionUsesStartTableGroupForCrossTableRegion(t *test
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	group := splitScatterPendingGroup(t, controller, 101)
-	re.Equal("split-scatter-table-42", group)
+	re.Equal(makeSplitScatterGroup(100, 101), group)
 
 	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)

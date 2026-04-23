@@ -16,7 +16,6 @@ package checker
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
@@ -35,11 +34,6 @@ const (
 	splitScatterEntityIndex
 )
 
-type splitScatterGroupHint struct {
-	group     string
-	rangeHint splitScatterRangeHint
-}
-
 type splitScatterEntity struct {
 	kind      splitScatterEntityKind
 	tableID   int64
@@ -47,28 +41,12 @@ type splitScatterEntity struct {
 	rawPrefix []byte
 }
 
-func resolveSplitScatterGroup(region *core.RegionInfo, fallbackGroup string) splitScatterGroupHint {
+func resolveSplitScatterRangeHint(region *core.RegionInfo) splitScatterRangeHint {
 	entity, ok := resolveSplitScatterEntity(region.GetStartKey(), region.GetEndKey())
 	if !ok {
-		return splitScatterGroupHint{group: fallbackGroup}
+		return splitScatterRangeHint{}
 	}
-
-	hint := splitScatterGroupHint{
-		rangeHint: splitScatterPrefixRange(entity.rawPrefix),
-	}
-	switch entity.kind {
-	case splitScatterEntityIndex:
-		hint.group = fmt.Sprintf("split-scatter-index-%d-%d", entity.tableID, entity.indexID)
-	case splitScatterEntityTable:
-		hint.group = fmt.Sprintf("split-scatter-table-%d", entity.tableID)
-	default:
-		hint.group = fallbackGroup
-		hint.rangeHint = splitScatterRangeHint{}
-	}
-	if hint.group == "" {
-		hint.group = fallbackGroup
-	}
-	return hint
+	return splitScatterPrefixRange(entity.rawPrefix)
 }
 
 func resolveSplitScatterEntity(startKey, endKey []byte) (splitScatterEntity, bool) {
