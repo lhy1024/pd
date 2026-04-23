@@ -520,7 +520,7 @@ func (r *RegionScatterer) ScatterWithDesc(region *core.RegionInfo, group string,
 		return nil, nil
 	}
 
-	if r.cluster.IsRegionHot(region) {
+	if desc == AdminScatterOperatorDesc && r.cluster.IsRegionHot(region) {
 		scatterSkipHotRegionCounter.Inc()
 		log.Warn("region too hot during scatter", zap.Uint64("region-id", region.GetID()))
 		return nil, errors.Errorf("region %d is hot", region.GetID())
