@@ -21,8 +21,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/log"
 	"go.uber.org/zap"
+
+	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"

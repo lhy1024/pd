@@ -118,39 +118,6 @@ func formatStoreCounts(counts map[uint64]uint64) string {
 	return strings.Join(parts, ",")
 }
 
-func formatStoreReasons(reasons map[uint64][]string) string {
-	if len(reasons) == 0 {
-		return ""
-	}
-	ids := make([]uint64, 0, len(reasons))
-	for id := range reasons {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
-	parts := make([]string, 0, len(ids))
-	for _, id := range ids {
-		parts = append(parts, fmt.Sprintf("%d:[%s]", id, strings.Join(reasons[id], "|")))
-	}
-	return strings.Join(parts, ",")
-}
-
-func formatStoreIDs(ids []uint64) string {
-	if len(ids) == 0 {
-		return ""
-	}
-	sorted := append([]uint64(nil), ids...)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i] < sorted[j]
-	})
-	parts := make([]string, 0, len(sorted))
-	for _, id := range sorted {
-		parts = append(parts, strconv.FormatUint(id, 10))
-	}
-	return strings.Join(parts, ",")
-}
-
 func decrementDistribution(distribution map[uint64]uint64, id uint64) {
 	count, ok := distribution[id]
 	if !ok {
@@ -529,8 +496,8 @@ func (r *RegionScatterer) ScatterWithDesc(region *core.RegionInfo, group string,
 	return r.scatterRegionWithDesc(region, group, skipStoreLimit, desc)
 }
 
-func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
-	return r.scatterRegionWithDesc(region, group, skipStoreLimit, AdminScatterOperatorDesc)
+func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string) (*operator.Operator, error) {
+	return r.scatterRegionWithDesc(region, group, false, AdminScatterOperatorDesc)
 }
 
 func (r *RegionScatterer) scatterRegionWithDesc(region *core.RegionInfo, group string, skipStoreLimit bool, desc string) (*operator.Operator, error) {
@@ -704,17 +671,12 @@ func isSameDistribution(region *core.RegionInfo, targetPeers map[uint64]*metapb.
 	return region.GetLeader().GetStoreId() == targetLeader
 }
 
-// selectNewPeer return the new peer which pick the fewest picked count.
+// selectNewPeerWithTrace returns the new peer which pick the fewest picked count.
 // it keeps the origin peer if the origin store's pick count is equal the fewest pick.
 // it can be divided into three steps:
 // 1. found the max pick count and the min pick count.
 // 2. if max pick count equals min pick count, it means all store picked count are some, return the origin peer.
 // 3. otherwise, select the store which pick count is the min pick count and pass all filter.
-func (r *RegionScatterer) selectNewPeer(context engineContext, group string, peer *metapb.Peer, filters []filter.Filter) *metapb.Peer {
-	newPeer, _ := r.selectNewPeerWithTrace(context, group, peer, filters)
-	return newPeer
-}
-
 type peerSelectionTrace struct {
 	maxStorePickedCount    uint64
 	minStorePickedCount    uint64
@@ -778,14 +740,8 @@ func (r *RegionScatterer) selectNewPeerWithTrace(context engineContext, group st
 	return newPeer, trace
 }
 
-// selectAvailableLeaderStore select the target leader store from the candidates. The candidates would be collected by
+// selectAvailableLeaderStoreWithTrace selects the target leader store from the candidates. The candidates are collected by
 // the existed peers store depended on the leader counts in the group level. Please use this func before scatter spacial engines.
-func (r *RegionScatterer) selectAvailableLeaderStore(group string, region *core.RegionInfo,
-	leaderCandidateStores []uint64, context engineContext) (leaderID uint64, leaderStorePickedCount uint64) {
-	leaderID, leaderStorePickedCount, _ = r.selectAvailableLeaderStoreWithTrace(group, region, leaderCandidateStores, context)
-	return leaderID, leaderStorePickedCount
-}
-
 func (r *RegionScatterer) selectAvailableLeaderStoreWithTrace(group string, region *core.RegionInfo,
 	leaderCandidateStores []uint64, context engineContext) (leaderID uint64, leaderStorePickedCount uint64, trace []string) {
 	sourceStore := r.cluster.GetStore(region.GetLeader().GetStoreId())
@@ -861,12 +817,15 @@ func scatterPlacementPeers(region *core.RegionInfo) map[uint64]*metapb.Peer {
 	return peers
 }
 
-func (r *RegionScatterer) classifyPlacementStores(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer) ([]uint64, []uint64, map[string][]uint64, map[string][]uint64) {
+func (r *RegionScatterer) classifyPlacementStores(
+	region *core.RegionInfo,
+	targetPeers map[uint64]*metapb.Peer,
+) (ordinaryOldStores, ordinaryNewStores []uint64, specialOldStores, specialNewStores map[string][]uint64) {
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
-	ordinaryOldStores := make([]uint64, 0, len(region.GetPeers()))
-	ordinaryNewStores := make([]uint64, 0, len(targetPeers))
-	specialOldStores := make(map[string][]uint64)
-	specialNewStores := make(map[string][]uint64)
+	ordinaryOldStores = make([]uint64, 0, len(region.GetPeers()))
+	ordinaryNewStores = make([]uint64, 0, len(targetPeers))
+	specialOldStores = make(map[string][]uint64)
+	specialNewStores = make(map[string][]uint64)
 
 	classifyStore := func(storeID uint64, ordinary *[]uint64, special map[string][]uint64) {
 		store := r.cluster.GetStore(storeID)

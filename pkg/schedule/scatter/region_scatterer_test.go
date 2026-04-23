@@ -114,6 +114,13 @@ func checkOperator(re *require.Assertions, op *operator.Operator) {
 	}
 }
 
+func commitScatterOp(scatterer *RegionScatterer, region *core.RegionInfo, op *operator.Operator, group string) {
+	if op == nil {
+		return
+	}
+	scatterer.Commit(region, op, group)
+}
+
 func scatter(re *require.Assertions, numStores, numRegions uint64, useRules bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -143,6 +150,7 @@ func scatter(re *require.Assertions, numStores, numRegions uint64, useRules bool
 				continue
 			}
 			checkOperator(re, op)
+			commitScatterOp(scatterer, region, op, "")
 			operator.ApplyOperator(tc, op)
 		} else {
 			re.Nil(op)
@@ -233,6 +241,7 @@ func scatterSpecial(re *require.Assertions, numOrdinaryStores, numSpecialStores,
 		if op, err := scatterer.Scatter(region, "", false); op != nil {
 			re.NoError(err)
 			checkOperator(re, op)
+			commitScatterOp(scatterer, region, op, "")
 			operator.ApplyOperator(tc, op)
 		}
 	}
@@ -396,7 +405,7 @@ func TestSomeStoresFilteredScatterGroupInConcurrency(t *testing.T) {
 func scatterOnce(re *require.Assertions, tc *mockcluster.Cluster, scatter *RegionScatterer, group string) {
 	regionID := 1
 	for range 100 {
-		_, err := scatter.scatterRegion(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group, false)
+		_, err := scatter.scatterRegion(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group)
 		re.NoError(err)
 		regionID++
 	}
@@ -442,9 +451,11 @@ func TestScatterGroupInConcurrency(t *testing.T) {
 		regionID := 1
 		for range 100 {
 			for j := range testCase.groupCount {
-				_, err := scatterer.scatterRegion(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3),
-					fmt.Sprintf("group-%v", j), false)
+				group := fmt.Sprintf("group-%v", j)
+				region := tc.AddLeaderRegion(uint64(regionID), 1, 2, 3)
+				op, err := scatterer.scatterRegion(region, group)
 				re.NoError(err)
+				commitScatterOp(scatterer, region, op, group)
 				regionID++
 			}
 		}
@@ -643,8 +654,10 @@ func TestRegionHasLearner(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	regionCount := 50
 	for i := 1; i <= regionCount; i++ {
-		_, err := scatterer.Scatter(tc.AddRegionWithLearner(uint64(i), uint64(1), []uint64{uint64(2), uint64(3)}, []uint64{7}), group, false)
+		region := tc.AddRegionWithLearner(uint64(i), uint64(1), []uint64{uint64(2), uint64(3)}, []uint64{7})
+		op, err := scatterer.Scatter(region, group, false)
 		re.NoError(err)
+		commitScatterOp(scatterer, region, op, group)
 	}
 	check := func(ss *selectedStores) {
 		max := uint64(0)
@@ -714,7 +727,7 @@ func TestSelectedStoresTooFewPeers(t *testing.T) {
 	// Try to scatter a region with peer store id 2/3/4
 	for i := uint64(1); i < 20; i++ {
 		region := tc.AddLeaderRegion(i+200, i%3+2, (i+1)%3+2, (i+2)%3+2)
-		op, err := scatterer.scatterRegion(region, group, false)
+		op, err := scatterer.scatterRegion(region, group)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 		if op != nil {
@@ -1191,7 +1204,7 @@ func TestSelectedStoresTooManyPeers(t *testing.T) {
 	// test region with peer 1 2 3
 	for i := uint64(1); i < 20; i++ {
 		region := tc.AddLeaderRegion(i+200, i%3+1, (i+1)%3+1, (i+2)%3+1)
-		op, err := scatterer.scatterRegion(region, group, false)
+		op, err := scatterer.scatterRegion(region, group)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 	}
@@ -1216,9 +1229,10 @@ func TestBalanceLeader(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	for i := uint64(1001); i <= 1300; i++ {
 		region := tc.AddLeaderRegion(i, 2, 3, 4)
-		op, err := scatterer.scatterRegion(region, group, false)
+		op, err := scatterer.scatterRegion(region, group)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
+		commitScatterOp(scatterer, region, op, group)
 	}
 	// all leader will be balanced in three stores.
 	for i := uint64(2); i <= 4; i++ {
@@ -1247,9 +1261,10 @@ func TestBalanceRegion(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	for i := uint64(1001); i <= 1300; i++ {
 		region := tc.AddLeaderRegion(i, 2, 4, 6)
-		op, err := scatterer.scatterRegion(region, group, false)
+		op, err := scatterer.scatterRegion(region, group)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
+		commitScatterOp(scatterer, region, op, group)
 	}
 	for i := uint64(2); i <= 7; i++ {
 		re.Equal(uint64(150), scatterer.ordinaryEngine.selectedPeer.Get(i, group))
@@ -1257,7 +1272,7 @@ func TestBalanceRegion(t *testing.T) {
 	// Test for unhealthy region
 	// ref https://github.com/tikv/pd/issues/6099
 	region := tc.AddLeaderRegion(1500, 2, 3, 4, 6)
-	op, err := scatterer.scatterRegion(region, group, false)
+	op, err := scatterer.scatterRegion(region, group)
 	re.NoError(err)
 	re.False(isPeerCountChanged(op))
 }
@@ -1310,6 +1325,7 @@ func TestRemoveStoreLimit(t *testing.T) {
 		if op, err := scatterer.Scatter(region, "", true); op != nil {
 			re.NoError(err)
 			re.True(oc.AddOperator(op))
+			commitScatterOp(scatterer, region, op, "")
 		}
 	}
 }

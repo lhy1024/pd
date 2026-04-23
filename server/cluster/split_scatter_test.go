@@ -28,6 +28,7 @@ import (
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mock/mockid"
 	"github.com/tikv/pd/pkg/schedule/hbstream"
+	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/storage"
 )
 
@@ -58,7 +59,7 @@ func TestHandleAskBatchSplitSchedulesSplitScatterInPatrol(t *testing.T) {
 		if op == nil {
 			continue
 		}
-		re.Equal("scatter-region", op.Desc())
+		re.Equal(scatter.InternalScatterOperatorDesc, op.Desc())
 		opGroup, ok := op.GetAdditionalInfo("group")
 		re.True(ok)
 		if group == "" {
@@ -97,7 +98,7 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 
 	op := cluster.GetOperatorController().GetOperator(splitRegionID)
 	re.NotNil(op)
-	re.Equal("scatter-region", op.Desc())
+	re.Equal(scatter.InternalScatterOperatorDesc, op.Desc())
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal("split-scatter-index-42-7", opGroup)

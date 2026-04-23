@@ -33,6 +33,12 @@ import (
 	"github.com/tikv/pd/pkg/schedule/scatter"
 )
 
+const (
+	splitScatterObservedRegionID uint64 = 101
+	splitScatterTestTableID      int64  = 42
+	splitScatterTestIndexID      int64  = 7
+)
+
 func TestRecordSplitScatterBatchAndObserveQueueByCPUScore(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
@@ -95,7 +101,7 @@ func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterIndexKey(42, 7, "a"), newSplitScatterIndexKey(42, 7, "m"), 120)
+	putSplitScatterRegionWithKeys(tc, newSplitScatterIndexKey("a"), newSplitScatterIndexKey("m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
@@ -104,7 +110,7 @@ func TestObserveSplitScatterRegionUsesIndexGroupAndRangeHint(t *testing.T) {
 
 	candidates := controller.splitScatterQueue.getCandidates(1)
 	re.Len(candidates, 1)
-	expectedRange := splitScatterPrefixRange(splitScatterIndexKeyPrefix(42, 7))
+	expectedRange := splitScatterPrefixRange(splitScatterIndexKeyPrefix())
 	re.Equal(expectedRange.startKey, candidates[0].rangeHint.startKey)
 	re.Equal(expectedRange.endKey, candidates[0].rangeHint.endKey)
 }
@@ -115,20 +121,20 @@ func TestObserveSplitScatterRegionCachesResolvedGroupHint(t *testing.T) {
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterIndexKey(42, 7, "a"), newSplitScatterIndexKey(42, 7, "m"), 120)
+	putSplitScatterRegionWithKeys(tc, newSplitScatterIndexKey("a"), newSplitScatterIndexKey("m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	firstGroup := splitScatterPendingGroup(t, controller, 101)
 	re.Equal("split-scatter-index-42-7", firstGroup)
 
-	expectedRange := splitScatterPrefixRange(splitScatterIndexKeyPrefix(42, 7))
+	expectedRange := splitScatterPrefixRange(splitScatterIndexKeyPrefix())
 	firstCandidate := controller.splitScatterQueue.getCandidates(1)
 	re.Len(firstCandidate, 1)
 	re.Equal(expectedRange.startKey, firstCandidate[0].rangeHint.startKey)
 	re.Equal(expectedRange.endKey, firstCandidate[0].rangeHint.endKey)
 
-	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(42, "m"), 80)
+	putSplitScatterRegionWithKeys(tc, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(42, "m"), 80)
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
 	secondGroup := splitScatterPendingGroup(t, controller, 101)
@@ -146,7 +152,7 @@ func TestObserveSplitScatterRegionUsesTableGroupAndRangeHintForRecordKey(t *test
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(42, "m"), 120)
+	putSplitScatterRegionWithKeys(tc, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(42, "m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
@@ -166,7 +172,7 @@ func TestObserveSplitScatterRegionUsesTableGroupForBareTableBoundary(t *testing.
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterTableBoundaryKey(42), newSplitScatterIndexKey(42, 7, "m"), 120)
+	putSplitScatterRegionWithKeys(tc, newSplitScatterTableBoundaryKey(42), newSplitScatterIndexKey("m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
@@ -186,7 +192,7 @@ func TestObserveSplitScatterRegionUsesTableGroupForCrossEntityRegion(t *testing.
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterIndexKey(42, 7, "a"), newSplitScatterRecordKey(42, "m"), 120)
+	putSplitScatterRegionWithKeys(tc, newSplitScatterIndexKey("a"), newSplitScatterRecordKey(42, "m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
@@ -206,7 +212,7 @@ func TestObserveSplitScatterRegionUsesStartTableGroupForCrossTableRegion(t *test
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
-	putSplitScatterRegionWithKeys(tc, 101, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(43, "m"), 120)
+	putSplitScatterRegionWithKeys(tc, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(43, "m"), 120)
 
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 
@@ -410,8 +416,8 @@ func putSplitScatterRegionWithLegacyOnlyCPU(tc *mockcluster.Cluster, regionID ui
 	tc.PutRegion(region)
 }
 
-func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, regionID uint64, startKey, endKey []byte, cpu uint64) {
-	region := tc.AddLeaderRegion(regionID, 1, 2, 3).Clone(
+func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, startKey, endKey []byte, cpu uint64) {
+	region := tc.AddLeaderRegion(splitScatterObservedRegionID, 1, 2, 3).Clone(
 		core.WithStartKey(startKey),
 		core.WithEndKey(endKey),
 		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: cpu}),
@@ -434,16 +440,16 @@ func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uin
 	return item.group
 }
 
-func splitScatterIndexKeyPrefix(tableID, indexID int64) []byte {
+func splitScatterIndexKeyPrefix() []byte {
 	key := []byte{'t'}
-	key = codec.EncodeInt(key, tableID)
+	key = codec.EncodeInt(key, splitScatterTestTableID)
 	key = append(key, '_', 'i')
-	key = codec.EncodeInt(key, indexID)
+	key = codec.EncodeInt(key, splitScatterTestIndexID)
 	return key
 }
 
-func newSplitScatterIndexKey(tableID, indexID int64, suffix string) []byte {
-	key := append([]byte(nil), splitScatterIndexKeyPrefix(tableID, indexID)...)
+func newSplitScatterIndexKey(suffix string) []byte {
+	key := append([]byte(nil), splitScatterIndexKeyPrefix()...)
 	key = append(key, suffix...)
 	return codec.EncodeBytes(key)
 }
