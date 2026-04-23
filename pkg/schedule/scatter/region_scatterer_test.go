@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/hbstream"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
+	"github.com/tikv/pd/pkg/statistics/utils"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/pkg/versioninfo"
@@ -1420,4 +1421,44 @@ func TestScatterWithAffinity(t *testing.T) {
 	op, err := scatterer.Scatter(region, "", true)
 	re.NoError(err)
 	re.Nil(op)
+}
+
+func TestScatterWithDescSkipsHotOnlyForAdmin(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	tc.SetHotRegionCacheHitsThreshold(0)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+
+	for i := uint64(1); i <= 5; i++ {
+		tc.AddRegionStore(i, 0)
+	}
+
+	tc.AddRegionWithReadInfo(
+		1,
+		1,
+		512*1024*utils.StoreHeartBeatReportInterval,
+		0,
+		0,
+		utils.StoreHeartBeatReportInterval,
+		[]uint64{2, 3},
+	)
+	region := tc.GetRegion(1)
+	re.True(tc.IsRegionHot(region))
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+
+	op, err := scatterer.ScatterWithDesc(region, "", true, AdminScatterOperatorDesc)
+	re.ErrorContains(err, "is hot")
+	re.Nil(op)
+
+	op, err = scatterer.ScatterWithDesc(region, "", true, InternalScatterOperatorDesc)
+	re.NoError(err)
+	if op != nil {
+		re.Equal(InternalScatterOperatorDesc, op.Desc())
+	}
 }
