@@ -17,13 +17,11 @@ package checker
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/pingcap/log"
 
-	"github.com/tikv/pd/pkg/cache"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/scatter"
@@ -31,9 +29,7 @@ import (
 )
 
 const (
-	splitScatterPendingTTL      = 3 * time.Minute
-	splitScatterQueueGCInterval = time.Minute
-	splitScatterDispatchLimit   = 4
+	splitScatterDispatchLimit = 4
 )
 
 type splitScatterPendingItem struct {
@@ -51,7 +47,7 @@ type splitScatterRangeHint struct {
 type splitScatterManager struct {
 	mu struct {
 		syncutil.RWMutex
-		pending *cache.TTLUint64
+		pending map[uint64]*splitScatterPendingItem
 	}
 }
 
@@ -61,9 +57,9 @@ type splitScatterController struct {
 	regionScatterer *scatter.RegionScatterer
 }
 
-func newSplitScatterManager(ctx context.Context) *splitScatterManager {
+func newSplitScatterManager() *splitScatterManager {
 	m := &splitScatterManager{}
-	m.mu.pending = cache.NewIDTTL(ctx, splitScatterQueueGCInterval, splitScatterPendingTTL)
+	m.mu.pending = make(map[uint64]*splitScatterPendingItem)
 	return m
 }
 
@@ -75,7 +71,7 @@ func newSplitScatterController(
 ) *splitScatterController {
 	return &splitScatterController{
 		cluster:         cluster,
-		pending:         newSplitScatterManager(ctx),
+		pending:         newSplitScatterManager(),
 		regionScatterer: scatter.NewRegionScatterer(ctx, cluster, opController, addPendingProcessedRegions),
 	}
 }
@@ -89,9 +85,9 @@ func (m *splitScatterManager) recordBatch(sourceRegionID uint64, newRegionIDs []
 	defer m.mu.Unlock()
 
 	for _, regionID := range newRegionIDs {
-		m.mu.pending.Put(regionID, &splitScatterPendingItem{group: group})
+		m.mu.pending[regionID] = &splitScatterPendingItem{group: group}
 	}
-	m.mu.pending.Put(sourceRegionID, &splitScatterPendingItem{group: group})
+	m.mu.pending[sourceRegionID] = &splitScatterPendingItem{group: group}
 }
 
 func (c *splitScatterController) collectTopPending(limit int) []uint64 {
@@ -107,6 +103,7 @@ func (c *splitScatterController) collectTopPending(limit int) []uint64 {
 	for _, regionID := range pendingIDs {
 		region := c.cluster.GetRegion(regionID)
 		if region == nil {
+			c.pending.remove(regionID)
 			continue
 		}
 		candidate := dispatchCandidate{
@@ -140,15 +137,11 @@ func (c *splitScatterController) collectTopPending(limit int) []uint64 {
 func (m *splitScatterManager) remove(regionID uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.mu.pending.Remove(regionID)
+	delete(m.mu.pending, regionID)
 }
 
 func (m *splitScatterManager) getPendingItemLocked(regionID uint64) (*splitScatterPendingItem, bool) {
-	value, ok := m.mu.pending.Get(regionID)
-	if !ok {
-		return nil, false
-	}
-	item, ok := value.(*splitScatterPendingItem)
+	item, ok := m.mu.pending[regionID]
 	if !ok || item == nil {
 		return nil, false
 	}
@@ -168,7 +161,11 @@ func (m *splitScatterManager) getPendingGroup(regionID uint64) (string, bool) {
 func (m *splitScatterManager) pendingIDs() []uint64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.mu.pending.GetAllID()
+	ids := make([]uint64, 0, len(m.mu.pending))
+	for regionID := range m.mu.pending {
+		ids = append(ids, regionID)
+	}
+	return ids
 }
 
 func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
@@ -194,6 +191,7 @@ func (c *Controller) dispatchSplitScatterRegions() {
 		}
 		region := c.cluster.GetRegion(regionID)
 		if region == nil {
+			c.splitScatter.pending.remove(regionID)
 			continue
 		}
 		rangeHint := resolveSplitScatterRangeHint(region)
