@@ -26,90 +26,59 @@ var (
 	splitScatterIndexPrefix = []byte("_i")
 )
 
-type splitScatterEntityKind uint8
-
-const (
-	splitScatterEntityTable splitScatterEntityKind = iota + 1
-	splitScatterEntityIndex
-)
-
-type splitScatterEntity struct {
-	kind      splitScatterEntityKind
-	tableID   int64
-	rawPrefix []byte
-}
-
 func resolveSplitScatterRangeHint(region *core.RegionInfo) splitScatterRangeHint {
-	entity, ok := resolveSplitScatterEntity(region.GetStartKey(), region.GetEndKey())
+	rawPrefix, ok := resolveSplitScatterPrefix(region.GetStartKey(), region.GetEndKey())
 	if !ok {
 		return splitScatterRangeHint{}
 	}
-	return splitScatterPrefixRange(entity.rawPrefix)
+	return splitScatterPrefixRange(rawPrefix)
 }
 
-func resolveSplitScatterEntity(startKey, endKey []byte) (splitScatterEntity, bool) {
-	entity, ok := parseSplitScatterEntity(startKey)
+func resolveSplitScatterPrefix(startKey, endKey []byte) ([]byte, bool) {
+	tablePrefix, rawPrefix, isIndex, ok := parseSplitScatterPrefix(startKey)
 	if !ok {
-		return splitScatterEntity{}, false
+		return nil, false
 	}
-	if entity.kind == splitScatterEntityIndex {
+	if isIndex {
 		// We intentionally over-approximate ambiguous table-key ranges. If PD can
 		// no longer prove the region stays within a single index prefix, it falls
 		// back to the table-scoped group instead of dropping back to the family
 		// group, so table-boundary splits and merged ranges still participate in
 		// the broader scatter continuity/baseline.
-		entityRange := splitScatterPrefixRange(entity.rawPrefix)
+		entityRange := splitScatterPrefixRange(rawPrefix)
 		if len(endKey) == 0 || !entityRange.valid() || len(entityRange.endKey) == 0 || bytes.Compare(endKey, entityRange.endKey) > 0 {
-			entity = splitScatterTableEntity(entity.tableID)
+			rawPrefix = tablePrefix
 		}
 	}
-	return entity, true
+	return rawPrefix, true
 }
 
-func parseSplitScatterEntity(key []byte) (splitScatterEntity, bool) {
+func parseSplitScatterPrefix(key []byte) (tablePrefix, rawPrefix []byte, isIndex bool, ok bool) {
 	_, decoded, err := codec.DecodeBytes(key)
 	if err != nil || !bytes.HasPrefix(decoded, splitScatterTablePrefix) {
 		// Keyspace-prefixed txn/raw keys (x... / r...) are not classified here yet
 		// and will fall back to the family-scoped split-scatter group.
-		return splitScatterEntity{}, false
+		return nil, nil, false, false
 	}
 	rest := decoded[len(splitScatterTablePrefix):]
 	rest, tableID, err := codec.DecodeInt(rest)
 	if err != nil {
-		return splitScatterEntity{}, false
+		return nil, nil, false, false
 	}
 
-	rawPrefix := splitScatterTablePrefixKey(tableID)
-	switch {
-	case bytes.HasPrefix(rest, splitScatterIndexPrefix):
+	tablePrefix = append([]byte(nil), codec.GenerateTableKey(tableID)...)
+	rawPrefix = append([]byte(nil), tablePrefix...)
+	if bytes.HasPrefix(rest, splitScatterIndexPrefix) {
 		indexRest := rest[len(splitScatterIndexPrefix):]
 		_, indexID, err := codec.DecodeInt(indexRest)
 		if err != nil {
-			return splitScatterEntity{}, false
+			return nil, nil, false, false
 		}
 		rawPrefix = append(rawPrefix, splitScatterIndexPrefix...)
 		rawPrefix = codec.EncodeInt(rawPrefix, indexID)
-		return splitScatterEntity{
-			kind:      splitScatterEntityIndex,
-			tableID:   tableID,
-			rawPrefix: rawPrefix,
-		}, true
-	default:
-		return splitScatterTableEntity(tableID), true
+		return tablePrefix, rawPrefix, true, true
 	}
-}
-
-func splitScatterTableEntity(tableID int64) splitScatterEntity {
-	rawPrefix := splitScatterTablePrefixKey(tableID)
-	return splitScatterEntity{
-		kind:      splitScatterEntityTable,
-		tableID:   tableID,
-		rawPrefix: rawPrefix,
-	}
-}
-
-func splitScatterTablePrefixKey(tableID int64) []byte {
-	return append([]byte(nil), codec.GenerateTableKey(tableID)...)
+	return tablePrefix, rawPrefix, false, true
 }
 
 func splitScatterPrefixRange(rawPrefix []byte) splitScatterRangeHint {
