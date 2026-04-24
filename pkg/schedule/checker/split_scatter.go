@@ -195,15 +195,7 @@ func (c *splitScatterController) dispatchSplitScatterRegions() {
 					zap.String("operator-desc", op.Desc()))
 				continue
 			}
-			if !c.opController.ApplyOnCurrentOperator(region.GetID(), op, func(current *operator.Operator) {
-				c.regionScatterer.Commit(region, current, pending.group)
-			}) {
-				log.Info("dispatch internal split scatter operator lost before commit",
-					zap.Uint64("region-id", pending.regionID),
-					zap.String("group", pending.group),
-					zap.String("operator-desc", op.Desc()))
-				continue
-			}
+			c.regionScatterer.Commit(region, op, pending.group)
 		}
 		c.pendingMu.Lock()
 		delete(c.pending, pending.regionID)
