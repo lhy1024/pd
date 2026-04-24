@@ -17,7 +17,9 @@ package checker
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tikv/pd/pkg/codec"
@@ -171,6 +173,22 @@ func TestCollectTopPendingUsesLegacyCPUUsage(t *testing.T) {
 	re.Equal([]uint64{102, 101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
 }
 
+func TestDispatchSplitScatterBacksOffWhenRegionIsNotFullyReplicated(t *testing.T) {
+	re := require.New(t)
+	controller, tc, _, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	controller.RecordSplitScatterBatch(100, []uint64{101})
+	putSplitScatterRegionWithStores(tc, 101, "m", "", 120, 1, 2)
+
+	controller.DispatchSplitScatterRegions()
+
+	re.Equal(2, splitScatterPendingCount(controller))
+	pending := splitScatterPendingItemAt(t, controller, 101)
+	re.True(pending.retryAt.After(time.Now()))
+	re.Empty(pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
+}
+
 func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Cluster, *operator.Controller, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -213,6 +231,31 @@ func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, startKey, endKey []b
 	tc.PutRegion(region)
 }
 
+func putSplitScatterRegionWithStores(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, cpu uint64, stores ...uint64) {
+	peers := make([]*metapb.Peer, 0, len(stores))
+	for i, storeID := range stores {
+		peers = append(peers, &metapb.Peer{
+			Id:      regionID*10 + uint64(i) + 1,
+			StoreId: storeID,
+		})
+	}
+	region := &metapb.Region{
+		Id:       regionID,
+		StartKey: []byte(startKey),
+		EndKey:   []byte(endKey),
+		Peers:    peers,
+		RegionEpoch: &metapb.RegionEpoch{
+			ConfVer: 1,
+			Version: 1,
+		},
+	}
+	tc.PutRegion(core.NewRegionInfo(
+		region,
+		peers[0],
+		core.SetCPUUsage(cpu),
+	))
+}
+
 func splitScatterPendingCount(controller *Controller) int {
 	controller.splitScatterPendingMu.RLock()
 	defer controller.splitScatterPendingMu.RUnlock()
@@ -228,6 +271,18 @@ func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uin
 	pending, ok := value.(splitScatterPendingItem)
 	require.True(t, ok)
 	return pending.group
+}
+
+func splitScatterPendingItemAt(t *testing.T, controller *Controller, regionID uint64) splitScatterPendingItem {
+	t.Helper()
+	controller.splitScatterPendingMu.RLock()
+	defer controller.splitScatterPendingMu.RUnlock()
+	value, ok := controller.splitScatterPending.Get(regionID)
+	require.True(t, ok)
+	pending, ok := value.(splitScatterPendingItem)
+	require.True(t, ok)
+	pending.regionID = regionID
+	return pending
 }
 
 func pendingRegionIDs(regions []splitScatterPendingItem) []uint64 {

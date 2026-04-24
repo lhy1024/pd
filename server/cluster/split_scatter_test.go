@@ -104,6 +104,31 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 	re.Equal("split-scatter-100-1", opGroup)
 }
 
+func TestHandleAskBatchSplitSkipsSplitScatterForExtraPeerRequest(t *testing.T) {
+	re := require.New(t)
+	cluster := newSplitScatterTestCluster(t)
+	re.NoError(cluster.setStore(newTestStores(5, "6.0.0")[4]))
+
+	request := &pdpb.AskBatchSplitRequest{
+		Region:     newSplitScatterRegionWithStores(100, []byte(""), []byte("m"), 0, 1, 2, 3, 4, 5).GetMeta(),
+		SplitCount: 1,
+	}
+	resp, err := cluster.HandleAskBatchSplit(request)
+	re.NoError(err)
+	re.Len(resp.GetIds(), 1)
+
+	splitRegionID := resp.GetIds()[0].GetNewRegionId()
+	re.NoError(cluster.processRegionHeartbeat(
+		core.ContextTODO(),
+		newSplitScatterRegion(splitRegionID, []byte("m"), []byte(""), 120),
+	))
+
+	cluster.GetCoordinator().GetCheckerController().DispatchSplitScatterRegions()
+
+	re.Nil(cluster.GetOperatorController().GetOperator(splitRegionID))
+	re.Nil(cluster.GetOperatorController().GetOperator(100))
+}
+
 func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
 	t.Helper()
 	re := require.New(t)
@@ -128,10 +153,17 @@ func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
 }
 
 func newSplitScatterRegion(regionID uint64, start, end []byte, cpu uint64) *core.RegionInfo {
+	return newSplitScatterRegionWithStores(regionID, start, end, cpu, 1, 2, 3)
+}
+
+func newSplitScatterRegionWithStores(regionID uint64, start, end []byte, cpu uint64, stores ...uint64) *core.RegionInfo {
 	peers := []*metapb.Peer{
-		{Id: regionID*10 + 1, StoreId: 1},
-		{Id: regionID*10 + 2, StoreId: 2},
-		{Id: regionID*10 + 3, StoreId: 3},
+	}
+	for i, storeID := range stores {
+		peers = append(peers, &metapb.Peer{
+			Id:      regionID*10 + uint64(i) + 1,
+			StoreId: storeID,
+		})
 	}
 	region := &metapb.Region{
 		Id:       regionID,

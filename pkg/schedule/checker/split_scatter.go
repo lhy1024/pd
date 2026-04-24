@@ -22,18 +22,22 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pingcap/log"
+
+	"github.com/tikv/pd/pkg/schedule/filter"
 )
 
 const (
 	splitScatterPendingTTL      = 3 * time.Minute
 	splitScatterQueueGCInterval = time.Minute
 	splitScatterDispatchLimit   = 4
+	splitScatterRetryBackoff    = time.Second
 )
 
 type splitScatterPendingItem struct {
 	regionID    uint64
 	group       string
 	waitVersion uint64
+	retryAt     time.Time
 }
 
 type splitScatterDispatchCandidate struct {
@@ -53,6 +57,7 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	if limit <= 0 {
 		return nil
 	}
+	now := time.Now()
 	c.splitScatterPendingMu.RLock()
 	pendingIDs := c.splitScatterPending.GetAllID()
 	pendingRegions := make([]splitScatterPendingItem, 0, len(pendingIDs))
@@ -74,6 +79,9 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	for _, pending := range pendingRegions {
 		region := c.cluster.GetRegion(pending.regionID)
 		if region == nil {
+			continue
+		}
+		if !pending.retryAt.IsZero() && now.Before(pending.retryAt) {
 			continue
 		}
 		currentVersion := uint64(0)
@@ -102,6 +110,21 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 		regions = append(regions, candidate.pending)
 	}
 	return regions
+}
+
+func (c *Controller) delayPendingSplitScatter(regionID uint64, delay time.Duration) {
+	c.splitScatterPendingMu.Lock()
+	defer c.splitScatterPendingMu.Unlock()
+	value, ok := c.splitScatterPending.Get(regionID)
+	if !ok {
+		return
+	}
+	pending, ok := value.(splitScatterPendingItem)
+	if !ok {
+		return
+	}
+	pending.retryAt = time.Now().Add(delay)
+	c.splitScatterPending.Put(regionID, pending)
 }
 
 func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
@@ -133,6 +156,14 @@ func (c *Controller) DispatchSplitScatterRegions() {
 		if region == nil {
 			continue
 		}
+		if !filter.IsRegionReplicated(c.cluster, region) {
+			c.delayPendingSplitScatter(pending.regionID, splitScatterRetryBackoff)
+			log.Info("dispatch internal split scatter delayed",
+				zap.Uint64("region-id", pending.regionID),
+				zap.String("group", pending.group),
+				zap.String("reason", "not-fully-replicated"))
+			continue
+		}
 		rangeHint := resolveSplitScatterRangeHint(region)
 		log.Info("dispatch internal split scatter",
 			zap.Uint64("region-id", pending.regionID),
@@ -155,6 +186,15 @@ func (c *Controller) DispatchSplitScatterRegions() {
 			continue
 		}
 		if op != nil {
+			if c.opController.ExceedStoreLimit(op) {
+				c.delayPendingSplitScatter(pending.regionID, splitScatterRetryBackoff)
+				log.Info("dispatch internal split scatter delayed",
+					zap.Uint64("region-id", pending.regionID),
+					zap.String("group", pending.group),
+					zap.String("reason", "exceed-store-limit"),
+					zap.String("operator-desc", op.Desc()))
+				continue
+			}
 			if !c.opController.AddOperator(op) {
 				log.Info("dispatch internal split scatter add operator failed",
 					zap.Uint64("region-id", pending.regionID),

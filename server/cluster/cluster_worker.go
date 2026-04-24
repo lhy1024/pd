@@ -178,7 +178,22 @@ func (c *RaftCluster) HandleAskBatchSplit(request *pdpb.AskBatchSplitRequest) (*
 	// status may be left, and these regions need to be checked with higher
 	// priority.
 	c.AddPendingProcessedRegions(false, recordRegions...)
-	c.GetCoordinator().GetCheckerController().RecordSplitScatterBatch(reqRegion.GetId(), recordRegions[:len(recordRegions)-1])
+	shouldRecordSplitScatter := true
+	if len(reqRegion.GetPeers()) > 0 {
+		leader := reqRegion.GetPeers()[0]
+		if currentRegion := c.GetRegion(reqRegion.GetId()); currentRegion != nil && currentRegion.GetLeader() != nil {
+			leader = currentRegion.GetLeader()
+		}
+		if c.GetRuleManager().FitRegion(c, core.NewRegionInfo(reqRegion, leader)).ExtraCount() > 0 {
+			shouldRecordSplitScatter = false
+			log.Info("skip split scatter for split request with extra peers",
+				zap.Uint64("region-id", reqRegion.GetId()),
+				zap.Int("peer-count", len(reqRegion.GetPeers())))
+		}
+	}
+	if shouldRecordSplitScatter {
+		c.GetCoordinator().GetCheckerController().RecordSplitScatterBatch(reqRegion.GetId(), recordRegions[:len(recordRegions)-1])
+	}
 
 	resp := &pdpb.AskBatchSplitResponse{Ids: splitIDs}
 
