@@ -58,8 +58,7 @@ func TestRecordSplitScatterBatchAndObserveQueueByCPUScore(t *testing.T) {
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(103))
 
-	snapshots := controller.splitScatterQueue.collectTopPending(3)
-	re.Equal([]uint64{101, 102, 103}, splitScatterSnapshotRegionIDs(snapshots))
+	re.Equal([]uint64{101, 102, 103}, controller.splitScatterQueue.collectTopPending(3))
 }
 
 func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
@@ -144,7 +143,7 @@ func TestObserveSplitScatterRegionResolvesRangeHint(t *testing.T) {
 
 			snapshots := controller.splitScatterQueue.collectTopPending(1)
 			re.Len(snapshots, 1)
-			re.Equal([]uint64{101}, splitScatterSnapshotRegionIDs(snapshots))
+			re.Equal([]uint64{101}, snapshots)
 			rangeHint := splitScatterPendingRangeHint(t, controller, 101)
 			re.Equal(testCase.wantRange.startKey, rangeHint.startKey)
 			re.Equal(testCase.wantRange.endKey, rangeHint.endKey)
@@ -165,7 +164,7 @@ func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *tes
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 
 	snapshots := controller.splitScatterQueue.collectTopPending(2)
-	re.Equal([]uint64{101, 102}, splitScatterSnapshotRegionIDs(snapshots))
+	re.Equal([]uint64{101, 102}, snapshots)
 }
 
 func TestHasPotentialPendingSplitScatterRegions(t *testing.T) {
@@ -241,7 +240,7 @@ func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, startKey, endKey []b
 func splitScatterPendingCount(controller *Controller) int {
 	controller.splitScatterQueue.mu.RLock()
 	defer controller.splitScatterQueue.mu.RUnlock()
-	return controller.splitScatterQueue.pendingCountLocked()
+	return len(controller.splitScatterQueue.mu.pending.GetAllID())
 }
 
 func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uint64) string {
@@ -260,14 +259,6 @@ func splitScatterPendingRangeHint(t *testing.T, controller *Controller, regionID
 	item, ok := controller.splitScatterQueue.getPendingItemLocked(regionID)
 	require.True(t, ok)
 	return item.rangeHint.clone()
-}
-
-func splitScatterSnapshotRegionIDs(snapshots []splitScatterDispatchSnapshot) []uint64 {
-	regionIDs := make([]uint64, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		regionIDs = append(regionIDs, snapshot.regionID)
-	}
-	return regionIDs
 }
 
 func splitScatterIndexKeyPrefix() []byte {

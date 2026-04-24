@@ -389,7 +389,7 @@ func TestSomeStoresFilteredScatterGroupInConcurrency(t *testing.T) {
 func scatterOnce(re *require.Assertions, tc *mockcluster.Cluster, scatter *RegionScatterer, group string) {
 	regionID := 1
 	for range 100 {
-		_, err := scatter.scatterRegion(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group)
+		_, err := scatter.scatterRegionWithType(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group, false, false)
 		re.NoError(err)
 		regionID++
 	}
@@ -437,7 +437,7 @@ func TestScatterGroupInConcurrency(t *testing.T) {
 			for j := range testCase.groupCount {
 				group := fmt.Sprintf("group-%v", j)
 				region := tc.AddLeaderRegion(uint64(regionID), 1, 2, 3)
-				op, err := scatterer.scatterRegion(region, group)
+				op, err := scatterer.scatterRegionWithType(region, group, false, false)
 				re.NoError(err)
 				commitScatterOp(scatterer, region, op, group)
 				regionID++
@@ -711,7 +711,7 @@ func TestSelectedStoresTooFewPeers(t *testing.T) {
 	// Try to scatter a region with peer store id 2/3/4
 	for i := uint64(1); i < 20; i++ {
 		region := tc.AddLeaderRegion(i+200, i%3+2, (i+1)%3+2, (i+2)%3+2)
-		op, err := scatterer.scatterRegion(region, group)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 		if op != nil {
@@ -1003,7 +1003,7 @@ func TestSelectedStoresTooManyPeers(t *testing.T) {
 	// test region with peer 1 2 3
 	for i := uint64(1); i < 20; i++ {
 		region := tc.AddLeaderRegion(i+200, i%3+1, (i+1)%3+1, (i+2)%3+1)
-		op, err := scatterer.scatterRegion(region, group)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 	}
@@ -1028,7 +1028,7 @@ func TestBalanceLeader(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	for i := uint64(1001); i <= 1300; i++ {
 		region := tc.AddLeaderRegion(i, 2, 3, 4)
-		op, err := scatterer.scatterRegion(region, group)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 		commitScatterOp(scatterer, region, op, group)
@@ -1060,7 +1060,7 @@ func TestBalanceRegion(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	for i := uint64(1001); i <= 1300; i++ {
 		region := tc.AddLeaderRegion(i, 2, 4, 6)
-		op, err := scatterer.scatterRegion(region, group)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 		commitScatterOp(scatterer, region, op, group)
@@ -1071,7 +1071,7 @@ func TestBalanceRegion(t *testing.T) {
 	// Test for unhealthy region
 	// ref https://github.com/tikv/pd/issues/6099
 	region := tc.AddLeaderRegion(1500, 2, 3, 4, 6)
-	op, err := scatterer.scatterRegion(region, group)
+	op, err := scatterer.scatterRegionWithType(region, group, false, false)
 	re.NoError(err)
 	re.False(isPeerCountChanged(op))
 }
@@ -1386,10 +1386,10 @@ func TestInternalScatterLeaderPrefersUnusedStore(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	group := "test-leader-coverage"
 
-	adminLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
+	adminLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
 	re.Equal(uint64(1), adminLeader)
 
-	internalLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
+	internalLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
 	re.Equal(uint64(4), internalLeader)
 }
 
@@ -1420,9 +1420,9 @@ func TestInternalScatterLeaderBreaksTiesByPeerDeficit(t *testing.T) {
 		5: 2,
 	}))
 
-	adminLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
+	adminLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
 	re.Equal(uint64(1), adminLeader)
 
-	internalLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
+	internalLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
 	re.Equal(uint64(5), internalLeader)
 }
