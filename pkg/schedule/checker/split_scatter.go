@@ -33,6 +33,7 @@ const (
 type splitScatterPendingItem struct {
 	regionID    uint64
 	group       string
+	waitVersion uint64
 	retryAt     time.Time
 }
 
@@ -62,6 +63,13 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 		if !pending.retryAt.IsZero() && now.Before(pending.retryAt) {
 			continue
 		}
+		currentVersion := uint64(0)
+		if region.GetRegionEpoch() != nil {
+			currentVersion = region.GetRegionEpoch().GetVersion()
+		}
+		if pending.waitVersion > 0 && currentVersion < pending.waitVersion {
+			continue
+		}
 		candidates = append(candidates, pending)
 	}
 	if len(candidates) > limit {
@@ -70,21 +78,15 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	return candidates
 }
 
-func (c *Controller) updatePendingSplitScatter(regionID uint64, update func(*splitScatterPendingItem)) {
+func (c *Controller) delayPendingSplitScatter(regionID uint64, delay time.Duration) {
 	c.splitScatterPendingMu.Lock()
 	defer c.splitScatterPendingMu.Unlock()
 	pending, ok := c.splitScatterPending[regionID]
 	if !ok {
 		return
 	}
-	update(&pending)
+	pending.retryAt = time.Now().Add(delay)
 	c.splitScatterPending[regionID] = pending
-}
-
-func (c *Controller) delayPendingSplitScatter(regionID uint64, delay time.Duration) {
-	c.updatePendingSplitScatter(regionID, func(pending *splitScatterPendingItem) {
-		pending.retryAt = time.Now().Add(delay)
-	})
 }
 
 func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
@@ -102,6 +104,11 @@ func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs
 	for _, regionID := range newRegionIDs {
 		c.splitScatterPending[regionID] = splitScatterPendingItem{regionID: regionID, group: group}
 	}
+	sourcePending := splitScatterPendingItem{regionID: sourceRegionID, group: group, waitVersion: 1}
+	if sourceRegion := c.cluster.GetRegion(sourceRegionID); sourceRegion != nil && sourceRegion.GetRegionEpoch() != nil {
+		sourcePending.waitVersion = sourceRegion.GetRegionEpoch().GetVersion() + 1
+	}
+	c.splitScatterPending[sourceRegionID] = sourcePending
 }
 
 // DispatchSplitScatterRegions dispatches pending split-scatter regions.
