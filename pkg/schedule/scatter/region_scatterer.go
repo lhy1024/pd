@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,7 +34,6 @@ import (
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/errs"
-	"github.com/tikv/pd/pkg/schedule/config"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/filter"
 	"github.com/tikv/pd/pkg/schedule/operator"
@@ -94,28 +92,6 @@ func cloneDistribution(distribution map[uint64]uint64) map[uint64]uint64 {
 		cloned[id] = count
 	}
 	return cloned
-}
-
-func sortedStoreIDsFromCounts(counts map[uint64]uint64) []uint64 {
-	ids := make([]uint64, 0, len(counts))
-	for id := range counts {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
-	return ids
-}
-
-func formatStoreCounts(counts map[uint64]uint64) string {
-	if len(counts) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(counts))
-	for _, id := range sortedStoreIDsFromCounts(counts) {
-		parts = append(parts, fmt.Sprintf("%d:%d", id, counts[id]))
-	}
-	return strings.Join(parts, ",")
 }
 
 func decrementDistribution(distribution map[uint64]uint64, id uint64) {
@@ -298,12 +274,6 @@ func (r *RegionScatterer) SeedGroupDistributionByRange(group string, startKey, e
 		ctx := r.getOrCreateSpecialEngineContext(engine)
 		ctx.selectedPeer.InitGroupDistribution(group, distribution)
 	}
-	log.Info("seed internal scatter distribution by range",
-		zap.String("group", group),
-		zap.Binary("start-key", startKey),
-		zap.Binary("end-key", endKey),
-		zap.String("ordinary-peer-distribution", formatStoreCounts(ordinaryPeer)),
-		zap.String("ordinary-leader-distribution", formatStoreCounts(ordinaryLeader)))
 }
 
 // ScatterRegionsByRange directly scatter regions by ScatterRegions
@@ -493,7 +463,6 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 	if internalScatter {
 		desc = InternalScatterOperatorDesc
 	}
-	logInternalScatter := internalScatter
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
 	ordinaryPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
 	specialPeers := make(map[string]map[uint64]*metapb.Peer)
@@ -540,22 +509,9 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 			}
 			filters[filterLen-1] = filter.NewPlacementSafeguard(r.name, r.cluster.GetSharedConfig(), r.cluster.GetBasicCluster(), r.cluster.GetRuleManager(), region, sourceStore, oldFit)
 			for {
-				newPeer, peerTrace := r.selectNewPeerWithTrace(context, group, peer, filters, internalScatter)
+				newPeer := r.selectNewPeer(context, group, peer, filters, internalScatter)
 				targetPeers[newPeer.GetStoreId()] = newPeer
 				selectedStores[newPeer.GetStoreId()] = struct{}{}
-				if logInternalScatter {
-					log.Info("internal scatter peer selection",
-						zap.Uint64("region-id", region.GetID()),
-						zap.String("group", group),
-						zap.Uint64("source-store", peer.GetStoreId()),
-						zap.Uint64("target-store", newPeer.GetStoreId()),
-						zap.Bool("kept-origin", newPeer.GetStoreId() == peer.GetStoreId()),
-						zap.Uint64("max-picked-count", peerTrace.maxStorePickedCount),
-						zap.Uint64("min-picked-count", peerTrace.minStorePickedCount),
-						zap.Uint64("origin-picked-count", peerTrace.originStorePickedCount),
-						zap.Strings("candidates", peerTrace.candidates),
-					)
-				}
 				// If the selected peer is a peer other than origin peer in this region,
 				// it is considered that the selected peer select itself.
 				// This origin peer re-selects.
@@ -577,29 +533,13 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 	// FIXME: target leader only considers the ordinary stores, maybe we need to consider the
 	// special engine stores if the engine supports to become a leader. But now there is only
 	// one engine, tiflash, which does not support the leader, so don't consider it for now.
-	targetLeader, leaderStorePickedCount, leaderTrace := r.selectAvailableLeaderStoreWithTrace(group, region, leaderCandidateStores, r.ordinaryEngine, internalScatter)
+	targetLeader := r.selectAvailableLeaderStore(group, region, leaderCandidateStores, r.ordinaryEngine, internalScatter)
 	if targetLeader == 0 {
 		scatterSkipNoLeaderCounter.Inc()
 		return nil, errs.ErrGetTargetStore.FastGenByArgs(fmt.Sprintf("no target leader store found, region: %v", region))
 	}
-	if logInternalScatter {
-		log.Info("internal scatter leader selection",
-			zap.Uint64("region-id", region.GetID()),
-			zap.String("group", group),
-			zap.Uint64("target-leader", targetLeader),
-			zap.Uint64("leader-picked-count", leaderStorePickedCount),
-			zap.Strings("leader-candidates", leaderTrace),
-		)
-	}
 
 	if isSameDistribution(region, targetPeers, targetLeader) {
-		if logInternalScatter {
-			log.Info("internal scatter keeps original placement",
-				zap.Uint64("region-id", region.GetID()),
-				zap.String("group", group),
-				zap.Strings("current-peers", formatScatterTargetPeers(scatterPlacementPeers(region))),
-				zap.Uint64("current-leader", region.GetLeader().GetStoreId()))
-		}
 		scatterUnnecessaryCounter.Inc()
 		r.Update(region, targetPeers, targetLeader, group)
 		return nil, nil
@@ -619,15 +559,6 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 		scatterSuccessCounter.Inc()
 		op.SetAdditionalInfo("group", group)
 		op.SetPriorityLevel(operatorPriorityLevel)
-		if logInternalScatter {
-			log.Info("internal scatter operator created",
-				zap.Uint64("region-id", region.GetID()),
-				zap.String("group", group),
-				zap.Strings("target-peers", formatScatterTargetPeers(targetPeers)),
-				zap.Uint64("target-leader", targetLeader),
-				zap.String("operator-desc", desc),
-			)
-		}
 	}
 	return op, nil
 }
@@ -667,24 +598,7 @@ func isSameDistribution(region *core.RegionInfo, targetPeers map[uint64]*metapb.
 // 1. found the max pick count and the min pick count.
 // 2. if max pick count equals min pick count, it means all store picked count are some, return the origin peer.
 // 3. otherwise, select the store which pick count is the min pick count and pass all filter.
-type peerSelectionTrace struct {
-	maxStorePickedCount    uint64
-	minStorePickedCount    uint64
-	originStorePickedCount uint64
-	candidates             []string
-}
-
-type peerCandidateTrace struct {
-	storeID          uint64
-	pickedCount      uint64
-	storeRegionCount int
-	allowedByCount   bool
-	passedFilters    bool
-	filterReasons    []string
-	origin           bool
-}
-
-func (r *RegionScatterer) selectNewPeerWithTrace(context engineContext, group string, peer *metapb.Peer, filters []filter.Filter, internalScatter bool) (*metapb.Peer, peerSelectionTrace) {
+func (r *RegionScatterer) selectNewPeer(context engineContext, group string, peer *metapb.Peer, filters []filter.Filter, internalScatter bool) *metapb.Peer {
 	stores := r.cluster.GetStores()
 	maxStoreTotalCount := uint64(0)
 	minStoreTotalCount := uint64(math.MaxUint64)
@@ -702,11 +616,6 @@ func (r *RegionScatterer) selectNewPeerWithTrace(context engineContext, group st
 	minCount := uint64(math.MaxUint64)
 	originStorePickedCount := uint64(math.MaxUint64)
 	bestStoreRegionCount := math.MaxInt
-	trace := peerSelectionTrace{
-		maxStorePickedCount: maxStoreTotalCount,
-		minStorePickedCount: minStoreTotalCount,
-	}
-	rawCandidates := make([]peerCandidateTrace, 0, len(stores))
 	for _, store := range stores {
 		storeCount := context.selectedPeer.Get(store.GetID(), group)
 		if store.GetID() == peer.GetStoreId() {
@@ -715,58 +624,36 @@ func (r *RegionScatterer) selectNewPeerWithTrace(context engineContext, group st
 		// If storeCount is equal to the maxStoreTotalCount, we should skip this store as candidate.
 		// If the storeCount are all the same for the whole cluster(maxStoreTotalCount == minStoreTotalCount), any store
 		// could be selected as candidate.
-		allowedByCount := storeCount < maxStoreTotalCount || maxStoreTotalCount == minStoreTotalCount
-		storeRegionCount := store.GetRegionCount()
-		filterReasons := make([]string, 0, len(filters))
-		passedFilters := false
-		if allowedByCount {
-			filterReasons = collectTargetFilterReasons(r.cluster.GetSharedConfig(), store, filters)
-			passedFilters = len(filterReasons) == 0
-			if passedFilters {
-				candidate := &metapb.Peer{
-					StoreId: store.GetID(),
-					Role:    peer.GetRole(),
-				}
-				if storeCount < minCount ||
-					(internalScatter && storeCount == minCount &&
-						(storeRegionCount < bestStoreRegionCount ||
-							(storeRegionCount == bestStoreRegionCount && (newPeer == nil || store.GetID() < newPeer.GetStoreId())))) {
-					minCount = storeCount
-					newPeer = candidate
-					bestStoreRegionCount = storeRegionCount
-				}
-			}
+		if storeCount >= maxStoreTotalCount && maxStoreTotalCount != minStoreTotalCount {
+			continue
 		}
-		rawCandidates = append(rawCandidates, peerCandidateTrace{
-			storeID:          store.GetID(),
-			pickedCount:      storeCount,
-			storeRegionCount: storeRegionCount,
-			allowedByCount:   allowedByCount,
-			passedFilters:    passedFilters,
-			filterReasons:    append([]string(nil), filterReasons...),
-			origin:           store.GetID() == peer.GetStoreId(),
-		})
+		if !filter.Target(r.cluster.GetSharedConfig(), store, filters) {
+			continue
+		}
+		candidate := &metapb.Peer{
+			StoreId: store.GetID(),
+			Role:    peer.GetRole(),
+		}
+		storeRegionCount := store.GetRegionCount()
+		if storeCount < minCount ||
+			(internalScatter && storeCount == minCount &&
+				(storeRegionCount < bestStoreRegionCount ||
+					(storeRegionCount == bestStoreRegionCount && (newPeer == nil || store.GetID() < newPeer.GetStoreId())))) {
+			minCount = storeCount
+			newPeer = candidate
+			bestStoreRegionCount = storeRegionCount
+		}
 	}
-	trace.originStorePickedCount = originStorePickedCount
 	if internalScatter && newPeer != nil && peer.GetStoreId() != newPeer.GetStoreId() &&
 		!peerMoveReducesSourceTargetGap(context.selectedPeer, group, peer.GetStoreId(), newPeer.GetStoreId()) {
-		trace.candidates = formatPeerCandidateTraces(rawCandidates, peer.GetStoreId())
-		return peer, trace
+		return peer
 	}
 	if originStorePickedCount <= minCount {
-		trace.candidates = formatPeerCandidateTraces(rawCandidates, peer.GetStoreId())
-		return peer, trace
+		return peer
 	}
 	if newPeer == nil {
-		trace.candidates = formatPeerCandidateTraces(rawCandidates, peer.GetStoreId())
-		return peer, trace
+		return peer
 	}
-	trace.candidates = formatPeerCandidateTraces(rawCandidates, newPeer.GetStoreId())
-	return newPeer, trace
-}
-
-func (r *RegionScatterer) selectNewPeer(context engineContext, group string, peer *metapb.Peer, filters []filter.Filter, internalScatter bool) *metapb.Peer {
-	newPeer, _ := r.selectNewPeerWithTrace(context, group, peer, filters, internalScatter)
 	return newPeer
 }
 
@@ -774,41 +661,22 @@ func (r *RegionScatterer) selectNewPeer(context engineContext, group string, pee
 // The candidates are collected by the existing peer stores at the group level.
 func (r *RegionScatterer) selectAvailableLeaderStore(group string, region *core.RegionInfo,
 	leaderCandidateStores []uint64, context engineContext, internalScatter bool) uint64 {
-	leaderID, _, _ := r.selectAvailableLeaderStoreWithTrace(group, region, leaderCandidateStores, context, internalScatter)
-	return leaderID
-}
-
-func (r *RegionScatterer) selectAvailableLeaderStoreWithTrace(group string, region *core.RegionInfo,
-	leaderCandidateStores []uint64, context engineContext, internalScatter bool) (leaderID uint64, leaderStorePickedCount uint64, trace []string) {
 	if r.cluster.GetStore(region.GetLeader().GetStoreId()) == nil {
 		log.Error("failed to get the store", zap.Uint64("store-id", region.GetLeader().GetStoreId()), errs.ZapError(errs.ErrGetSourceStore))
-		return 0, 0, nil
-	}
-	type leaderCandidateTrace struct {
-		storeID      uint64
-		leaderPicked uint64
-		peerPicked   uint64
-		missing      bool
+		return 0
 	}
 	minStoreGroupLeader := uint64(math.MaxUint64)
 	minStoreGroupPeer := uint64(math.MaxUint64)
 	id := uint64(0)
 	unusedAlternativeID := uint64(0)
 	unusedAlternativePeerCount := uint64(math.MaxUint64)
-	rawCandidates := make([]leaderCandidateTrace, 0, len(leaderCandidateStores))
 	for _, storeID := range leaderCandidateStores {
 		store := r.cluster.GetStore(storeID)
 		if store == nil {
-			rawCandidates = append(rawCandidates, leaderCandidateTrace{storeID: storeID, missing: true})
 			continue
 		}
 		storeGroupLeaderCount := context.selectedLeader.Get(storeID, group)
 		storeGroupPeerCount := context.selectedPeer.Get(storeID, group)
-		rawCandidates = append(rawCandidates, leaderCandidateTrace{
-			storeID:      storeID,
-			leaderPicked: storeGroupLeaderCount,
-			peerPicked:   storeGroupPeerCount,
-		})
 		if internalScatter && storeID != region.GetLeader().GetStoreId() && storeGroupLeaderCount == 0 {
 			if unusedAlternativeID == 0 || storeGroupPeerCount < unusedAlternativePeerCount ||
 				(storeGroupPeerCount == unusedAlternativePeerCount && storeID < unusedAlternativeID) {
@@ -826,25 +694,8 @@ func (r *RegionScatterer) selectAvailableLeaderStoreWithTrace(group string, regi
 	selectedID := id
 	if internalScatter && unusedAlternativeID != 0 {
 		selectedID = unusedAlternativeID
-		leaderStorePickedCount = 0
-	} else {
-		leaderStorePickedCount = minStoreGroupLeader
 	}
-	trace = make([]string, 0, len(rawCandidates))
-	for _, candidate := range rawCandidates {
-		if candidate.missing {
-			trace = append(trace, fmt.Sprintf("store=%d,missing=true", candidate.storeID))
-			continue
-		}
-		trace = append(trace, fmt.Sprintf(
-			"store=%d,leader-picked=%d,peer-picked=%d,selected=%t",
-			candidate.storeID,
-			candidate.leaderPicked,
-			candidate.peerPicked,
-			candidate.storeID == selectedID,
-		))
-	}
-	return selectedID, leaderStorePickedCount, trace
+	return selectedID
 }
 
 func peerMoveReducesSourceTargetGap(selectedPeers *selectedStores, group string, fromStoreID, toStoreID uint64) bool {
@@ -853,71 +704,12 @@ func peerMoveReducesSourceTargetGap(selectedPeers *selectedStores, group string,
 	return fromCount > toCount+1
 }
 
-func collectTargetFilterReasons(conf config.SharedConfigProvider, store *core.StoreInfo, filters []filter.Filter) []string {
-	reasons := make([]string, 0, len(filters))
-	for _, f := range filters {
-		status := f.Target(conf, store)
-		if status.IsOK() {
-			continue
-		}
-		reason := fmt.Sprintf("%s:%s", f.Scope(), status.String())
-		if status.DetailedReason != "" {
-			reason = reason + "(" + status.DetailedReason + ")"
-		}
-		reasons = append(reasons, reason)
-	}
-	return reasons
-}
-
-func formatPeerCandidateTraces(candidates []peerCandidateTrace, selectedStoreID uint64) []string {
-	formatted := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		formatted = append(formatted, formatPeerCandidateTrace(candidate, selectedStoreID))
-	}
-	return formatted
-}
-
-func formatPeerCandidateTrace(candidate peerCandidateTrace, selectedStoreID uint64) string {
-	parts := []string{
-		fmt.Sprintf("store=%d", candidate.storeID),
-		fmt.Sprintf("picked=%d", candidate.pickedCount),
-		fmt.Sprintf("total-regions=%d", candidate.storeRegionCount),
-		fmt.Sprintf("allowed-by-count=%t", candidate.allowedByCount),
-		fmt.Sprintf("passed-filters=%t", candidate.passedFilters),
-		fmt.Sprintf("origin=%t", candidate.origin),
-		fmt.Sprintf("selected=%t", candidate.storeID == selectedStoreID),
-	}
-	if len(candidate.filterReasons) > 0 {
-		parts = append(parts, "filter-reasons="+strings.Join(candidate.filterReasons, "|"))
-	}
-	return strings.Join(parts, ",")
-}
-
-func formatScatterTargetPeers(targetPeers map[uint64]*metapb.Peer) []string {
-	peers := make([]string, 0, len(targetPeers))
-	for storeID, peer := range targetPeers {
-		peers = append(peers, fmt.Sprintf("store=%d,role=%s,witness=%t", storeID, peer.GetRole().String(), peer.GetIsWitness()))
-	}
-	sort.Strings(peers)
-	return peers
-}
-
-func scatterPlacementPeers(region *core.RegionInfo) map[uint64]*metapb.Peer {
-	peers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
-	for _, peer := range region.GetPeers() {
-		peers[peer.GetStoreId()] = peer
-	}
-	return peers
-}
-
 // Commit updates the group distribution after the scatter operator has been
 // accepted by the operator controller.
 func (r *RegionScatterer) Commit(region *core.RegionInfo, op *operator.Operator, group string) {
 	if op == nil || region == nil || region.GetLeader() == nil {
 		return
 	}
-	oldPeers := scatterPlacementPeers(region)
-	oldLeader := region.GetLeader().GetStoreId()
 	targetPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
 	for _, peer := range region.GetPeers() {
 		targetPeers[peer.GetStoreId()] = peer
@@ -934,15 +726,6 @@ func (r *RegionScatterer) Commit(region *core.RegionInfo, op *operator.Operator,
 		case operator.RemovePeer:
 			delete(targetPeers, step.FromStore)
 		}
-	}
-	if op.Desc() == InternalScatterOperatorDesc {
-		log.Info("internal scatter commit placement",
-			zap.Uint64("region-id", region.GetID()),
-			zap.String("group", group),
-			zap.Strings("old-peers", formatScatterTargetPeers(oldPeers)),
-			zap.Uint64("old-leader", oldLeader),
-			zap.Strings("new-peers", formatScatterTargetPeers(targetPeers)),
-			zap.Uint64("new-leader", targetLeader))
 	}
 	r.Update(region, targetPeers, targetLeader, group)
 }
