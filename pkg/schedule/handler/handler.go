@@ -679,10 +679,7 @@ func (h *Handler) AddScatterRegionOperator(regionID uint64, group string) error 
 	if op == nil {
 		return nil
 	}
-	if err := h.addOperator(op); err != nil {
-		return err
-	}
-	return nil
+	return h.addOperator(op)
 }
 
 // AddScatterRegionsOperators add operators to scatter regions and return the processed percentage and error
@@ -1222,20 +1219,20 @@ func (h *Handler) ScatterRegionsByRange(rawStartKey, rawEndKey string, group str
 	if err != nil {
 		return 0, nil, err
 	}
-	s, err := h.GetRegionScatterer()
-	if err != nil {
-		return 0, nil, err
+	co := h.GetCoordinator()
+	if co == nil {
+		return 0, nil, errs.ErrNotBootstrapped.GenWithStackByArgs()
 	}
-	return s.ScatterRegionsByRange(startKey, endKey, group, retryLimit)
+	return co.GetRegionScatterer().ScatterRegionsByRange(startKey, endKey, group, retryLimit)
 }
 
 // ScatterRegionsByID scatters regions by id.
 func (h *Handler) ScatterRegionsByID(ids []uint64, group string, retryLimit int) (int, map[uint64]error, error) {
-	s, err := h.GetRegionScatterer()
-	if err != nil {
-		return 0, nil, err
+	co := h.GetCoordinator()
+	if co == nil {
+		return 0, nil, errs.ErrNotBootstrapped.GenWithStackByArgs()
 	}
-	return s.ScatterRegionsByID(ids, group, retryLimit, false)
+	return co.GetRegionScatterer().ScatterRegionsByID(ids, group, retryLimit, false)
 }
 
 // SplitRegionsResponse is the response for split regions.

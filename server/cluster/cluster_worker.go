@@ -144,6 +144,7 @@ func (c *RaftCluster) HandleAskBatchSplit(request *pdpb.AskBatchSplitRequest) (*
 	}
 
 	splitIDs := make([]*pdpb.SplitID, 0, splitCount)
+	newRegionIDs := make([]uint64, 0, splitCount)
 	recordRegions := make([]uint64, 0, splitCount+1)
 
 	for range splitCount {
@@ -159,6 +160,7 @@ func (c *RaftCluster) HandleAskBatchSplit(request *pdpb.AskBatchSplitRequest) (*
 			}
 		}
 
+		newRegionIDs = append(newRegionIDs, newRegionID)
 		recordRegions = append(recordRegions, newRegionID)
 		splitIDs = append(splitIDs, &pdpb.SplitID{
 			NewRegionId: newRegionID,
@@ -179,7 +181,7 @@ func (c *RaftCluster) HandleAskBatchSplit(request *pdpb.AskBatchSplitRequest) (*
 	// priority.
 	c.AddPendingProcessedRegions(false, recordRegions...)
 	if request.GetReason() == pdpb.SplitReason_LOAD {
-		c.GetCoordinator().GetCheckerController().RecordSplitScatterBatch(reqRegion.GetId(), recordRegions[:len(recordRegions)-1])
+		c.GetCoordinator().GetCheckerController().RecordSplitScatterBatch(reqRegion.GetId(), newRegionIDs)
 	}
 
 	resp := &pdpb.AskBatchSplitResponse{Ids: splitIDs}
