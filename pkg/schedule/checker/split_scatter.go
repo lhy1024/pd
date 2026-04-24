@@ -46,10 +46,8 @@ type splitScatterPendingItem struct {
 }
 
 type splitScatterDispatchSnapshot struct {
-	regionID  uint64
-	group     string
-	rangeHint splitScatterRangeHint
-	score     uint64
+	regionID uint64
+	score    uint64
 }
 
 // splitScatterRangeHint is a derived key range for the current table/index
@@ -136,10 +134,8 @@ func (m *splitScatterManager) collectTopPending(limit int) []splitScatterDispatc
 			continue
 		}
 		snapshot := splitScatterDispatchSnapshot{
-			regionID:  regionID,
-			group:     pendingItem.group,
-			rangeHint: pendingItem.rangeHint.clone(),
-			score:     pendingItem.score,
+			regionID: regionID,
+			score:    pendingItem.score,
 		}
 		insertAt := len(snapshots)
 		for i, existing := range snapshots {
@@ -241,19 +237,35 @@ func (c *Controller) dispatchSplitScatterRegions() {
 	}
 	snapshots := c.splitScatterQueue.collectTopPending(splitScatterDispatchLimit)
 	for _, snapshot := range snapshots {
+		c.splitScatterQueue.mu.RLock()
+		item, ok := c.splitScatterQueue.getPendingItemLocked(snapshot.regionID)
+		if ok {
+			ok = item.observed
+		}
+		var group string
+		var rangeHint splitScatterRangeHint
+		if ok {
+			group = item.group
+			rangeHint = item.rangeHint.clone()
+		}
+		c.splitScatterQueue.mu.RUnlock()
+		if !ok {
+			c.splitScatterQueue.remove(snapshot.regionID)
+			continue
+		}
 		region := c.cluster.GetRegion(snapshot.regionID)
 		if region == nil {
 			c.splitScatterQueue.remove(snapshot.regionID)
 			continue
 		}
-		if snapshot.rangeHint.valid() {
-			c.regionScatterer.SeedGroupDistributionByRange(snapshot.group, snapshot.rangeHint.startKey, snapshot.rangeHint.endKey)
+		if rangeHint.valid() {
+			c.regionScatterer.SeedGroupDistributionByRange(group, rangeHint.startKey, rangeHint.endKey)
 		}
-		op, err := c.regionScatterer.ScatterInternal(region, snapshot.group)
+		op, err := c.regionScatterer.ScatterInternal(region, group)
 		if err != nil {
 			log.Info("dispatch internal split scatter failed",
 				zap.Uint64("region-id", snapshot.regionID),
-				zap.String("group", snapshot.group),
+				zap.String("group", group),
 				zap.Error(err))
 			continue
 		}
@@ -261,18 +273,18 @@ func (c *Controller) dispatchSplitScatterRegions() {
 			if c.opController.AddWaitingOperator(op) == 0 {
 				log.Info("dispatch internal split scatter add operator failed",
 					zap.Uint64("region-id", snapshot.regionID),
-					zap.String("group", snapshot.group),
+					zap.String("group", group),
 					zap.String("operator-desc", op.Desc()))
 				continue
 			}
 			if c.opController.GetOperator(region.GetID()) != op {
 				log.Info("dispatch internal split scatter operator lost before commit",
 					zap.Uint64("region-id", snapshot.regionID),
-					zap.String("group", snapshot.group),
+					zap.String("group", group),
 					zap.String("operator-desc", op.Desc()))
 				continue
 			}
-			c.regionScatterer.Commit(region, op, snapshot.group)
+			c.regionScatterer.Commit(region, op, group)
 		}
 		c.splitScatterQueue.remove(snapshot.regionID)
 	}

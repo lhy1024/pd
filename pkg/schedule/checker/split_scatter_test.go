@@ -144,9 +144,10 @@ func TestObserveSplitScatterRegionResolvesRangeHint(t *testing.T) {
 
 			snapshots := controller.splitScatterQueue.collectTopPending(1)
 			re.Len(snapshots, 1)
-			re.Equal(makeSplitScatterGroup(100, 101), snapshots[0].group)
-			re.Equal(testCase.wantRange.startKey, snapshots[0].rangeHint.startKey)
-			re.Equal(testCase.wantRange.endKey, snapshots[0].rangeHint.endKey)
+			re.Equal([]uint64{101}, splitScatterSnapshotRegionIDs(snapshots))
+			rangeHint := splitScatterPendingRangeHint(t, controller, 101)
+			re.Equal(testCase.wantRange.startKey, rangeHint.startKey)
+			re.Equal(testCase.wantRange.endKey, rangeHint.endKey)
 		})
 	}
 }
@@ -250,6 +251,15 @@ func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uin
 	item, ok := controller.splitScatterQueue.getPendingItemLocked(regionID)
 	require.True(t, ok)
 	return item.group
+}
+
+func splitScatterPendingRangeHint(t *testing.T, controller *Controller, regionID uint64) splitScatterRangeHint {
+	t.Helper()
+	controller.splitScatterQueue.mu.RLock()
+	defer controller.splitScatterQueue.mu.RUnlock()
+	item, ok := controller.splitScatterQueue.getPendingItemLocked(regionID)
+	require.True(t, ok)
+	return item.rangeHint.clone()
 }
 
 func splitScatterSnapshotRegionIDs(snapshots []splitScatterDispatchSnapshot) []uint64 {
