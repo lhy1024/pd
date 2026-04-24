@@ -36,7 +36,6 @@ const (
 type splitScatterPendingItem struct {
 	regionID    uint64
 	group       string
-	waitVersion uint64
 	retryAt     time.Time
 }
 
@@ -82,13 +81,6 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 			continue
 		}
 		if !pending.retryAt.IsZero() && now.Before(pending.retryAt) {
-			continue
-		}
-		currentVersion := uint64(0)
-		if region.GetRegionEpoch() != nil {
-			currentVersion = region.GetRegionEpoch().GetVersion()
-		}
-		if pending.waitVersion > 0 && currentVersion < pending.waitVersion {
 			continue
 		}
 		candidates = append(candidates, splitScatterDispatchCandidate{
@@ -142,11 +134,6 @@ func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs
 	for _, regionID := range newRegionIDs {
 		c.splitScatterPending.Put(regionID, splitScatterPendingItem{group: group})
 	}
-	sourcePending := splitScatterPendingItem{group: group, waitVersion: 1}
-	if sourceRegion := c.cluster.GetRegion(sourceRegionID); sourceRegion != nil && sourceRegion.GetRegionEpoch() != nil {
-		sourcePending.waitVersion = sourceRegion.GetRegionEpoch().GetVersion() + 1
-	}
-	c.splitScatterPending.Put(sourceRegionID, sourcePending)
 }
 
 // DispatchSplitScatterRegions dispatches pending split-scatter regions.

@@ -43,9 +43,9 @@ func TestRecordSplitScatterBatchCollectsByLegacyCPUScore(t *testing.T) {
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101, 102, 103})
-	re.Equal(4, splitScatterPendingCount(controller))
+	re.Equal(3, splitScatterPendingCount(controller))
 
-	sourceGroup := splitScatterPendingGroup(t, controller, 100)
+	sourceGroup := makeSplitScatterGroup(100, 101)
 	for _, regionID := range []uint64{101, 102} {
 		re.Equal(sourceGroup, splitScatterPendingGroup(t, controller, regionID))
 	}
@@ -82,12 +82,11 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal(group, opGroup)
-	re.Equal(1, splitScatterPendingCount(controller))
-	re.Equal(group, splitScatterPendingGroup(t, controller, 100))
+	re.Zero(splitScatterPendingCount(controller))
 	re.Empty(pendingRegionIDs(controller.collectTopPendingSplitScatter(4)))
 }
 
-func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
+func TestRecordSplitScatterBatchDoesNotEnqueueSourceRegion(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
@@ -96,12 +95,10 @@ func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
 	putSplitScatterRegion(tc, 101, "m", "", 120)
 
 	re.Equal([]uint64{101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
-
-	source := tc.GetRegion(100)
-	re.NotNil(source)
-	tc.PutRegion(source.Clone(core.WithIncVersion()))
-
-	re.Equal([]uint64{101, 100}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
+	controller.splitScatterPendingMu.RLock()
+	_, ok := controller.splitScatterPending.Get(100)
+	controller.splitScatterPendingMu.RUnlock()
+	re.False(ok)
 }
 
 func TestCollectTopPendingResolvesRangeHint(t *testing.T) {
@@ -183,7 +180,7 @@ func TestDispatchSplitScatterBacksOffWhenRegionIsNotFullyReplicated(t *testing.T
 
 	controller.DispatchSplitScatterRegions()
 
-	re.Equal(2, splitScatterPendingCount(controller))
+	re.Equal(1, splitScatterPendingCount(controller))
 	pending := splitScatterPendingItemAt(t, controller, 101)
 	re.True(pending.retryAt.After(time.Now()))
 	re.Empty(pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))

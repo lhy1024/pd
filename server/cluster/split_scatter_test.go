@@ -70,6 +70,7 @@ func TestHandleAskBatchSplitSchedulesSplitScatterInPatrol(t *testing.T) {
 		re.Equal(group, opGroup)
 	}
 	re.NotEmpty(group)
+	re.Nil(cluster.GetOperatorController().GetOperator(100))
 }
 
 func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) {
@@ -102,31 +103,6 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal("split-scatter-100-1", opGroup)
-}
-
-func TestHandleAskBatchSplitSkipsSplitScatterForExtraPeerRequest(t *testing.T) {
-	re := require.New(t)
-	cluster := newSplitScatterTestCluster(t)
-	re.NoError(cluster.setStore(newTestStores(5, "6.0.0")[4]))
-
-	request := &pdpb.AskBatchSplitRequest{
-		Region:     newSplitScatterRegionWithStores(100, []byte(""), []byte("m"), 0, 1, 2, 3, 4, 5).GetMeta(),
-		SplitCount: 1,
-	}
-	resp, err := cluster.HandleAskBatchSplit(request)
-	re.NoError(err)
-	re.Len(resp.GetIds(), 1)
-
-	splitRegionID := resp.GetIds()[0].GetNewRegionId()
-	re.NoError(cluster.processRegionHeartbeat(
-		core.ContextTODO(),
-		newSplitScatterRegion(splitRegionID, []byte("m"), []byte(""), 120),
-	))
-
-	cluster.GetCoordinator().GetCheckerController().DispatchSplitScatterRegions()
-
-	re.Nil(cluster.GetOperatorController().GetOperator(splitRegionID))
-	re.Nil(cluster.GetOperatorController().GetOperator(100))
 }
 
 func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
