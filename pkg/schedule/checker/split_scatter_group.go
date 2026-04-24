@@ -29,15 +29,13 @@ var (
 type splitScatterEntityKind uint8
 
 const (
-	splitScatterEntityUnknown splitScatterEntityKind = iota
-	splitScatterEntityTable
+	splitScatterEntityTable splitScatterEntityKind = iota + 1
 	splitScatterEntityIndex
 )
 
 type splitScatterEntity struct {
 	kind      splitScatterEntityKind
 	tableID   int64
-	indexID   int64
 	rawPrefix []byte
 }
 
@@ -94,7 +92,6 @@ func parseSplitScatterEntity(key []byte) (splitScatterEntity, bool) {
 		return splitScatterEntity{
 			kind:      splitScatterEntityIndex,
 			tableID:   tableID,
-			indexID:   indexID,
 			rawPrefix: rawPrefix,
 		}, true
 	default:

@@ -31,12 +31,8 @@ import (
 )
 
 const (
-	splitScatterPendingTTL      = 3 * time.Minute
-	splitScatterQueueGCInterval = time.Minute
-	// splitScatterQueueCapacity is a fixed, intentionally generous upper bound.
-	// This queue tracks only pending split-scatter regions, so using a large
-	// static capacity keeps the hot path simpler than incremental growth.
-	splitScatterQueueCapacity     = 65536
+	splitScatterPendingTTL        = 3 * time.Minute
+	splitScatterQueueGCInterval   = time.Minute
 	splitScatterDispatchLimit     = 4
 	splitScatterRetryBaseInterval = time.Second
 	splitScatterRetryMaxInterval  = time.Minute
@@ -51,22 +47,15 @@ type splitScatterPendingItem struct {
 	// region key range. Region boundaries stay stable while the split-scatter
 	// item is pending, so later heartbeats only need to refresh the CPU score.
 	resolved bool
-}
-
-type splitScatterQueueItem struct {
-	regionID uint64
+	observed bool
+	score    uint64
 	// attempt and last implement per-region retry backoff after transient
 	// dispatch failures such as add-operator rejection or temporary limits.
 	attempt int
 	last    time.Time
 }
 
-// ID implements the priority queue item interface.
-func (i *splitScatterQueueItem) ID() uint64 {
-	return i.regionID
-}
-
-func (i *splitScatterQueueItem) ready(now time.Time) bool {
+func (i *splitScatterPendingItem) ready(now time.Time) bool {
 	if i.attempt <= 0 || i.last.IsZero() {
 		return true
 	}
@@ -81,6 +70,7 @@ type splitScatterCandidate struct {
 	regionID  uint64
 	group     string
 	rangeHint splitScatterRangeHint
+	score     uint64
 }
 
 // splitScatterRangeHint is a derived key range for the current table/index
@@ -107,14 +97,12 @@ type splitScatterManager struct {
 	mu          struct {
 		syncutil.RWMutex
 		pending *cache.TTLUint64
-		queue   *cache.PriorityQueue
 	}
 }
 
 func newSplitScatterManager(ctx context.Context) *splitScatterManager {
 	m := &splitScatterManager{}
 	m.mu.pending = cache.NewIDTTL(ctx, splitScatterQueueGCInterval, splitScatterPendingTTL)
-	m.mu.queue = cache.NewPriorityQueue(splitScatterQueueCapacity)
 	return m
 }
 
@@ -144,18 +132,11 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	if !item.resolved {
 		item.rangeHint = resolveSplitScatterRangeHint(region)
 		item.resolved = true
-		m.mu.pending.Put(region.GetID(), item)
 	}
+	item.observed = true
+	item.score = splitScatterCPUScore(region)
 	m.extendPotentialPendingTTL(time.Now())
-	priority := splitScatterPriority(splitScatterCPUScore(region))
-	if entry := m.mu.queue.Get(region.GetID()); entry != nil {
-		item := entry.Value.(*splitScatterQueueItem)
-		m.mu.queue.Put(priority, item)
-		return
-	}
-	m.putQueueItemLocked(priority, &splitScatterQueueItem{
-		regionID: region.GetID(),
-	})
+	m.mu.pending.Put(region.GetID(), item)
 }
 
 func (m *splitScatterManager) getCandidates(limit int) []splitScatterCandidate {
@@ -165,31 +146,27 @@ func (m *splitScatterManager) getCandidates(limit int) []splitScatterCandidate {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.compactQueueLocked()
-	if m.pendingCountLocked() == 0 {
+	pendingIDs := m.mu.pending.GetAllID()
+	if len(pendingIDs) == 0 {
 		m.activeUntil.Store(0)
 		return nil
 	}
 	now := time.Now()
-	entries := m.mu.queue.Elems()
-	candidates := make([]splitScatterCandidate, 0, min(limit, len(entries)))
-	for _, entry := range entries {
-		item := entry.Value.(*splitScatterQueueItem)
-		pendingItem, ok := m.getPendingItemLocked(item.regionID)
+	candidates := make([]splitScatterCandidate, 0, min(limit, len(pendingIDs)))
+	for _, regionID := range pendingIDs {
+		pendingItem, ok := m.getPendingItemLocked(regionID)
 		if !ok {
 			continue
 		}
-		if !item.ready(now) {
+		if !pendingItem.observed || !pendingItem.ready(now) {
 			continue
 		}
-		candidates = append(candidates, splitScatterCandidate{
-			regionID:  item.regionID,
+		candidates = insertSplitScatterCandidate(candidates, splitScatterCandidate{
+			regionID:  regionID,
 			group:     pendingItem.group,
 			rangeHint: pendingItem.rangeHint.clone(),
-		})
-		if len(candidates) >= limit {
-			break
-		}
+			score:     pendingItem.score,
+		}, limit)
 	}
 	return candidates
 }
@@ -198,25 +175,18 @@ func (m *splitScatterManager) recordFailure(regionID uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, ok := m.getPendingItemLocked(regionID); !ok {
-		m.mu.queue.Remove(regionID)
+	item, ok := m.getPendingItemLocked(regionID)
+	if !ok {
 		return
 	}
-	entry := m.mu.queue.Get(regionID)
-	if entry == nil {
-		return
-	}
-	item := entry.Value.(*splitScatterQueueItem)
 	item.attempt++
 	item.last = time.Now()
-	m.mu.queue.Put(entry.Priority, item)
 }
 
 func (m *splitScatterManager) remove(regionID uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mu.pending.Remove(regionID)
-	m.mu.queue.Remove(regionID)
 	m.clearPotentialPendingIfEmptyLocked()
 }
 
@@ -240,25 +210,6 @@ func (m *splitScatterManager) hasPotentialPending() bool {
 	return m.activeUntil.Load() > time.Now().UnixNano()
 }
 
-func (m *splitScatterManager) compactQueueLocked() {
-	for _, entry := range m.mu.queue.Elems() {
-		if _, ok := m.getPendingItemLocked(entry.Value.ID()); !ok {
-			m.mu.queue.Remove(entry.Value.ID())
-		}
-	}
-}
-
-func (m *splitScatterManager) putQueueItemLocked(priority int, item *splitScatterQueueItem) {
-	if m.mu.queue.Put(priority, item) {
-		return
-	}
-	m.compactQueueLocked()
-	// With the fixed large queue capacity, a second Put only fails for extreme
-	// oversized batches whose low-priority tail must wait for a later heartbeat
-	// to re-enter the queue.
-	m.mu.queue.Put(priority, item)
-}
-
 func (m *splitScatterManager) extendPotentialPendingTTL(now time.Time) {
 	m.activeUntil.Store(now.Add(splitScatterPendingTTL).UnixNano())
 }
@@ -269,12 +220,32 @@ func (m *splitScatterManager) clearPotentialPendingIfEmptyLocked() {
 	}
 }
 
-func splitScatterPriority(score uint64) int {
-	maxInt := int(^uint(0) >> 1)
-	if score > uint64(maxInt) {
-		return -maxInt
+func splitScatterCandidateHigherPriority(left, right splitScatterCandidate) bool {
+	if left.score != right.score {
+		return left.score > right.score
 	}
-	return -int(score)
+	return left.regionID < right.regionID
+}
+
+func insertSplitScatterCandidate(candidates []splitScatterCandidate, candidate splitScatterCandidate, limit int) []splitScatterCandidate {
+	insertAt := len(candidates)
+	for i, existing := range candidates {
+		if splitScatterCandidateHigherPriority(candidate, existing) {
+			insertAt = i
+			break
+		}
+	}
+	if insertAt == len(candidates) && len(candidates) >= limit {
+		return candidates
+	}
+
+	candidates = append(candidates, splitScatterCandidate{})
+	copy(candidates[insertAt+1:], candidates[insertAt:])
+	candidates[insertAt] = candidate
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates
 }
 
 func splitScatterCPUScore(region *core.RegionInfo) uint64 {
