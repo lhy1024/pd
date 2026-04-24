@@ -16,6 +16,7 @@ package checker
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"go.uber.org/zap"
@@ -33,6 +34,11 @@ const (
 type splitScatterPendingItem struct {
 	regionID uint64
 	group    string
+}
+
+type splitScatterDispatchCandidate struct {
+	pending splitScatterPendingItem
+	score   uint64
 }
 
 // splitScatterRangeHint is a derived key range for the current table/index
@@ -66,36 +72,25 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	}
 	c.splitScatterPendingMu.RUnlock()
 
-	type dispatchCandidate struct {
-		pending splitScatterPendingItem
-		score   uint64
-	}
-	candidates := make([]dispatchCandidate, 0, min(limit, len(pendingRegions)))
+	candidates := make([]splitScatterDispatchCandidate, 0, len(pendingRegions))
 	for _, pending := range pendingRegions {
 		region := c.cluster.GetRegion(pending.regionID)
 		if region == nil {
 			continue
 		}
-		candidate := dispatchCandidate{
+		candidates = append(candidates, splitScatterDispatchCandidate{
 			pending: pending,
 			score:   region.GetCPUUsage(),
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score == candidates[j].score {
+			return candidates[i].pending.regionID < candidates[j].pending.regionID
 		}
-		insertAt := len(candidates)
-		for i, existing := range candidates {
-			if candidate.score > existing.score || (candidate.score == existing.score && candidate.pending.regionID < existing.pending.regionID) {
-				insertAt = i
-				break
-			}
-		}
-		if insertAt == len(candidates) && len(candidates) >= limit {
-			continue
-		}
-		candidates = append(candidates, dispatchCandidate{})
-		copy(candidates[insertAt+1:], candidates[insertAt:])
-		candidates[insertAt] = candidate
-		if len(candidates) > limit {
-			candidates = candidates[:limit]
-		}
+		return candidates[i].score > candidates[j].score
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
 	}
 	regions := make([]splitScatterPendingItem, 0, len(candidates))
 	for _, candidate := range candidates {
