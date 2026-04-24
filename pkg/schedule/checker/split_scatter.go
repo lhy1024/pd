@@ -22,7 +22,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pingcap/log"
-	"github.com/tikv/pd/pkg/schedule/operator"
 )
 
 const (
@@ -144,15 +143,14 @@ func (c *Controller) DispatchSplitScatterRegions() {
 					zap.String("operator-desc", op.Desc()))
 				continue
 			}
-			if !c.opController.ApplyOnCurrentOperator(region.GetID(), op, func(current *operator.Operator) {
-				c.regionScatterer.Commit(region, current, pending.group)
-			}) {
+			if c.opController.GetOperator(region.GetID()) != op {
 				log.Info("dispatch internal split scatter operator lost before commit",
 					zap.Uint64("region-id", pending.regionID),
 					zap.String("group", pending.group),
 					zap.String("operator-desc", op.Desc()))
 				continue
 			}
+			c.regionScatterer.Commit(region, op, pending.group)
 		}
 		c.splitScatterPendingMu.Lock()
 		c.splitScatterPending.Remove(pending.regionID)

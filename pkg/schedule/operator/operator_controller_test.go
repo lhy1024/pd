@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
 
 	"github.com/tikv/pd/pkg/core"
-	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
 	"github.com/tikv/pd/pkg/mock/mockcluster"
 	"github.com/tikv/pd/pkg/mock/mockconfig"
@@ -923,56 +922,6 @@ func (suite *operatorControllerTestSuite) TestDispatchUnfinishedStep() {
 		e := stream.Drain(4)
 		re.NoError(e)
 	}
-}
-
-func TestApplyOnCurrentOperatorBlocksReplacementDuringCommit(t *testing.T) {
-	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cluster := mockcluster.NewCluster(ctx, mockconfig.NewTestOptions())
-	stream := hbstream.NewTestHeartbeatStreams(ctx, cluster, false /* no need to run */)
-	controller := NewController(ctx, cluster.GetBasicCluster(), cluster.GetSharedConfig(), stream)
-
-	cluster.AddLeaderStore(1, 1)
-	cluster.AddLeaderStore(2, 1)
-	cluster.AddLeaderRegion(1, 1, 2)
-	region := cluster.GetRegion(1)
-
-	op1 := NewTestOperator(1, region.GetRegionEpoch(), OpLeader, TransferLeader{FromStore: 1, ToStore: 2})
-	op1.SetPriorityLevel(constant.Medium)
-	re.True(op1.Start())
-	controller.SetOperator(op1)
-
-	op2 := NewTestOperator(1, region.GetRegionEpoch(), OpAdmin, TransferLeader{FromStore: 1, ToStore: 2})
-	op2.SetPriorityLevel(constant.High)
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	applied := make(chan bool, 1)
-	go func() {
-		applied <- controller.ApplyOnCurrentOperator(region.GetID(), op1, func(current *Operator) {
-			close(started)
-			<-release
-		})
-	}()
-
-	<-started
-	added := make(chan bool, 1)
-	go func() {
-		added <- controller.AddOperator(op2)
-	}()
-
-	select {
-	case ok := <-added:
-		t.Fatalf("replacement should wait until commit finishes, got %v", ok)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	close(release)
-	re.True(<-applied)
-	re.True(<-added)
-	re.Same(op2, controller.GetOperator(region.GetID()))
 }
 
 func (suite *operatorControllerTestSuite) newRegionInfo(id uint64, startKey, endKey string, size, keys int64, leader []uint64, peers ...[]uint64) *core.RegionInfo {

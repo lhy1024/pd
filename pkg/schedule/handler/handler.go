@@ -39,6 +39,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
+	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/schedule/schedulers"
 	"github.com/tikv/pd/pkg/schedule/types"
 	"github.com/tikv/pd/pkg/statistics"
@@ -78,6 +79,15 @@ func (h *Handler) GetOperatorController() (*operator.Controller, error) {
 		return nil, errs.ErrNotBootstrapped.GenWithStackByArgs()
 	}
 	return co.GetOperatorController(), nil
+}
+
+// GetRegionScatterer returns RegionScatterer.
+func (h *Handler) GetRegionScatterer() (*scatter.RegionScatterer, error) {
+	co := h.GetCoordinator()
+	if co == nil {
+		return nil, errs.ErrNotBootstrapped.GenWithStackByArgs()
+	}
+	return co.GetRegionScatterer(), nil
 }
 
 // GetOperator returns the region operator.
@@ -656,11 +666,10 @@ func (h *Handler) AddScatterRegionOperator(regionID uint64, group string) error 
 		return errors.Errorf("region %d is a hot region", regionID)
 	}
 
-	co := h.GetCoordinator()
-	if co == nil {
-		return errs.ErrNotBootstrapped.GenWithStackByArgs()
+	s, err := h.GetRegionScatterer()
+	if err != nil {
+		return err
 	}
-	s := co.GetRegionScatterer()
 
 	op, err := s.Scatter(region, group, false)
 	if err != nil {
@@ -673,26 +682,18 @@ func (h *Handler) AddScatterRegionOperator(regionID uint64, group string) error 
 	if err := h.addOperator(op); err != nil {
 		return err
 	}
-	oc, err := h.GetOperatorController()
-	if err != nil {
-		return err
-	}
-	oc.ApplyOnCurrentOperator(region.GetID(), op, func(current *operator.Operator) {
-		s.Commit(region, current, group)
-	})
+	s.Commit(region, op, group)
 	return nil
 }
 
 // AddScatterRegionsOperators add operators to scatter regions and return the processed percentage and error
 func (h *Handler) AddScatterRegionsOperators(regionIDs []uint64, startRawKey, endRawKey, group string, retryLimit int) (int, error) {
-	co := h.GetCoordinator()
-	if co == nil {
-		return 0, errs.ErrNotBootstrapped.GenWithStackByArgs()
+	s, err := h.GetRegionScatterer()
+	if err != nil {
+		return 0, err
 	}
-	s := co.GetRegionScatterer()
 	opsCount := 0
 	var failures map[uint64]error
-	var err error
 	// If startKey and endKey are both defined, use them first.
 	if len(startRawKey) > 0 && len(endRawKey) > 0 {
 		startKey, err := hex.DecodeString(startRawKey)
@@ -1222,20 +1223,20 @@ func (h *Handler) ScatterRegionsByRange(rawStartKey, rawEndKey string, group str
 	if err != nil {
 		return 0, nil, err
 	}
-	co := h.GetCoordinator()
-	if co == nil {
-		return 0, nil, errs.ErrNotBootstrapped.GenWithStackByArgs()
+	s, err := h.GetRegionScatterer()
+	if err != nil {
+		return 0, nil, err
 	}
-	return co.GetRegionScatterer().ScatterRegionsByRange(startKey, endKey, group, retryLimit)
+	return s.ScatterRegionsByRange(startKey, endKey, group, retryLimit)
 }
 
 // ScatterRegionsByID scatters regions by id.
 func (h *Handler) ScatterRegionsByID(ids []uint64, group string, retryLimit int) (int, map[uint64]error, error) {
-	co := h.GetCoordinator()
-	if co == nil {
-		return 0, nil, errs.ErrNotBootstrapped.GenWithStackByArgs()
+	s, err := h.GetRegionScatterer()
+	if err != nil {
+		return 0, nil, err
 	}
-	return co.GetRegionScatterer().ScatterRegionsByID(ids, group, retryLimit, false)
+	return s.ScatterRegionsByID(ids, group, retryLimit, false)
 }
 
 // SplitRegionsResponse is the response for split regions.

@@ -82,12 +82,11 @@ func (c *opCounter) getCountByKind(kind OpKind) uint64 {
 
 // Controller is used to limit the speed of scheduling.
 type Controller struct {
-	operators   sync.Map
-	operatorsMu syncutil.RWMutex
-	ctx         context.Context
-	config      config.SharedConfigProvider
-	cluster     *core.BasicCluster
-	hbStreams   *hbstream.HeartbeatStreams
+	operators sync.Map
+	ctx       context.Context
+	config    config.SharedConfigProvider
+	cluster   *core.BasicCluster
+	hbStreams *hbstream.HeartbeatStreams
 
 	// fast path, TTLUint64 is safe for concurrent.
 	fastOperators *cache.TTLUint64
@@ -462,9 +461,7 @@ func (oc *Controller) checkAddOperator(isPromoting bool, ops ...*Operator) (bool
 			operatorCounter.WithLabelValues(op.Desc(), "epoch-not-match").Inc()
 			return false, EpochNotMatch
 		}
-		oc.operatorsMu.RLock()
 		oldi, ok := oc.operators.Load(op.RegionID())
-		oc.operatorsMu.RUnlock()
 		if ok && oldi.(*Operator) != nil && !isHigherPriorityOperator(op, oldi.(*Operator)) {
 			old := oldi.(*Operator)
 			log.Debug("already have operator, cancel add operator",
@@ -532,13 +529,11 @@ func isHigherPriorityOperator(new, old *Operator) bool {
 func (oc *Controller) addOperatorInner(op *Operator) bool {
 	regionID := op.RegionID()
 
-	oc.operatorsMu.Lock()
 	old, loaded := oc.operators.LoadOrStore(regionID, op)
 	if loaded {
 		// If there is an old operator and it has lower priority, replace it
 		oldOp := old.(*Operator)
 		if !isHigherPriorityOperator(op, oldOp) {
-			oc.operatorsMu.Unlock()
 			log.Debug("operator already exists with higher or equal priority",
 				zap.Uint64("region-id", regionID),
 				zap.Reflect("old", oldOp),
@@ -550,7 +545,6 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 		}
 		// replace old operator
 		if !oc.operators.CompareAndSwap(regionID, oldOp, op) {
-			oc.operatorsMu.Unlock()
 			_ = op.Cancel()
 			oc.buryOperator(op)
 			log.Debug("operator changed during replace, skip this add",
@@ -562,14 +556,13 @@ func (oc *Controller) addOperatorInner(op *Operator) bool {
 		oc.counts.dec(oldOp.SchedulerKind())
 		oc.ack(oldOp)
 		if oldOp.HasRelatedMergeRegion() {
-			oc.removeRelatedMergeOperatorLocked(oldOp)
+			oc.removeRelatedMergeOperator(oldOp)
 		}
 		_ = oldOp.Replace()
 		oc.buryOperator(oldOp)
 	}
 
 	oc.counts.inc(op.SchedulerKind())
-	oc.operatorsMu.Unlock()
 	// Now start the operator after successfully adding it to the map
 	if !op.Start() {
 		_ = oc.removeOperatorWithoutBury(op)
@@ -658,8 +651,6 @@ func (oc *Controller) RemoveOperators(reasons ...CancelReasonType) {
 
 func (oc *Controller) removeOperatorsWithoutBury() []*Operator {
 	var removed []*Operator
-	oc.operatorsMu.Lock()
-	defer oc.operatorsMu.Unlock()
 	oc.operators.Range(func(regionID, value any) bool {
 		op := value.(*Operator)
 		oc.operators.Delete(regionID)
@@ -667,7 +658,7 @@ func (oc *Controller) removeOperatorsWithoutBury() []*Operator {
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.HasRelatedMergeRegion() {
-			oc.removeRelatedMergeOperatorLocked(op)
+			oc.removeRelatedMergeOperator(op)
 		}
 		removed = append(removed, op)
 		return true
@@ -695,26 +686,20 @@ func (oc *Controller) RemoveOperator(op *Operator, reasons ...CancelReasonType) 
 }
 
 func (oc *Controller) removeOperatorWithoutBury(op *Operator) bool {
-	oc.operatorsMu.Lock()
-	defer oc.operatorsMu.Unlock()
-	return oc.removeOperatorWithoutBuryLocked(op)
-}
-
-func (oc *Controller) removeOperatorWithoutBuryLocked(op *Operator) bool {
 	regionID := op.RegionID()
 	if oc.operators.CompareAndDelete(regionID, op) {
 		oc.counts.dec(op.SchedulerKind())
 		operatorCounter.WithLabelValues(op.Desc(), "remove").Inc()
 		oc.ack(op)
 		if op.HasRelatedMergeRegion() {
-			oc.removeRelatedMergeOperatorLocked(op)
+			oc.removeRelatedMergeOperator(op)
 		}
 		return true
 	}
 	return false
 }
 
-func (oc *Controller) removeRelatedMergeOperatorLocked(op *Operator) {
+func (oc *Controller) removeRelatedMergeOperator(op *Operator) {
 	relatedID := op.GetRelatedMergeRegion()
 	if relatedID == 0 {
 		return
@@ -725,7 +710,7 @@ func (oc *Controller) removeRelatedMergeOperatorLocked(op *Operator) {
 	}
 	relatedOp := relatedOpi.(*Operator)
 	if relatedOp != nil && relatedOp.Status() != CANCELED {
-		oc.removeOperatorWithoutBuryLocked(relatedOp)
+		oc.removeOperatorWithoutBury(relatedOp)
 		relatedOp.Cancel(RelatedMergeRegion)
 		oc.buryOperator(relatedOp)
 	}
@@ -793,8 +778,6 @@ func (oc *Controller) buryOperator(op *Operator) {
 
 // GetOperatorStatus gets the operator and its status with the specify id.
 func (oc *Controller) GetOperatorStatus(id uint64) *OpWithStatus {
-	oc.operatorsMu.RLock()
-	defer oc.operatorsMu.RUnlock()
 	if opi, ok := oc.operators.Load(id); ok && opi.(*Operator) != nil {
 		op := opi.(*Operator)
 		return NewOpWithStatus(op)
@@ -804,37 +787,15 @@ func (oc *Controller) GetOperatorStatus(id uint64) *OpWithStatus {
 
 // GetOperator gets an operator from the given region.
 func (oc *Controller) GetOperator(regionID uint64) *Operator {
-	oc.operatorsMu.RLock()
-	defer oc.operatorsMu.RUnlock()
 	if v, ok := oc.operators.Load(regionID); ok {
 		return v.(*Operator)
 	}
 	return nil
 }
 
-// ApplyOnCurrentOperator runs fn only when expected is still the current
-// running operator for regionID. While fn runs, add/remove/replace on the same
-// operator map are blocked so the operator cannot be swapped out mid-commit.
-func (oc *Controller) ApplyOnCurrentOperator(regionID uint64, expected *Operator, fn func(current *Operator)) bool {
-	oc.operatorsMu.RLock()
-	defer oc.operatorsMu.RUnlock()
-	current, ok := oc.operators.Load(regionID)
-	if !ok {
-		return false
-	}
-	operator := current.(*Operator)
-	if operator != expected {
-		return false
-	}
-	fn(operator)
-	return true
-}
-
 // GetOperators gets operators from the running operators.
 func (oc *Controller) GetOperators() []*Operator {
 	operators := make([]*Operator, 0, oc.opNotifierQueue.len())
-	oc.operatorsMu.RLock()
-	defer oc.operatorsMu.RUnlock()
 	oc.operators.Range(
 		func(_, value any) bool {
 			operators = append(operators, value.(*Operator))
@@ -851,8 +812,6 @@ func (oc *Controller) GetWaitingOperators() []*Operator {
 // GetOperatorsOfKind returns the running operators of the kind.
 func (oc *Controller) GetOperatorsOfKind(mask OpKind) []*Operator {
 	operators := make([]*Operator, 0, oc.opNotifierQueue.len())
-	oc.operatorsMu.RLock()
-	defer oc.operatorsMu.RUnlock()
 	oc.operators.Range(
 		func(_, value any) bool {
 			op := value.(*Operator)
@@ -1007,8 +966,6 @@ func NewTotalOpInfluence(operators []*Operator, cluster *core.BasicCluster) *OpI
 
 // SetOperator is only used for test.
 func (oc *Controller) SetOperator(op *Operator) {
-	oc.operatorsMu.Lock()
-	defer oc.operatorsMu.Unlock()
 	oc.operators.Store(op.RegionID(), op)
 	oc.counts.inc(op.SchedulerKind())
 }
