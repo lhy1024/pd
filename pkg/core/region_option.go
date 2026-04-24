@@ -202,13 +202,6 @@ func SetCPUUsage(v uint64) RegionCreateOption {
 	}
 }
 
-// SetCPUStats sets the CPU stats of the region.
-func SetCPUStats(stats *pdpb.CPUStats) RegionCreateOption {
-	return func(region *RegionInfo) {
-		region.cpuStats = stats
-	}
-}
-
 // SetWrittenBytes sets the written bytes for the region.
 func SetWrittenBytes(v uint64) RegionCreateOption {
 	return func(region *RegionInfo) {

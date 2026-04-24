@@ -146,8 +146,7 @@ func newSplitScatterRegion(regionID uint64, start, end []byte, cpu uint64) *core
 	return core.NewRegionInfo(
 		region,
 		peers[0],
-		core.SetCPUUsage(0),
-		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: cpu}),
+		core.SetCPUUsage(cpu),
 	)
 }
 

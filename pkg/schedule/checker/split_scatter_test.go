@@ -20,8 +20,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/pingcap/kvproto/pkg/pdpb"
-
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mock/mockcluster"
@@ -50,9 +48,9 @@ func TestRecordSplitScatterBatchCollectsByLegacyCPUScore(t *testing.T) {
 		re.Equal(sourceGroup, splitScatterPendingGroup(t, controller, regionID))
 	}
 
-	putSplitScatterRegionWithCPUStats(tc, 101, "m", "n", 70, 60, 0)
+	putSplitScatterRegion(tc, 101, "m", "n", 0)
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "n", "o", 120)
-	putSplitScatterRegionWithCPUStats(tc, 103, "o", "", 0, 80, 999)
+	putSplitScatterRegion(tc, 103, "o", "", 999)
 
 	re.Equal([]uint64{103, 102, 100}, controller.splitScatter.collectTopPending(3))
 }
@@ -149,7 +147,7 @@ func TestCollectTopPendingUsesLegacyCPUUsage(t *testing.T) {
 
 	controller.RecordSplitScatterBatch(100, []uint64{101, 102})
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 101, "m", "t", 120)
-	putSplitScatterRegionWithCPUStats(tc, 102, "t", "", 0, 80, 999)
+	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "t", "", 999)
 
 	re.Equal([]uint64{102, 101}, controller.splitScatter.collectTopPending(2))
 }
@@ -176,15 +174,8 @@ func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Clus
 }
 
 func putSplitScatterRegion(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, cpu uint64) {
-	putSplitScatterRegionWithCPUStats(tc, regionID, startKey, endKey, cpu, 0, 0)
-}
-
-func putSplitScatterRegionWithCPUStats(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, readCPU, schedulerCPU, legacyCPU uint64) {
 	tc.AddLeaderRegionWithRange(regionID, startKey, endKey, 1, 2, 3)
-	region := tc.GetRegion(regionID).Clone(
-		core.SetCPUUsage(legacyCPU),
-		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: readCPU, Scheduler: schedulerCPU}),
-	)
+	region := tc.GetRegion(regionID).Clone(core.SetCPUUsage(cpu))
 	tc.PutRegion(region)
 }
 
@@ -198,7 +189,7 @@ func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, startKey, endKey []b
 	region := tc.AddLeaderRegion(splitScatterObservedRegionID, 1, 2, 3).Clone(
 		core.WithStartKey(startKey),
 		core.WithEndKey(endKey),
-		core.SetCPUStats(&pdpb.CPUStats{UnifiedRead: cpu}),
+		core.SetCPUUsage(cpu),
 	)
 	tc.PutRegion(region)
 }
