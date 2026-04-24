@@ -121,13 +121,6 @@ func (s *selectedStores) Get(id uint64, group string) uint64 {
 	return count
 }
 
-// GetGroupDistribution get distribution group by `group`
-func (s *selectedStores) GetGroupDistribution(group string) (map[uint64]uint64, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.getDistributionByGroupLocked(group)
-}
-
 // InitGroupDistribution seeds the distribution for a group if the group has not
 // been tracked yet.
 func (s *selectedStores) InitGroupDistribution(group string, distribution map[uint64]uint64) bool {
@@ -225,7 +218,6 @@ type classifiedPlacementStores struct {
 	ordinaryNewStores []uint64
 	specialOldStores  map[string][]uint64
 	specialNewStores  map[string][]uint64
-	targetPeerEngines map[uint64]string
 }
 
 func newEngineContext(ctx context.Context, filterFuncs ...filterFunc) engineContext {
@@ -763,7 +755,6 @@ func (r *RegionScatterer) classifyPlacementStores(
 		ordinaryNewStores: make([]uint64, 0, len(targetPeers)),
 		specialOldStores:  make(map[string][]uint64),
 		specialNewStores:  make(map[string][]uint64),
-		targetPeerEngines: make(map[uint64]string, len(targetPeers)),
 	}
 
 	classifyStore := func(storeID uint64, ordinary *[]uint64, special map[string][]uint64) string {
@@ -787,7 +778,10 @@ func (r *RegionScatterer) classifyPlacementStores(
 		storeID := peer.GetStoreId()
 		engine := classifyStore(storeID, &classified.ordinaryNewStores, classified.specialNewStores)
 		if engine != "" {
-			classified.targetPeerEngines[storeID] = engine
+			scatterDistributionCounter.WithLabelValues(
+				strconv.FormatUint(storeID, 10),
+				strconv.FormatBool(false),
+				engine).Inc()
 		}
 	}
 	return classified
@@ -830,13 +824,6 @@ func (r *RegionScatterer) Commit(region *core.RegionInfo, op *operator.Operator,
 // Update records the group distribution after scattering a region to the target placement.
 func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
 	classified := r.classifyPlacementStores(region, targetPeers)
-	for storeID, engine := range classified.targetPeerEngines {
-		scatterDistributionCounter.WithLabelValues(
-			strconv.FormatUint(storeID, 10),
-			strconv.FormatBool(false),
-			engine).Inc()
-	}
-
 	r.ordinaryEngine.selectedPeer.Update(group, classified.ordinaryOldStores, classified.ordinaryNewStores)
 	specialEngines := make(map[string]struct{}, len(classified.specialOldStores)+len(classified.specialNewStores))
 	for engine := range classified.specialOldStores {

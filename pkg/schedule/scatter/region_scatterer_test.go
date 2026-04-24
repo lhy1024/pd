@@ -589,6 +589,16 @@ func TestSelectedStoreGC(t *testing.T) {
 	re.False(ok)
 }
 
+func (s *selectedStores) GetGroupDistribution(group string) (map[uint64]uint64, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	distribution, ok := s.getDistributionByGroupLocked(group)
+	if !ok {
+		return nil, false
+	}
+	return cloneDistribution(distribution), true
+}
+
 func TestRegionHasLearner(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -52,7 +52,7 @@ func TestRecordSplitScatterBatchCollectsByLegacyCPUScore(t *testing.T) {
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "n", "o", 120)
 	putSplitScatterRegion(tc, 103, "o", "", 999)
 
-	re.Equal([]uint64{103, 102, 100}, controller.splitScatter.collectTopPending(3))
+	re.Equal([]uint64{103, 102, 100}, pendingRegionIDs(controller.splitScatter.collectTopPending(3)))
 }
 
 func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
@@ -132,7 +132,7 @@ func TestCollectTopPendingResolvesRangeHint(t *testing.T) {
 			putSplitScatterRegionWithKeys(tc, testCase.startKey, testCase.endKey, 120)
 
 			re.Equal(makeSplitScatterGroup(100, 101), splitScatterPendingGroup(t, controller, 101))
-			re.Equal([]uint64{101}, controller.splitScatter.collectTopPending(1))
+			re.Equal([]uint64{101}, pendingRegionIDs(controller.splitScatter.collectTopPending(1)))
 			rangeHint := resolveSplitScatterRangeHint(tc.GetRegion(101))
 			re.Equal(testCase.wantRange.startKey, rangeHint.startKey)
 			re.Equal(testCase.wantRange.endKey, rangeHint.endKey)
@@ -149,7 +149,7 @@ func TestCollectTopPendingUsesLegacyCPUUsage(t *testing.T) {
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 101, "m", "t", 120)
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "t", "", 999)
 
-	re.Equal([]uint64{102, 101}, controller.splitScatter.collectTopPending(2))
+	re.Equal([]uint64{102, 101}, pendingRegionIDs(controller.splitScatter.collectTopPending(2)))
 }
 
 func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Cluster, *operator.Controller, func()) {
@@ -195,16 +195,28 @@ func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, startKey, endKey []b
 }
 
 func splitScatterPendingCount(controller *Controller) int {
-	return len(controller.splitScatter.pending.pendingIDs())
+	controller.splitScatter.pendingMu.RLock()
+	defer controller.splitScatter.pendingMu.RUnlock()
+	return len(controller.splitScatter.pending.GetAllID())
 }
 
 func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uint64) string {
 	t.Helper()
-	controller.splitScatter.pending.mu.RLock()
-	defer controller.splitScatter.pending.mu.RUnlock()
-	item, ok := controller.splitScatter.pending.getPendingItemLocked(regionID)
+	controller.splitScatter.pendingMu.RLock()
+	defer controller.splitScatter.pendingMu.RUnlock()
+	value, ok := controller.splitScatter.pending.Get(regionID)
 	require.True(t, ok)
-	return item.group
+	group, ok := value.(string)
+	require.True(t, ok)
+	return group
+}
+
+func pendingRegionIDs(regions []splitScatterPendingItem) []uint64 {
+	ids := make([]uint64, 0, len(regions))
+	for _, region := range regions {
+		ids = append(ids, region.regionID)
+	}
+	return ids
 }
 
 func splitScatterIndexKeyPrefix() []byte {

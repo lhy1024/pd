@@ -27,58 +27,42 @@ var (
 )
 
 func resolveSplitScatterRangeHint(region *core.RegionInfo) splitScatterRangeHint {
-	rawPrefix, ok := resolveSplitScatterPrefix(region.GetStartKey(), region.GetEndKey())
-	if !ok {
-		return splitScatterRangeHint{}
-	}
-	return splitScatterPrefixRange(rawPrefix)
-}
-
-func resolveSplitScatterPrefix(startKey, endKey []byte) ([]byte, bool) {
-	tablePrefix, rawPrefix, isIndex, ok := parseSplitScatterPrefix(startKey)
-	if !ok {
-		return nil, false
-	}
-	if isIndex {
-		// We intentionally over-approximate ambiguous table-key ranges. If PD can
-		// no longer prove the region stays within a single index prefix, it falls
-		// back to the table-scoped group instead of dropping back to the family
-		// group, so table-boundary splits and merged ranges still participate in
-		// the broader scatter continuity/baseline.
-		entityRange := splitScatterPrefixRange(rawPrefix)
-		if len(endKey) == 0 || len(entityRange.startKey) == 0 || len(entityRange.endKey) == 0 || bytes.Compare(endKey, entityRange.endKey) > 0 {
-			rawPrefix = tablePrefix
-		}
-	}
-	return rawPrefix, true
-}
-
-func parseSplitScatterPrefix(key []byte) (tablePrefix, rawPrefix []byte, isIndex bool, ok bool) {
-	_, decoded, err := codec.DecodeBytes(key)
+	_, decoded, err := codec.DecodeBytes(region.GetStartKey())
 	if err != nil || !bytes.HasPrefix(decoded, splitScatterTablePrefix) {
-		// Keyspace-prefixed txn/raw keys (x... / r...) are not classified here yet
-		// and will fall back to the family-scoped split-scatter group.
-		return nil, nil, false, false
+		return splitScatterRangeHint{}
 	}
 	rest := decoded[len(splitScatterTablePrefix):]
 	rest, tableID, err := codec.DecodeInt(rest)
 	if err != nil {
-		return nil, nil, false, false
+		return splitScatterRangeHint{}
 	}
 
-	tablePrefix = append([]byte(nil), codec.GenerateTableKey(tableID)...)
-	rawPrefix = append([]byte(nil), tablePrefix...)
-	if bytes.HasPrefix(rest, splitScatterIndexPrefix) {
-		indexRest := rest[len(splitScatterIndexPrefix):]
-		_, indexID, err := codec.DecodeInt(indexRest)
-		if err != nil {
-			return nil, nil, false, false
-		}
-		rawPrefix = append(rawPrefix, splitScatterIndexPrefix...)
-		rawPrefix = codec.EncodeInt(rawPrefix, indexID)
-		return tablePrefix, rawPrefix, true, true
+	tablePrefix := append([]byte(nil), codec.GenerateTableKey(tableID)...)
+	if !bytes.HasPrefix(rest, splitScatterIndexPrefix) {
+		return splitScatterPrefixRange(tablePrefix)
 	}
-	return tablePrefix, rawPrefix, false, true
+
+	indexRest := rest[len(splitScatterIndexPrefix):]
+	_, indexID, err := codec.DecodeInt(indexRest)
+	if err != nil {
+		return splitScatterRangeHint{}
+	}
+
+	indexPrefix := append([]byte(nil), tablePrefix...)
+	indexPrefix = append(indexPrefix, splitScatterIndexPrefix...)
+	indexPrefix = codec.EncodeInt(indexPrefix, indexID)
+	indexRange := splitScatterPrefixRange(indexPrefix)
+	endKey := region.GetEndKey()
+
+	// We intentionally over-approximate ambiguous table-key ranges. If PD can
+	// no longer prove the region stays within a single index prefix, it falls
+	// back to the table-scoped group instead of dropping back to the family
+	// group, so table-boundary splits and merged ranges still participate in
+	// the broader scatter continuity/baseline.
+	if len(endKey) == 0 || len(indexRange.startKey) == 0 || len(indexRange.endKey) == 0 || bytes.Compare(endKey, indexRange.endKey) > 0 {
+		return splitScatterPrefixRange(tablePrefix)
+	}
+	return indexRange
 }
 
 func splitScatterPrefixRange(rawPrefix []byte) splitScatterRangeHint {
