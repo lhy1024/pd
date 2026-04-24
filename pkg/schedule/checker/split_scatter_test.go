@@ -17,7 +17,6 @@ package checker
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -59,11 +58,8 @@ func TestRecordSplitScatterBatchAndObserveQueueByCPUScore(t *testing.T) {
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(103))
 
-	candidates := controller.splitScatterQueue.getCandidates(3)
-	re.Len(candidates, 3)
-	re.Equal(uint64(101), candidates[0].regionID)
-	re.Equal(uint64(102), candidates[1].regionID)
-	re.Equal(uint64(103), candidates[2].regionID)
+	regionIDs := controller.splitScatterQueue.getTopPendingRegionIDs(3)
+	re.Equal([]uint64{101, 102, 103}, regionIDs)
 }
 
 func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
@@ -146,68 +142,13 @@ func TestObserveSplitScatterRegionResolvesRangeHint(t *testing.T) {
 
 			re.Equal(makeSplitScatterGroup(100, 101), splitScatterPendingGroup(t, controller, 101))
 
-			candidates := controller.splitScatterQueue.getCandidates(1)
-			re.Len(candidates, 1)
-			re.Equal(testCase.wantRange.startKey, candidates[0].rangeHint.startKey)
-			re.Equal(testCase.wantRange.endKey, candidates[0].rangeHint.endKey)
+			group, rangeHint, ok := controller.splitScatterQueue.getPendingSnapshot(101)
+			re.True(ok)
+			re.Equal(makeSplitScatterGroup(100, 101), group)
+			re.Equal(testCase.wantRange.startKey, rangeHint.startKey)
+			re.Equal(testCase.wantRange.endKey, rangeHint.endKey)
 		})
 	}
-}
-
-func TestObserveSplitScatterRegionCachesResolvedRangeHint(t *testing.T) {
-	re := require.New(t)
-	controller, tc, _, cleanup := newTestSplitScatterController(t)
-	defer cleanup()
-
-	controller.RecordSplitScatterBatch(100, []uint64{101})
-	putSplitScatterRegionWithKeys(tc, newSplitScatterIndexKey("a"), newSplitScatterIndexKey("m"), 120)
-
-	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-
-	firstGroup := splitScatterPendingGroup(t, controller, 101)
-	re.Equal(makeSplitScatterGroup(100, 101), firstGroup)
-
-	expectedRange := splitScatterPrefixRange(splitScatterIndexKeyPrefix())
-	firstCandidate := controller.splitScatterQueue.getCandidates(1)
-	re.Len(firstCandidate, 1)
-	re.Equal(expectedRange.startKey, firstCandidate[0].rangeHint.startKey)
-	re.Equal(expectedRange.endKey, firstCandidate[0].rangeHint.endKey)
-
-	putSplitScatterRegionWithKeys(tc, newSplitScatterRecordKey(42, "a"), newSplitScatterRecordKey(42, "m"), 80)
-	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-
-	secondGroup := splitScatterPendingGroup(t, controller, 101)
-	re.Equal(firstGroup, secondGroup)
-
-	secondCandidate := controller.splitScatterQueue.getCandidates(1)
-	re.Len(secondCandidate, 1)
-	re.Equal(expectedRange.startKey, secondCandidate[0].rangeHint.startKey)
-	re.Equal(expectedRange.endKey, secondCandidate[0].rangeHint.endKey)
-}
-
-func TestObserveSplitScatterRegionPreservesRetryBackoffAcrossHeartbeats(t *testing.T) {
-	re := require.New(t)
-	controller, tc, _, cleanup := newTestSplitScatterController(t)
-	defer cleanup()
-
-	controller.RecordSplitScatterBatch(100, []uint64{101})
-	putSplitScatterRegion(tc, 101, "a", "b", 90)
-
-	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-	controller.splitScatterQueue.recordFailure(101)
-	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-
-	re.Empty(controller.splitScatterQueue.getCandidates(1))
-
-	controller.splitScatterQueue.mu.Lock()
-	item, ok := controller.splitScatterQueue.getPendingItemLocked(101)
-	re.True(ok)
-	item.last = time.Now().Add(-2 * splitScatterRetryBaseInterval)
-	controller.splitScatterQueue.mu.Unlock()
-
-	candidates := controller.splitScatterQueue.getCandidates(1)
-	re.Len(candidates, 1)
-	re.Equal(uint64(101), candidates[0].regionID)
 }
 
 func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *testing.T) {
@@ -222,10 +163,8 @@ func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *tes
 	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
 	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
 
-	candidates := controller.splitScatterQueue.getCandidates(2)
-	re.Len(candidates, 2)
-	re.Equal(uint64(101), candidates[0].regionID)
-	re.Equal(uint64(102), candidates[1].regionID)
+	regionIDs := controller.splitScatterQueue.getTopPendingRegionIDs(2)
+	re.Equal([]uint64{101, 102}, regionIDs)
 }
 
 func TestHasPotentialPendingSplitScatterRegions(t *testing.T) {

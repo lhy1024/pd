@@ -31,11 +31,9 @@ import (
 )
 
 const (
-	splitScatterPendingTTL        = 3 * time.Minute
-	splitScatterQueueGCInterval   = time.Minute
-	splitScatterDispatchLimit     = 4
-	splitScatterRetryBaseInterval = time.Second
-	splitScatterRetryMaxInterval  = time.Minute
+	splitScatterPendingTTL      = 3 * time.Minute
+	splitScatterQueueGCInterval = time.Minute
+	splitScatterDispatchLimit   = 4
 )
 
 type splitScatterPendingItem struct {
@@ -43,34 +41,8 @@ type splitScatterPendingItem struct {
 	// rangeHint is the best-effort key range used to seed table/index-scoped
 	// scatter distribution before the first dispatch of this pending region.
 	rangeHint splitScatterRangeHint
-	// resolved records whether rangeHint has already been derived from the
-	// region key range. Region boundaries stay stable while the split-scatter
-	// item is pending, so later heartbeats only need to refresh the CPU score.
-	resolved bool
 	observed bool
 	score    uint64
-	// attempt and last implement per-region retry backoff after transient
-	// dispatch failures such as add-operator rejection or temporary limits.
-	attempt int
-	last    time.Time
-}
-
-func (i *splitScatterPendingItem) ready(now time.Time) bool {
-	if i.attempt <= 0 || i.last.IsZero() {
-		return true
-	}
-	delay := time.Duration(i.attempt) * splitScatterRetryBaseInterval
-	if delay > splitScatterRetryMaxInterval {
-		delay = splitScatterRetryMaxInterval
-	}
-	return !now.Before(i.last.Add(delay))
-}
-
-type splitScatterCandidate struct {
-	regionID  uint64
-	group     string
-	rangeHint splitScatterRangeHint
-	score     uint64
 }
 
 // splitScatterRangeHint is a derived key range for the current table/index
@@ -93,8 +65,8 @@ func (r splitScatterRangeHint) clone() splitScatterRangeHint {
 }
 
 type splitScatterManager struct {
-	activeUntil atomic.Int64
-	mu          struct {
+	hasPending atomic.Bool
+	mu         struct {
 		syncutil.RWMutex
 		pending *cache.TTLUint64
 	}
@@ -111,7 +83,7 @@ func (m *splitScatterManager) recordBatch(sourceRegionID uint64, newRegionIDs []
 		return
 	}
 	group := makeSplitScatterGroup(sourceRegionID, newRegionIDs[0])
-	m.extendPotentialPendingTTL(time.Now())
+	m.hasPending.Store(true)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -129,17 +101,13 @@ func (m *splitScatterManager) observe(region *core.RegionInfo) {
 	if !ok {
 		return
 	}
-	if !item.resolved {
-		item.rangeHint = resolveSplitScatterRangeHint(region)
-		item.resolved = true
-	}
+	item.rangeHint = resolveSplitScatterRangeHint(region)
 	item.observed = true
 	item.score = splitScatterCPUScore(region)
-	m.extendPotentialPendingTTL(time.Now())
 	m.mu.pending.Put(region.GetID(), item)
 }
 
-func (m *splitScatterManager) getCandidates(limit int) []splitScatterCandidate {
+func (m *splitScatterManager) getTopPendingRegionIDs(limit int) []uint64 {
 	if limit <= 0 {
 		return nil
 	}
@@ -148,39 +116,52 @@ func (m *splitScatterManager) getCandidates(limit int) []splitScatterCandidate {
 
 	pendingIDs := m.mu.pending.GetAllID()
 	if len(pendingIDs) == 0 {
-		m.activeUntil.Store(0)
+		m.hasPending.Store(false)
 		return nil
 	}
-	now := time.Now()
-	candidates := make([]splitScatterCandidate, 0, min(limit, len(pendingIDs)))
+	topIDs := make([]uint64, 0, min(limit, len(pendingIDs)))
+	topScores := make([]uint64, 0, min(limit, len(pendingIDs)))
 	for _, regionID := range pendingIDs {
 		pendingItem, ok := m.getPendingItemLocked(regionID)
 		if !ok {
 			continue
 		}
-		if !pendingItem.observed || !pendingItem.ready(now) {
+		if !pendingItem.observed {
 			continue
 		}
-		candidates = insertSplitScatterCandidate(candidates, splitScatterCandidate{
-			regionID:  regionID,
-			group:     pendingItem.group,
-			rangeHint: pendingItem.rangeHint.clone(),
-			score:     pendingItem.score,
-		}, limit)
+		insertAt := len(topIDs)
+		for i, existingID := range topIDs {
+			existingScore := topScores[i]
+			if pendingItem.score > existingScore || (pendingItem.score == existingScore && regionID < existingID) {
+				insertAt = i
+				break
+			}
+		}
+		if insertAt == len(topIDs) && len(topIDs) >= limit {
+			continue
+		}
+		topIDs = append(topIDs, 0)
+		topScores = append(topScores, 0)
+		copy(topIDs[insertAt+1:], topIDs[insertAt:])
+		copy(topScores[insertAt+1:], topScores[insertAt:])
+		topIDs[insertAt] = regionID
+		topScores[insertAt] = pendingItem.score
+		if len(topIDs) > limit {
+			topIDs = topIDs[:limit]
+			topScores = topScores[:limit]
+		}
 	}
-	return candidates
+	return topIDs
 }
 
-func (m *splitScatterManager) recordFailure(regionID uint64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+func (m *splitScatterManager) getPendingSnapshot(regionID uint64) (string, splitScatterRangeHint, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	item, ok := m.getPendingItemLocked(regionID)
-	if !ok {
-		return
+	if !ok || !item.observed {
+		return "", splitScatterRangeHint{}, false
 	}
-	item.attempt++
-	item.last = time.Now()
+	return item.group, item.rangeHint.clone(), true
 }
 
 func (m *splitScatterManager) remove(regionID uint64) {
@@ -207,45 +188,13 @@ func (m *splitScatterManager) pendingCountLocked() int {
 }
 
 func (m *splitScatterManager) hasPotentialPending() bool {
-	return m.activeUntil.Load() > time.Now().UnixNano()
-}
-
-func (m *splitScatterManager) extendPotentialPendingTTL(now time.Time) {
-	m.activeUntil.Store(now.Add(splitScatterPendingTTL).UnixNano())
+	return m.hasPending.Load()
 }
 
 func (m *splitScatterManager) clearPotentialPendingIfEmptyLocked() {
 	if m.pendingCountLocked() == 0 {
-		m.activeUntil.Store(0)
+		m.hasPending.Store(false)
 	}
-}
-
-func splitScatterCandidateHigherPriority(left, right splitScatterCandidate) bool {
-	if left.score != right.score {
-		return left.score > right.score
-	}
-	return left.regionID < right.regionID
-}
-
-func insertSplitScatterCandidate(candidates []splitScatterCandidate, candidate splitScatterCandidate, limit int) []splitScatterCandidate {
-	insertAt := len(candidates)
-	for i, existing := range candidates {
-		if splitScatterCandidateHigherPriority(candidate, existing) {
-			insertAt = i
-			break
-		}
-	}
-	if insertAt == len(candidates) && len(candidates) >= limit {
-		return candidates
-	}
-
-	candidates = append(candidates, splitScatterCandidate{})
-	copy(candidates[insertAt+1:], candidates[insertAt:])
-	candidates[insertAt] = candidate
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-	return candidates
 }
 
 func splitScatterCPUScore(region *core.RegionInfo) uint64 {
@@ -293,44 +242,46 @@ func (c *Controller) dispatchSplitScatterRegions() {
 	if c.regionScatterer == nil {
 		return
 	}
-	candidates := c.splitScatterQueue.getCandidates(splitScatterDispatchLimit)
-	for _, candidate := range candidates {
-		region := c.cluster.GetRegion(candidate.regionID)
-		if region == nil {
-			c.splitScatterQueue.remove(candidate.regionID)
+	regionIDs := c.splitScatterQueue.getTopPendingRegionIDs(splitScatterDispatchLimit)
+	for _, regionID := range regionIDs {
+		group, rangeHint, ok := c.splitScatterQueue.getPendingSnapshot(regionID)
+		if !ok {
+			c.splitScatterQueue.remove(regionID)
 			continue
 		}
-		if candidate.rangeHint.valid() {
-			c.regionScatterer.SeedGroupDistributionByRange(candidate.group, candidate.rangeHint.startKey, candidate.rangeHint.endKey)
+		region := c.cluster.GetRegion(regionID)
+		if region == nil {
+			c.splitScatterQueue.remove(regionID)
+			continue
 		}
-		op, err := c.regionScatterer.ScatterInternal(region, candidate.group)
+		if rangeHint.valid() {
+			c.regionScatterer.SeedGroupDistributionByRange(group, rangeHint.startKey, rangeHint.endKey)
+		}
+		op, err := c.regionScatterer.ScatterInternal(region, group)
 		if err != nil {
 			log.Info("dispatch internal split scatter failed",
-				zap.Uint64("region-id", candidate.regionID),
-				zap.String("group", candidate.group),
+				zap.Uint64("region-id", regionID),
+				zap.String("group", group),
 				zap.Error(err))
-			c.splitScatterQueue.recordFailure(candidate.regionID)
 			continue
 		}
 		if op != nil {
 			if c.opController.AddWaitingOperator(op) == 0 {
 				log.Info("dispatch internal split scatter add operator failed",
-					zap.Uint64("region-id", candidate.regionID),
-					zap.String("group", candidate.group),
+					zap.Uint64("region-id", regionID),
+					zap.String("group", group),
 					zap.String("operator-desc", op.Desc()))
-				c.splitScatterQueue.recordFailure(candidate.regionID)
 				continue
 			}
 			if c.opController.GetOperator(region.GetID()) != op {
 				log.Info("dispatch internal split scatter operator lost before commit",
-					zap.Uint64("region-id", candidate.regionID),
-					zap.String("group", candidate.group),
+					zap.Uint64("region-id", regionID),
+					zap.String("group", group),
 					zap.String("operator-desc", op.Desc()))
-				c.splitScatterQueue.recordFailure(candidate.regionID)
 				continue
 			}
-			c.regionScatterer.Commit(region, op, candidate.group)
+			c.regionScatterer.Commit(region, op, group)
 		}
-		c.splitScatterQueue.remove(candidate.regionID)
+		c.splitScatterQueue.remove(regionID)
 	}
 }
