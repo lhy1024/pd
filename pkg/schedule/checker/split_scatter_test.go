@@ -240,25 +240,25 @@ func putSplitScatterRegionWithStores(tc *mockcluster.Cluster, regionID uint64, s
 }
 
 func splitScatterPendingCount(controller *Controller) int {
-	controller.splitScatterPendingMu.RLock()
-	defer controller.splitScatterPendingMu.RUnlock()
-	return len(controller.splitScatterPending)
+	controller.splitScatter.pendingMu.RLock()
+	defer controller.splitScatter.pendingMu.RUnlock()
+	return len(controller.splitScatter.pending)
 }
 
 func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uint64) string {
 	t.Helper()
-	controller.splitScatterPendingMu.RLock()
-	defer controller.splitScatterPendingMu.RUnlock()
-	pending, ok := controller.splitScatterPending[regionID]
+	controller.splitScatter.pendingMu.RLock()
+	defer controller.splitScatter.pendingMu.RUnlock()
+	pending, ok := controller.splitScatter.pending[regionID]
 	require.True(t, ok)
 	return pending.group
 }
 
 func splitScatterPendingItemAt(t *testing.T, controller *Controller, regionID uint64) splitScatterPendingItem {
 	t.Helper()
-	controller.splitScatterPendingMu.RLock()
-	defer controller.splitScatterPendingMu.RUnlock()
-	pending, ok := controller.splitScatterPending[regionID]
+	controller.splitScatter.pendingMu.RLock()
+	defer controller.splitScatter.pendingMu.RUnlock()
+	pending, ok := controller.splitScatter.pending[regionID]
 	require.True(t, ok)
 	return pending
 }

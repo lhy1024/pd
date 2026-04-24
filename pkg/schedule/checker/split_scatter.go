@@ -15,6 +15,7 @@
 package checker
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -22,7 +23,11 @@ import (
 
 	"github.com/pingcap/log"
 
+	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/filter"
+	"github.com/tikv/pd/pkg/schedule/operator"
+	"github.com/tikv/pd/pkg/schedule/scatter"
+	"github.com/tikv/pd/pkg/utils/syncutil"
 )
 
 const (
@@ -37,6 +42,29 @@ type splitScatterPendingItem struct {
 	retryAt     time.Time
 }
 
+type splitScatterController struct {
+	cluster         sche.CheckerCluster
+	opController    *operator.Controller
+	regionScatterer *scatter.RegionScatterer
+
+	pendingMu syncutil.RWMutex
+	pending   map[uint64]splitScatterPendingItem
+}
+
+func newSplitScatterController(
+	ctx context.Context,
+	cluster sche.CheckerCluster,
+	opController *operator.Controller,
+	addPendingProcessedRegions func(needCheckLen bool, ids ...uint64),
+) *splitScatterController {
+	return &splitScatterController{
+		cluster:         cluster,
+		opController:    opController,
+		regionScatterer: scatter.NewRegionScatterer(ctx, cluster, opController, addPendingProcessedRegions),
+		pending:         make(map[uint64]splitScatterPendingItem),
+	}
+}
+
 // splitScatterRangeHint is a derived key range for the current table/index
 // group. When available, split-scatter seeds the scatterer's group
 // distribution with the existing region count in this range before dispatch.
@@ -46,18 +74,22 @@ type splitScatterRangeHint struct {
 }
 
 func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPendingItem {
+	return c.splitScatter.collectTopPendingSplitScatter(limit)
+}
+
+func (c *splitScatterController) collectTopPendingSplitScatter(limit int) []splitScatterPendingItem {
 	if limit <= 0 {
 		return nil
 	}
 	now := time.Now()
-	c.splitScatterPendingMu.Lock()
-	defer c.splitScatterPendingMu.Unlock()
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
 
-	candidates := make([]splitScatterPendingItem, 0, len(c.splitScatterPending))
-	for regionID, pending := range c.splitScatterPending {
+	candidates := make([]splitScatterPendingItem, 0, len(c.pending))
+	for regionID, pending := range c.pending {
 		region := c.cluster.GetRegion(regionID)
 		if region == nil {
-			delete(c.splitScatterPending, regionID)
+			delete(c.pending, regionID)
 			continue
 		}
 		if !pending.retryAt.IsZero() && now.Before(pending.retryAt) {
@@ -78,15 +110,15 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	return candidates
 }
 
-func (c *Controller) delayPendingSplitScatter(regionID uint64, delay time.Duration) {
-	c.splitScatterPendingMu.Lock()
-	defer c.splitScatterPendingMu.Unlock()
-	pending, ok := c.splitScatterPending[regionID]
+func (c *splitScatterController) delayPendingSplitScatter(regionID uint64, delay time.Duration) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	pending, ok := c.pending[regionID]
 	if !ok {
 		return
 	}
 	pending.retryAt = time.Now().Add(delay)
-	c.splitScatterPending[regionID] = pending
+	c.pending[regionID] = pending
 }
 
 func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
@@ -95,24 +127,32 @@ func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
 
 // RecordSplitScatterBatch records a newly split batch for later scatter.
 func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
+	c.splitScatter.recordSplitScatterBatch(sourceRegionID, newRegionIDs)
+}
+
+func (c *splitScatterController) recordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
 	if len(newRegionIDs) == 0 {
 		return
 	}
 	group := makeSplitScatterGroup(sourceRegionID, newRegionIDs[0])
-	c.splitScatterPendingMu.Lock()
-	defer c.splitScatterPendingMu.Unlock()
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
 	for _, regionID := range newRegionIDs {
-		c.splitScatterPending[regionID] = splitScatterPendingItem{regionID: regionID, group: group}
+		c.pending[regionID] = splitScatterPendingItem{regionID: regionID, group: group}
 	}
 	sourcePending := splitScatterPendingItem{regionID: sourceRegionID, group: group, waitVersion: 1}
 	if sourceRegion := c.cluster.GetRegion(sourceRegionID); sourceRegion != nil && sourceRegion.GetRegionEpoch() != nil {
 		sourcePending.waitVersion = sourceRegion.GetRegionEpoch().GetVersion() + 1
 	}
-	c.splitScatterPending[sourceRegionID] = sourcePending
+	c.pending[sourceRegionID] = sourcePending
 }
 
 // DispatchSplitScatterRegions dispatches pending split-scatter regions.
 func (c *Controller) DispatchSplitScatterRegions() {
+	c.splitScatter.dispatchSplitScatterRegions()
+}
+
+func (c *splitScatterController) dispatchSplitScatterRegions() {
 	for _, pending := range c.collectTopPendingSplitScatter(splitScatterDispatchLimit) {
 		region := c.cluster.GetRegion(pending.regionID)
 		if region == nil {
@@ -155,10 +195,18 @@ func (c *Controller) DispatchSplitScatterRegions() {
 					zap.String("operator-desc", op.Desc()))
 				continue
 			}
-			c.regionScatterer.Commit(region, op, pending.group)
+			if !c.opController.ApplyOnCurrentOperator(region.GetID(), op, func(current *operator.Operator) {
+				c.regionScatterer.Commit(region, current, pending.group)
+			}) {
+				log.Info("dispatch internal split scatter operator lost before commit",
+					zap.Uint64("region-id", pending.regionID),
+					zap.String("group", pending.group),
+					zap.String("operator-desc", op.Desc()))
+				continue
+			}
 		}
-		c.splitScatterPendingMu.Lock()
-		delete(c.splitScatterPending, pending.regionID)
-		c.splitScatterPendingMu.Unlock()
+		c.pendingMu.Lock()
+		delete(c.pending, pending.regionID)
+		c.pendingMu.Unlock()
 	}
 }

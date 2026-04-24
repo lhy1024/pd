@@ -371,7 +371,14 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 					failures[op.RegionID()] = fmt.Errorf("region %v failed to add operator", op.RegionID())
 					continue
 				}
-				r.Commit(region, op, group)
+				if !r.opController.ApplyOnCurrentOperator(region.GetID(), op, func(current *operator.Operator) {
+					r.Commit(region, current, group)
+				}) {
+					log.Debug("scatter operator changed before commit",
+						zap.Uint64("region-id", region.GetID()),
+						zap.String("group", group),
+						zap.String("operator-desc", op.Desc()))
+				}
 				failpoint.Inject("scatterHbStreamsDrain", func() {
 					_ = r.opController.GetHBStreams().Drain(1)
 					r.opController.RemoveOperator(op, operator.AdminStop)

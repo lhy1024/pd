@@ -35,10 +35,8 @@ import (
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/operator"
-	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/logutil"
-	"github.com/tikv/pd/pkg/utils/syncutil"
 )
 
 const (
@@ -78,9 +76,7 @@ type Controller struct {
 	affinityChecker         *AffinityChecker
 	jointStateChecker       *JointStateChecker
 	priorityInspector       *PriorityInspector
-	regionScatterer         *scatter.RegionScatterer
-	splitScatterPendingMu   syncutil.RWMutex
-	splitScatterPending     map[uint64]splitScatterPendingItem
+	splitScatter            *splitScatterController
 	pendingProcessedRegions *cache.TTLUint64
 	suspectKeyRanges        *cache.TTLString // suspect key-range regions that may need fix
 	patrolRegionContext     *PatrolRegionContext
@@ -118,7 +114,6 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		affinityChecker:         NewAffinityChecker(ctx, cluster, conf),
 		jointStateChecker:       NewJointStateChecker(cluster),
 		priorityInspector:       NewPriorityInspector(cluster, conf),
-		splitScatterPending:     make(map[uint64]splitScatterPendingItem),
 		pendingProcessedRegions: pendingProcessedRegions,
 		suspectKeyRanges:        cache.NewStringTTL(ctx, time.Minute, 3*time.Minute),
 		patrolRegionContext:     &PatrolRegionContext{},
@@ -126,7 +121,7 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		patrolRegionScanLimit:   calculateScanLimit(cluster),
 		metrics:                 newCheckerControllerMetrics(),
 	}
-	c.regionScatterer = scatter.NewRegionScatterer(ctx, cluster, opController, c.AddPendingProcessedRegions)
+	c.splitScatter = newSplitScatterController(ctx, cluster, opController, c.AddPendingProcessedRegions)
 	c.duration.Store(time.Duration(0))
 	return c
 }
@@ -174,7 +169,7 @@ func (c *Controller) PatrolRegions() {
 			})
 
 			measure(c.metrics.patrolPhaseHistograms[phaseCheckPending], func() {
-				c.DispatchSplitScatterRegions()
+				c.splitScatter.dispatchSplitScatterRegions()
 				c.checkPendingProcessedRegions()
 			})
 
