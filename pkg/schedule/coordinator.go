@@ -71,6 +71,7 @@ type Coordinator struct {
 	cluster           sche.ClusterInformer
 	prepareChecker    *prepareChecker
 	checkers          *checker.Controller
+	regionScatterer   *scatter.RegionScatterer
 	regionSplitter    *splitter.RegionSplitter
 	schedulers        *schedulers.Controller
 	opController      *operator.Controller
@@ -102,6 +103,7 @@ func NewCoordinator(parentCtx context.Context, cluster sche.ClusterInformer, hbS
 		cluster:               cluster,
 		prepareChecker:        newPrepareChecker(cluster.GetPrepareRegionCount),
 		checkers:              checkers,
+		regionScatterer:       scatter.NewRegionScatterer(ctx, cluster, opController, checkers.AddPendingProcessedRegions),
 		regionSplitter:        splitter.NewRegionSplitter(cluster, splitter.NewSplitRegionsHandler(cluster, opController), checkers.AddPendingProcessedRegions),
 		schedulers:            schedulers,
 		opController:          opController,
@@ -618,7 +620,7 @@ func (c *Coordinator) IsCheckerPaused(name string) (bool, error) {
 
 // GetRegionScatterer returns the region scatterer.
 func (c *Coordinator) GetRegionScatterer() *scatter.RegionScatterer {
-	return c.checkers.GetRegionScatterer()
+	return c.regionScatterer
 }
 
 // GetRegionSplitter returns the region splitter.

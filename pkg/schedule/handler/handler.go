@@ -682,7 +682,6 @@ func (h *Handler) AddScatterRegionOperator(regionID uint64, group string) error 
 	if err := h.addOperator(op); err != nil {
 		return err
 	}
-	s.Commit(region, op, group)
 	return nil
 }
 

@@ -2028,7 +2028,6 @@ func (s *GrpcServer) ScatterRegion(ctx context.Context, request *pdpb.ScatterReg
 					"operator canceled because cannot add an operator to the execute queue"),
 			}, nil
 		}
-		rc.GetRegionScatterer().Commit(region, op, request.GetGroup())
 	}
 
 	return &pdpb.ScatterRegionResponse{

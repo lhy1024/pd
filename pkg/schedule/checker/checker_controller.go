@@ -131,11 +131,6 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 	return c
 }
 
-// GetRegionScatterer returns the shared region scatterer.
-func (c *Controller) GetRegionScatterer() *scatter.RegionScatterer {
-	return c.regionScatterer
-}
-
 // PatrolRegions is used to scan regions.
 // The checkers will check these regions to decide if they need to do some operations.
 func (c *Controller) PatrolRegions() {
