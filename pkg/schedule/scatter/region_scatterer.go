@@ -392,15 +392,15 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 // Scatter relocates the region. If the group is defined, the regions' leader with the same group would be scattered
 // in a group level instead of cluster level.
 func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
-	return r.scatter(region, group, skipStoreLimit, false)
+	return r.scatterWithOptions(region, group, skipStoreLimit, false)
 }
 
 // ScatterInternal relocates the region for PD-internal split-scatter dispatch.
 func (r *RegionScatterer) ScatterInternal(region *core.RegionInfo, group string) (*operator.Operator, error) {
-	return r.scatter(region, group, false, true)
+	return r.scatterWithOptions(region, group, false, true)
 }
 
-func (r *RegionScatterer) scatter(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool) (*operator.Operator, error) {
+func (r *RegionScatterer) scatterWithOptions(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool) (*operator.Operator, error) {
 	if !filter.IsRegionReplicated(r.cluster, region) {
 		r.addSuspectRegions(false, region.GetID())
 		scatterSkipNotReplicatedCounter.Inc()

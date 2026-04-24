@@ -28,6 +28,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
@@ -1101,19 +1102,6 @@ func isPeerCountChanged(op *operator.Operator) bool {
 		}
 	}
 	return add != remove
-}
-
-func hasPeerPlacementChange(op *operator.Operator) bool {
-	if op == nil {
-		return false
-	}
-	for i := range op.Len() {
-		switch op.Step(i).(type) {
-		case operator.AddPeer, operator.AddLearner, operator.RemovePeer:
-			return true
-		}
-	}
-	return false
 }
 
 func TestRemoveStoreLimit(t *testing.T) {

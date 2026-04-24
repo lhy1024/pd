@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	splitScatterDispatchLimit   = 4
-	splitScatterRetryBackoff    = time.Second
+	splitScatterDispatchLimit = 4
+	splitScatterRetryBackoff  = time.Second
 )
 
 type splitScatterPendingItem struct {
