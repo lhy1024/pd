@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1441,7 +1440,7 @@ func TestScatterWithAffinity(t *testing.T) {
 	re.Nil(op)
 }
 
-func TestScatterWithDescSkipsHotOnlyForAdmin(t *testing.T) {
+func TestScatterInternalSkipsHotOnlyForAdmin(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1470,11 +1469,11 @@ func TestScatterWithDescSkipsHotOnlyForAdmin(t *testing.T) {
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 
-	op, err := scatterer.ScatterWithDesc(region, "", true, AdminScatterOperatorDesc)
+	op, err := scatterer.Scatter(region, "", true)
 	re.ErrorContains(err, "is hot")
 	re.Nil(op)
 
-	op, err = scatterer.ScatterWithDesc(region, "", true, InternalScatterOperatorDesc)
+	op, err = scatterer.ScatterInternal(region, "")
 	re.NoError(err)
 	if op != nil {
 		re.Equal(InternalScatterOperatorDesc, op.Desc())
@@ -1505,12 +1504,11 @@ func TestInternalScatterPrefersUnusedPeerStore(t *testing.T) {
 		3: {},
 	})}
 
-	adminPeer, _ := scatterer.selectNewPeerWithTrace(scatterer.ordinaryEngine, group, peer, filters, false)
+	adminPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, filters, false)
 	re.Equal(uint64(1), adminPeer.GetStoreId())
 
-	internalPeer, internalTrace := scatterer.selectNewPeerWithTrace(scatterer.ordinaryEngine, group, peer, filters, true)
+	internalPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, filters, true)
 	re.Equal(uint64(4), internalPeer.GetStoreId())
-	re.True(anyTraceLineMatches(internalTrace.candidates, "store=4", "selected=true"))
 }
 
 func TestInternalScatterPeerKeepsOriginAfterCoverageWithoutImprovement(t *testing.T) {
@@ -1539,7 +1537,7 @@ func TestInternalScatterPeerKeepsOriginAfterCoverageWithoutImprovement(t *testin
 		5: 1,
 	}))
 
-	internalPeer, _ := scatterer.selectNewPeerWithTrace(scatterer.ordinaryEngine, group, peer, nil, true)
+	internalPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, nil, true)
 	re.Equal(uint64(1), internalPeer.GetStoreId())
 }
 
@@ -1569,7 +1567,7 @@ func TestInternalScatterPeerMovesOnlyWhenGapImproves(t *testing.T) {
 		5: 1,
 	}))
 
-	internalPeer, _ := scatterer.selectNewPeerWithTrace(scatterer.ordinaryEngine, group, peer, nil, true)
+	internalPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, nil, true)
 	re.Contains([]uint64{4, 5}, internalPeer.GetStoreId())
 }
 
@@ -1590,12 +1588,11 @@ func TestInternalScatterLeaderPrefersUnusedStore(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	group := "test-leader-coverage"
 
-	adminLeader, _, _ := scatterer.selectAvailableLeaderStoreWithTrace(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
+	adminLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
 	re.Equal(uint64(1), adminLeader)
 
-	internalLeader, _, internalTrace := scatterer.selectAvailableLeaderStoreWithTrace(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
+	internalLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
 	re.Equal(uint64(4), internalLeader)
-	re.True(anyTraceLineMatches(internalTrace, "store=4", "selected=true"))
 }
 
 func TestInternalScatterLeaderBreaksTiesByPeerDeficit(t *testing.T) {
@@ -1625,25 +1622,9 @@ func TestInternalScatterLeaderBreaksTiesByPeerDeficit(t *testing.T) {
 		5: 2,
 	}))
 
-	adminLeader, _, _ := scatterer.selectAvailableLeaderStoreWithTrace(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
+	adminLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
 	re.Equal(uint64(1), adminLeader)
 
-	internalLeader, _, _ := scatterer.selectAvailableLeaderStoreWithTrace(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
+	internalLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
 	re.Equal(uint64(5), internalLeader)
-}
-
-func anyTraceLineMatches(lines []string, substrings ...string) bool {
-	for _, line := range lines {
-		matched := true
-		for _, substring := range substrings {
-			if !strings.Contains(line, substring) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return true
-		}
-	}
-	return false
 }

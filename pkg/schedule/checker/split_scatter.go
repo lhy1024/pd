@@ -27,7 +27,6 @@ import (
 
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
-	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 )
 
@@ -330,19 +329,10 @@ func (c *Controller) dispatchSplitScatterRegions() {
 			c.splitScatterQueue.remove(candidate.regionID)
 			continue
 		}
-		log.Info("dispatch internal split scatter",
-			zap.Uint64("region-id", candidate.regionID),
-			zap.String("group", candidate.group),
-			zap.Bool("range-hint-valid", candidate.rangeHint.valid()),
-			zap.Binary("range-hint-start-key", candidate.rangeHint.startKey),
-			zap.Binary("range-hint-end-key", candidate.rangeHint.endKey),
-			zap.Uint64("cpu-score", splitScatterCPUScore(region)),
-			zap.Binary("region-start-key", region.GetStartKey()),
-			zap.Binary("region-end-key", region.GetEndKey()))
 		if candidate.rangeHint.valid() {
 			c.regionScatterer.SeedGroupDistributionByRange(candidate.group, candidate.rangeHint.startKey, candidate.rangeHint.endKey)
 		}
-		op, err := c.regionScatterer.ScatterWithDesc(region, candidate.group, false, scatter.InternalScatterOperatorDesc)
+		op, err := c.regionScatterer.ScatterInternal(region, candidate.group)
 		if err != nil {
 			log.Info("dispatch internal split scatter failed",
 				zap.Uint64("region-id", candidate.regionID),

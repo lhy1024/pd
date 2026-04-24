@@ -101,7 +101,7 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 	re.Equal(scatter.InternalScatterOperatorDesc, op.Desc())
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
-	re.Equal("split-scatter-index-42-7", opGroup)
+	re.Equal("split-scatter-100-1", opGroup)
 }
 
 func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
