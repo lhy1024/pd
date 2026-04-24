@@ -46,7 +46,7 @@ func resolveSplitScatterPrefix(startKey, endKey []byte) ([]byte, bool) {
 		// group, so table-boundary splits and merged ranges still participate in
 		// the broader scatter continuity/baseline.
 		entityRange := splitScatterPrefixRange(rawPrefix)
-		if len(endKey) == 0 || !entityRange.valid() || len(entityRange.endKey) == 0 || bytes.Compare(endKey, entityRange.endKey) > 0 {
+		if len(endKey) == 0 || len(entityRange.startKey) == 0 || len(entityRange.endKey) == 0 || bytes.Compare(endKey, entityRange.endKey) > 0 {
 			rawPrefix = tablePrefix
 		}
 	}

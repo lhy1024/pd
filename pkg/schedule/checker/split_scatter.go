@@ -48,10 +48,6 @@ type splitScatterRangeHint struct {
 	endKey   []byte
 }
 
-func (r splitScatterRangeHint) valid() bool {
-	return len(r.startKey) > 0
-}
-
 type splitScatterManager struct {
 	mu struct {
 		syncutil.RWMutex
@@ -201,7 +197,7 @@ func (c *Controller) dispatchSplitScatterRegions() {
 			continue
 		}
 		rangeHint := resolveSplitScatterRangeHint(region)
-		if rangeHint.valid() {
+		if len(rangeHint.startKey) > 0 {
 			c.splitScatter.regionScatterer.SeedGroupDistributionByRange(group, rangeHint.startKey, rangeHint.endKey)
 		}
 		op, err := c.splitScatter.regionScatterer.ScatterInternal(region, group)
