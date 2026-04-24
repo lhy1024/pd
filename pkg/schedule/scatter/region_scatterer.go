@@ -399,15 +399,15 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 // Scatter relocates the region. If the group is defined, the regions' leader with the same group would be scattered
 // in a group level instead of cluster level.
 func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
-	return r.scatter(region, group, skipStoreLimit, false, false)
+	return r.scatter(region, group, skipStoreLimit, false)
 }
 
 // ScatterInternal relocates the region for PD-internal split-scatter dispatch.
-func (r *RegionScatterer) ScatterInternal(region *core.RegionInfo, group string, leaderOnly bool) (*operator.Operator, error) {
-	return r.scatter(region, group, false, true, leaderOnly)
+func (r *RegionScatterer) ScatterInternal(region *core.RegionInfo, group string) (*operator.Operator, error) {
+	return r.scatter(region, group, false, true)
 }
 
-func (r *RegionScatterer) scatter(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool, leaderOnly bool) (*operator.Operator, error) {
+func (r *RegionScatterer) scatter(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool) (*operator.Operator, error) {
 	if !filter.IsRegionReplicated(r.cluster, region) {
 		r.addSuspectRegions(false, region.GetID())
 		scatterSkipNotReplicatedCounter.Inc()
@@ -462,10 +462,10 @@ func (r *RegionScatterer) scatter(region *core.RegionInfo, group string, skipSto
 		return nil, errors.Errorf("region %d is hot", region.GetID())
 	}
 
-	return r.scatterRegionWithType(region, group, skipStoreLimit, internalScatter, leaderOnly)
+	return r.scatterRegionWithType(region, group, skipStoreLimit, internalScatter)
 }
 
-func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool, leaderOnly bool) (*operator.Operator, error) {
+func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool) (*operator.Operator, error) {
 	desc := AdminScatterOperatorDesc
 	if internalScatter {
 		desc = InternalScatterOperatorDesc
@@ -533,25 +533,9 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 		}
 	}
 
-	if internalScatter && leaderOnly {
-		for _, peer := range ordinaryPeers {
-			targetPeers[peer.GetStoreId()] = peer
-			selectedStores[peer.GetStoreId()] = struct{}{}
-			if allowLeader(oldFit, peer) {
-				leaderCandidateStores = append(leaderCandidateStores, peer.GetStoreId())
-			}
-		}
-		for _, peers := range specialPeers {
-			for _, peer := range peers {
-				targetPeers[peer.GetStoreId()] = peer
-				selectedStores[peer.GetStoreId()] = struct{}{}
-			}
-		}
-	} else {
-		scatterWithSameEngine(ordinaryPeers, r.ordinaryEngine)
-		for engine, peers := range specialPeers {
-			scatterWithSameEngine(peers, r.getOrCreateSpecialEngineContext(engine))
-		}
+	scatterWithSameEngine(ordinaryPeers, r.ordinaryEngine)
+	for engine, peers := range specialPeers {
+		scatterWithSameEngine(peers, r.getOrCreateSpecialEngineContext(engine))
 	}
 	// FIXME: target leader only considers the ordinary stores, maybe we need to consider the
 	// special engine stores if the engine supports to become a leader. But now there is only

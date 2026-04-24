@@ -22,7 +22,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/schedule/operator"
-	"github.com/tikv/pd/pkg/schedule/scatter"
 )
 
 const (
@@ -123,40 +122,6 @@ func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs
 	c.splitScatterPending.Put(sourceRegionID, group)
 }
 
-func (c *Controller) pendingSplitScatterGroupCount(group string) int {
-	c.splitScatterPendingMu.RLock()
-	defer c.splitScatterPendingMu.RUnlock()
-	count := 0
-	for _, regionID := range c.splitScatterPending.GetAllID() {
-		value, ok := c.splitScatterPending.Get(regionID)
-		if !ok {
-			continue
-		}
-		pendingGroup, ok := value.(string)
-		if ok && pendingGroup == group {
-			count++
-		}
-	}
-	return count
-}
-
-func (c *Controller) hasRunningSplitScatterGroup(regionID uint64, group string) bool {
-	for _, op := range c.opController.GetOperators() {
-		if op == nil || op.RegionID() == regionID || op.Desc() != scatter.InternalScatterOperatorDesc {
-			continue
-		}
-		opGroup, ok := op.GetAdditionalInfo("group")
-		if ok && opGroup == group {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *Controller) shouldOnlyScatterLeader(regionID uint64, group string) bool {
-	return c.pendingSplitScatterGroupCount(group) > 1 || c.hasRunningSplitScatterGroup(regionID, group)
-}
-
 // DispatchSplitScatterRegions dispatches pending split-scatter regions.
 func (c *Controller) DispatchSplitScatterRegions() {
 	for _, pending := range c.collectTopPendingSplitScatter(splitScatterDispatchLimit) {
@@ -168,7 +133,7 @@ func (c *Controller) DispatchSplitScatterRegions() {
 		if len(rangeHint.startKey) > 0 {
 			c.regionScatterer.SeedGroupDistributionByRange(pending.group, rangeHint.startKey, rangeHint.endKey)
 		}
-		op, err := c.regionScatterer.ScatterInternal(region, pending.group, c.shouldOnlyScatterLeader(pending.regionID, pending.group))
+		op, err := c.regionScatterer.ScatterInternal(region, pending.group)
 		if err != nil {
 			log.Info("dispatch internal split scatter failed",
 				zap.Uint64("region-id", pending.regionID),

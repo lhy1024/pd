@@ -389,7 +389,7 @@ func TestSomeStoresFilteredScatterGroupInConcurrency(t *testing.T) {
 func scatterOnce(re *require.Assertions, tc *mockcluster.Cluster, scatter *RegionScatterer, group string) {
 	regionID := 1
 	for range 100 {
-		_, err := scatter.scatterRegionWithType(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group, false, false, false)
+		_, err := scatter.scatterRegionWithType(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group, false, false)
 		re.NoError(err)
 		regionID++
 	}
@@ -437,7 +437,7 @@ func TestScatterGroupInConcurrency(t *testing.T) {
 			for j := range testCase.groupCount {
 				group := fmt.Sprintf("group-%v", j)
 				region := tc.AddLeaderRegion(uint64(regionID), 1, 2, 3)
-				op, err := scatterer.scatterRegionWithType(region, group, false, false, false)
+				op, err := scatterer.scatterRegionWithType(region, group, false, false)
 				re.NoError(err)
 				commitScatterOp(scatterer, region, op, group)
 				regionID++
@@ -721,7 +721,7 @@ func TestSelectedStoresTooFewPeers(t *testing.T) {
 	// Try to scatter a region with peer store id 2/3/4
 	for i := uint64(1); i < 20; i++ {
 		region := tc.AddLeaderRegion(i+200, i%3+2, (i+1)%3+2, (i+2)%3+2)
-		op, err := scatterer.scatterRegionWithType(region, group, false, false, false)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 		if op != nil {
@@ -1013,7 +1013,7 @@ func TestSelectedStoresTooManyPeers(t *testing.T) {
 	// test region with peer 1 2 3
 	for i := uint64(1); i < 20; i++ {
 		region := tc.AddLeaderRegion(i+200, i%3+1, (i+1)%3+1, (i+2)%3+1)
-		op, err := scatterer.scatterRegionWithType(region, group, false, false, false)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 	}
@@ -1038,7 +1038,7 @@ func TestBalanceLeader(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	for i := uint64(1001); i <= 1300; i++ {
 		region := tc.AddLeaderRegion(i, 2, 3, 4)
-		op, err := scatterer.scatterRegionWithType(region, group, false, false, false)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 		commitScatterOp(scatterer, region, op, group)
@@ -1070,7 +1070,7 @@ func TestBalanceRegion(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	for i := uint64(1001); i <= 1300; i++ {
 		region := tc.AddLeaderRegion(i, 2, 4, 6)
-		op, err := scatterer.scatterRegionWithType(region, group, false, false, false)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 		commitScatterOp(scatterer, region, op, group)
@@ -1081,7 +1081,7 @@ func TestBalanceRegion(t *testing.T) {
 	// Test for unhealthy region
 	// ref https://github.com/tikv/pd/issues/6099
 	region := tc.AddLeaderRegion(1500, 2, 3, 4, 6)
-	op, err := scatterer.scatterRegionWithType(region, group, false, false, false)
+	op, err := scatterer.scatterRegionWithType(region, group, false, false)
 	re.NoError(err)
 	re.False(isPeerCountChanged(op))
 }
@@ -1294,32 +1294,10 @@ func TestScatterInternalSkipsHotOnlyForAdmin(t *testing.T) {
 	re.ErrorContains(err, "is hot")
 	re.Nil(op)
 
-	op, err = scatterer.ScatterInternal(region, "", false)
+	op, err = scatterer.ScatterInternal(region, "")
 	re.NoError(err)
 	if op != nil {
 		re.Equal(InternalScatterOperatorDesc, op.Desc())
-	}
-}
-
-func TestScatterInternalLeaderOnlyKeepsPeers(t *testing.T) {
-	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	opt := mockconfig.NewTestOptions()
-	tc := mockcluster.NewCluster(ctx, opt)
-	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
-	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
-	for i := uint64(1); i <= 5; i++ {
-		tc.AddRegionStore(i, 0)
-	}
-	region := tc.AddLeaderRegion(1, 1, 2, 3)
-
-	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
-	op, err := scatterer.ScatterInternal(region, "test-leader-only", true)
-	re.NoError(err)
-	if op != nil {
-		re.False(hasPeerPlacementChange(op))
 	}
 }
 
