@@ -19,7 +19,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/pdpb"
 	"go.uber.org/zap"
 
 	"github.com/pingcap/log"
@@ -32,21 +31,13 @@ const (
 	splitScatterQueueGCInterval = time.Minute
 	splitScatterDispatchLimit   = 4
 	splitScatterRetryBackoff    = time.Second
-	splitScatterSizeCooldown    = time.Minute
 )
 
 type splitScatterPendingItem struct {
 	regionID    uint64
 	group       string
-	reason      pdpb.SplitReason
 	waitVersion uint64
-	zeroWriteSince time.Time
 	retryAt     time.Time
-}
-
-type splitScatterDispatchCandidate struct {
-	pending splitScatterPendingItem
-	score   uint64
 }
 
 // splitScatterRangeHint is a derived key range for the current table/index
@@ -79,7 +70,7 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	}
 	c.splitScatterPendingMu.RUnlock()
 
-	candidates := make([]splitScatterDispatchCandidate, 0, len(pendingRegions))
+	candidates := make([]splitScatterPendingItem, 0, len(pendingRegions))
 	for _, pending := range pendingRegions {
 		region := c.cluster.GetRegion(pending.regionID)
 		if region == nil {
@@ -95,25 +86,15 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 		if pending.waitVersion > 0 && currentVersion < pending.waitVersion {
 			continue
 		}
-		candidates = append(candidates, splitScatterDispatchCandidate{
-			pending: pending,
-			score:   region.GetCPUUsage(),
-		})
+		candidates = append(candidates, pending)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].score == candidates[j].score {
-			return candidates[i].pending.regionID < candidates[j].pending.regionID
-		}
-		return candidates[i].score > candidates[j].score
+		return candidates[i].regionID < candidates[j].regionID
 	})
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
-	regions := make([]splitScatterPendingItem, 0, len(candidates))
-	for _, candidate := range candidates {
-		regions = append(regions, candidate.pending)
-	}
-	return regions
+	return candidates
 }
 
 func (c *Controller) updatePendingSplitScatter(regionID uint64, update func(*splitScatterPendingItem)) {
@@ -142,7 +123,7 @@ func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
 }
 
 // RecordSplitScatterBatch records a newly split batch for later scatter.
-func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64, reason pdpb.SplitReason) {
+func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
 	if len(newRegionIDs) == 0 {
 		return
 	}
@@ -150,9 +131,9 @@ func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs
 	c.splitScatterPendingMu.Lock()
 	defer c.splitScatterPendingMu.Unlock()
 	for _, regionID := range newRegionIDs {
-		c.splitScatterPending.Put(regionID, splitScatterPendingItem{group: group, reason: reason})
+		c.splitScatterPending.Put(regionID, splitScatterPendingItem{group: group})
 	}
-	sourcePending := splitScatterPendingItem{group: group, reason: reason, waitVersion: 1}
+	sourcePending := splitScatterPendingItem{group: group, waitVersion: 1}
 	if sourceRegion := c.cluster.GetRegion(sourceRegionID); sourceRegion != nil && sourceRegion.GetRegionEpoch() != nil {
 		sourcePending.waitVersion = sourceRegion.GetRegionEpoch().GetVersion() + 1
 	}
@@ -165,45 +146,6 @@ func (c *Controller) DispatchSplitScatterRegions() {
 		region := c.cluster.GetRegion(pending.regionID)
 		if region == nil {
 			continue
-		}
-		if pending.reason == pdpb.SplitReason_SIZE {
-			if region.GetBytesWritten() > 0 {
-				c.updatePendingSplitScatter(pending.regionID, func(item *splitScatterPendingItem) {
-					item.zeroWriteSince = time.Time{}
-					item.retryAt = time.Now().Add(splitScatterRetryBackoff)
-				})
-				log.Info("dispatch internal split scatter delayed",
-					zap.Uint64("region-id", pending.regionID),
-					zap.String("group", pending.group),
-					zap.String("reason", "bytes-written-active"),
-					zap.Uint64("bytes-written", region.GetBytesWritten()))
-				continue
-			}
-			if pending.zeroWriteSince.IsZero() {
-				now := time.Now()
-				c.updatePendingSplitScatter(pending.regionID, func(item *splitScatterPendingItem) {
-					item.zeroWriteSince = now
-					item.retryAt = now.Add(splitScatterSizeCooldown)
-				})
-				log.Info("dispatch internal split scatter delayed",
-					zap.Uint64("region-id", pending.regionID),
-					zap.String("group", pending.group),
-					zap.String("reason", "size-cooldown-started"),
-					zap.Duration("cooldown", splitScatterSizeCooldown))
-				continue
-			}
-			if time.Since(pending.zeroWriteSince) < splitScatterSizeCooldown {
-				readyAt := pending.zeroWriteSince.Add(splitScatterSizeCooldown)
-				c.updatePendingSplitScatter(pending.regionID, func(item *splitScatterPendingItem) {
-					item.retryAt = readyAt
-				})
-				log.Info("dispatch internal split scatter delayed",
-					zap.Uint64("region-id", pending.regionID),
-					zap.String("group", pending.group),
-					zap.String("reason", "size-cooling-down"),
-					zap.Time("ready-at", readyAt))
-				continue
-			}
 		}
 		if !filter.IsRegionReplicated(c.cluster, region) {
 			c.delayPendingSplitScatter(pending.regionID, splitScatterRetryBackoff)

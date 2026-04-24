@@ -39,6 +39,7 @@ func TestHandleAskBatchSplitSchedulesSplitScatterInPatrol(t *testing.T) {
 	request := &pdpb.AskBatchSplitRequest{
 		Region:     cluster.GetRegion(100).GetMeta(),
 		SplitCount: 2,
+		Reason:     pdpb.SplitReason_LOAD,
 	}
 	resp, err := cluster.HandleAskBatchSplit(request)
 	re.NoError(err)
@@ -84,6 +85,7 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 	request := &pdpb.AskBatchSplitRequest{
 		Region:     cluster.GetRegion(100).GetMeta(),
 		SplitCount: 1,
+		Reason:     pdpb.SplitReason_LOAD,
 	}
 	resp, err := cluster.HandleAskBatchSplit(request)
 	re.NoError(err)
@@ -103,6 +105,31 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal("split-scatter-100-1", opGroup)
+}
+
+func TestHandleAskBatchSplitSkipsSplitScatterForSizeReason(t *testing.T) {
+	re := require.New(t)
+	cluster := newSplitScatterTestCluster(t)
+
+	request := &pdpb.AskBatchSplitRequest{
+		Region:     cluster.GetRegion(100).GetMeta(),
+		SplitCount: 1,
+		Reason:     pdpb.SplitReason_SIZE,
+	}
+	resp, err := cluster.HandleAskBatchSplit(request)
+	re.NoError(err)
+	re.Len(resp.GetIds(), 1)
+
+	splitRegionID := resp.GetIds()[0].GetNewRegionId()
+	re.NoError(cluster.processRegionHeartbeat(
+		core.ContextTODO(),
+		newSplitScatterRegion(splitRegionID, []byte("m"), []byte(""), 120),
+	))
+
+	cluster.GetCoordinator().GetCheckerController().DispatchSplitScatterRegions()
+
+	re.Nil(cluster.GetOperatorController().GetOperator(splitRegionID))
+	re.Nil(cluster.GetOperatorController().GetOperator(100))
 }
 
 func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
@@ -133,8 +160,7 @@ func newSplitScatterRegion(regionID uint64, start, end []byte, cpu uint64) *core
 }
 
 func newSplitScatterRegionWithStores(regionID uint64, start, end []byte, cpu uint64, stores ...uint64) *core.RegionInfo {
-	peers := []*metapb.Peer{
-	}
+	peers := []*metapb.Peer{}
 	for i, storeID := range stores {
 		peers = append(peers, &metapb.Peer{
 			Id:      regionID*10 + uint64(i) + 1,

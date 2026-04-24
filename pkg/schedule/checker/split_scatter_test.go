@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tikv/pd/pkg/codec"
@@ -38,12 +37,12 @@ const (
 	splitScatterTestIndexID      int64  = 7
 )
 
-func TestRecordSplitScatterBatchCollectsByLegacyCPUScore(t *testing.T) {
+func TestRecordSplitScatterBatchCollectsByRegionOrder(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
-	controller.RecordSplitScatterBatch(100, []uint64{101, 102, 103}, pdpb.SplitReason_ADMIN)
+	controller.RecordSplitScatterBatch(100, []uint64{101, 102, 103})
 	re.Equal(4, splitScatterPendingCount(controller))
 
 	sourceGroup := splitScatterPendingGroup(t, controller, 100)
@@ -52,10 +51,10 @@ func TestRecordSplitScatterBatchCollectsByLegacyCPUScore(t *testing.T) {
 	}
 
 	putSplitScatterRegion(tc, 101, "m", "n", 0)
-	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "n", "o", 120)
+	putSplitScatterRegion(tc, 102, "n", "o", 120)
 	putSplitScatterRegion(tc, 103, "o", "", 999)
 
-	re.Equal([]uint64{103, 102, 101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(3)))
+	re.Equal([]uint64{101, 102, 103}, pendingRegionIDs(controller.collectTopPendingSplitScatter(3)))
 }
 
 func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
@@ -63,7 +62,7 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	controller, tc, oc, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
-	controller.RecordSplitScatterBatch(100, []uint64{101, 102}, pdpb.SplitReason_ADMIN)
+	controller.RecordSplitScatterBatch(100, []uint64{101, 102})
 	putSplitScatterRegion(tc, 101, "m", "t", 120)
 	putSplitScatterRegion(tc, 102, "t", "", 80)
 
@@ -93,7 +92,7 @@ func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
-	controller.RecordSplitScatterBatch(100, []uint64{101}, pdpb.SplitReason_ADMIN)
+	controller.RecordSplitScatterBatch(100, []uint64{101})
 	putSplitScatterRegion(tc, 101, "m", "", 120)
 
 	re.Equal([]uint64{101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
@@ -102,7 +101,7 @@ func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
 	re.NotNil(source)
 	tc.PutRegion(source.Clone(core.WithIncVersion()))
 
-	re.Equal([]uint64{101, 100}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
+	re.Equal([]uint64{100, 101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
 }
 
 func TestCollectTopPendingResolvesRangeHint(t *testing.T) {
@@ -150,7 +149,7 @@ func TestCollectTopPendingResolvesRangeHint(t *testing.T) {
 			controller, tc, _, cleanup := newTestSplitScatterController(t)
 			defer cleanup()
 
-			controller.RecordSplitScatterBatch(100, []uint64{101}, pdpb.SplitReason_ADMIN)
+			controller.RecordSplitScatterBatch(100, []uint64{101})
 			putSplitScatterRegionWithKeys(tc, testCase.startKey, testCase.endKey, 120)
 
 			re.Equal(makeSplitScatterGroup(100, 101), splitScatterPendingGroup(t, controller, 101))
@@ -162,24 +161,12 @@ func TestCollectTopPendingResolvesRangeHint(t *testing.T) {
 	}
 }
 
-func TestCollectTopPendingUsesLegacyCPUUsage(t *testing.T) {
-	re := require.New(t)
-	controller, tc, _, cleanup := newTestSplitScatterController(t)
-	defer cleanup()
-
-	controller.RecordSplitScatterBatch(100, []uint64{101, 102}, pdpb.SplitReason_ADMIN)
-	putSplitScatterRegionWithLegacyOnlyCPU(tc, 101, "m", "t", 120)
-	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "t", "", 999)
-
-	re.Equal([]uint64{102, 101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
-}
-
 func TestDispatchSplitScatterBacksOffWhenRegionIsNotFullyReplicated(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
-	controller.RecordSplitScatterBatch(100, []uint64{101}, pdpb.SplitReason_ADMIN)
+	controller.RecordSplitScatterBatch(100, []uint64{101})
 	putSplitScatterRegionWithStores(tc, 101, "m", "", 120, 1, 2)
 
 	controller.DispatchSplitScatterRegions()
@@ -188,49 +175,6 @@ func TestDispatchSplitScatterBacksOffWhenRegionIsNotFullyReplicated(t *testing.T
 	pending := splitScatterPendingItemAt(t, controller, 101)
 	re.True(pending.retryAt.After(time.Now()))
 	re.Empty(pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
-}
-
-func TestDispatchSplitScatterWaitsForSizeSplitCooldown(t *testing.T) {
-	re := require.New(t)
-	controller, tc, _, cleanup := newTestSplitScatterController(t)
-	defer cleanup()
-
-	controller.RecordSplitScatterBatch(100, []uint64{101}, pdpb.SplitReason_SIZE)
-	putSplitScatterRegion(tc, 101, "m", "", 120)
-	region := tc.GetRegion(101)
-	re.NotNil(region)
-	tc.PutRegion(region.Clone(core.SetWrittenBytes(128)))
-
-	controller.DispatchSplitScatterRegions()
-
-	pending := splitScatterPendingItemAt(t, controller, 101)
-	re.True(pending.zeroWriteSince.IsZero())
-	re.True(pending.retryAt.After(time.Now()))
-
-	tc.PutRegion(tc.GetRegion(101).Clone(core.SetWrittenBytes(0)))
-	controller.updatePendingSplitScatter(101, func(item *splitScatterPendingItem) {
-		item.retryAt = time.Time{}
-	})
-	controller.DispatchSplitScatterRegions()
-
-	pending = splitScatterPendingItemAt(t, controller, 101)
-	re.False(pending.zeroWriteSince.IsZero())
-	re.True(pending.retryAt.After(time.Now().Add(splitScatterSizeCooldown - 2*time.Second)))
-
-	controller.updatePendingSplitScatter(101, func(item *splitScatterPendingItem) {
-		item.zeroWriteSince = time.Now().Add(-splitScatterSizeCooldown)
-		item.retryAt = time.Time{}
-	})
-	controller.DispatchSplitScatterRegions()
-
-	var op *operator.Operator
-	for _, regionID := range []uint64{100, 101} {
-		op = controller.opController.GetOperator(regionID)
-		if op != nil {
-			break
-		}
-	}
-	re.NotNil(op)
 }
 
 func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Cluster, *operator.Controller, func()) {
@@ -257,12 +201,6 @@ func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Clus
 func putSplitScatterRegion(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, cpu uint64) {
 	tc.AddLeaderRegionWithRange(regionID, startKey, endKey, 1, 2, 3)
 	region := tc.GetRegion(regionID).Clone(core.SetCPUUsage(cpu))
-	tc.PutRegion(region)
-}
-
-func putSplitScatterRegionWithLegacyOnlyCPU(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, legacyCPU uint64) {
-	tc.AddLeaderRegionWithRange(regionID, startKey, endKey, 1, 2, 3)
-	region := tc.GetRegion(regionID).Clone(core.SetCPUUsage(legacyCPU))
 	tc.PutRegion(region)
 }
 
