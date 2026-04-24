@@ -134,6 +134,15 @@ func (c *Controller) DispatchSplitScatterRegions() {
 			continue
 		}
 		rangeHint := resolveSplitScatterRangeHint(region)
+		log.Info("dispatch internal split scatter",
+			zap.Uint64("region-id", pending.regionID),
+			zap.String("group", pending.group),
+			zap.Bool("range-hint-valid", len(rangeHint.startKey) > 0),
+			zap.Binary("range-hint-start-key", rangeHint.startKey),
+			zap.Binary("range-hint-end-key", rangeHint.endKey),
+			zap.Uint64("cpu-score", region.GetCPUUsage()),
+			zap.Binary("region-start-key", region.GetStartKey()),
+			zap.Binary("region-end-key", region.GetEndKey()))
 		if len(rangeHint.startKey) > 0 {
 			c.regionScatterer.SeedGroupDistributionByRange(pending.group, rangeHint.startKey, rangeHint.endKey)
 		}
