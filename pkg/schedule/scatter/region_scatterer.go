@@ -213,13 +213,6 @@ type engineContext struct {
 	selectedLeader *selectedStores
 }
 
-type classifiedPlacementStores struct {
-	ordinaryOldStores []uint64
-	ordinaryNewStores []uint64
-	specialOldStores  map[string][]uint64
-	specialNewStores  map[string][]uint64
-}
-
 func newEngineContext(ctx context.Context, filterFuncs ...filterFunc) engineContext {
 	filterFuncs = append(filterFuncs, func() filter.Filter {
 		return &filter.StoreStateFilter{ActionScope: regionScatterName, MoveRegion: true, ScatterRegion: true, OperatorLevel: operatorPriorityLevel}
@@ -745,17 +738,39 @@ func peerMoveImprovesGroupGap(stores []*core.StoreInfo, selectedPeers *selectedS
 	return afterMax-afterMin < beforeMax-beforeMin
 }
 
-func (r *RegionScatterer) classifyPlacementStores(
-	region *core.RegionInfo,
-	targetPeers map[uint64]*metapb.Peer,
-) classifiedPlacementStores {
-	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
-	classified := classifiedPlacementStores{
-		ordinaryOldStores: make([]uint64, 0, len(region.GetPeers())),
-		ordinaryNewStores: make([]uint64, 0, len(targetPeers)),
-		specialOldStores:  make(map[string][]uint64),
-		specialNewStores:  make(map[string][]uint64),
+// Commit updates the group distribution after the scatter operator has been
+// accepted by the operator controller.
+func (r *RegionScatterer) Commit(region *core.RegionInfo, op *operator.Operator, group string) {
+	if op == nil || region == nil || region.GetLeader() == nil {
+		return
 	}
+	targetPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
+	for _, peer := range region.GetPeers() {
+		targetPeers[peer.GetStoreId()] = peer
+	}
+	targetLeader := region.GetLeader().GetStoreId()
+	for i := range op.Len() {
+		switch step := op.Step(i).(type) {
+		case operator.TransferLeader:
+			targetLeader = step.ToStore
+		case operator.AddPeer:
+			targetPeers[step.ToStore] = &metapb.Peer{StoreId: step.ToStore}
+		case operator.AddLearner:
+			targetPeers[step.ToStore] = &metapb.Peer{StoreId: step.ToStore}
+		case operator.RemovePeer:
+			delete(targetPeers, step.FromStore)
+		}
+	}
+	r.Update(region, targetPeers, targetLeader, group)
+}
+
+// Update records the group distribution after scattering a region to the target placement.
+func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
+	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
+	ordinaryOldStores := make([]uint64, 0, len(region.GetPeers()))
+	ordinaryNewStores := make([]uint64, 0, len(targetPeers))
+	specialOldStores := make(map[string][]uint64)
+	specialNewStores := make(map[string][]uint64)
 
 	classifyStore := func(storeID uint64, ordinary *[]uint64, special map[string][]uint64) string {
 		store := r.cluster.GetStore(storeID)
@@ -772,11 +787,11 @@ func (r *RegionScatterer) classifyPlacementStores(
 	}
 
 	for _, peer := range region.GetPeers() {
-		classifyStore(peer.GetStoreId(), &classified.ordinaryOldStores, classified.specialOldStores)
+		classifyStore(peer.GetStoreId(), &ordinaryOldStores, specialOldStores)
 	}
 	for _, peer := range targetPeers {
 		storeID := peer.GetStoreId()
-		engine := classifyStore(storeID, &classified.ordinaryNewStores, classified.specialNewStores)
+		engine := classifyStore(storeID, &ordinaryNewStores, specialNewStores)
 		if engine != "" {
 			scatterDistributionCounter.WithLabelValues(
 				strconv.FormatUint(storeID, 10),
@@ -784,57 +799,18 @@ func (r *RegionScatterer) classifyPlacementStores(
 				engine).Inc()
 		}
 	}
-	return classified
-}
 
-func scatterPlacementAfterOperator(region *core.RegionInfo, op *operator.Operator) (map[uint64]*metapb.Peer, uint64) {
-	targetPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
-	for _, peer := range region.GetPeers() {
-		targetPeers[peer.GetStoreId()] = peer
-	}
-	targetLeader := region.GetLeader().GetStoreId()
-	if op == nil {
-		return targetPeers, targetLeader
-	}
-	for i := range op.Len() {
-		switch step := op.Step(i).(type) {
-		case operator.TransferLeader:
-			targetLeader = step.ToStore
-		case operator.AddPeer:
-			targetPeers[step.ToStore] = &metapb.Peer{StoreId: step.ToStore}
-		case operator.AddLearner:
-			targetPeers[step.ToStore] = &metapb.Peer{StoreId: step.ToStore}
-		case operator.RemovePeer:
-			delete(targetPeers, step.FromStore)
-		}
-	}
-	return targetPeers, targetLeader
-}
-
-// Commit updates the group distribution after the scatter operator has been
-// accepted by the operator controller.
-func (r *RegionScatterer) Commit(region *core.RegionInfo, op *operator.Operator, group string) {
-	if op == nil || region == nil || region.GetLeader() == nil {
-		return
-	}
-	targetPeers, targetLeader := scatterPlacementAfterOperator(region, op)
-	r.Update(region, targetPeers, targetLeader, group)
-}
-
-// Update records the group distribution after scattering a region to the target placement.
-func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
-	classified := r.classifyPlacementStores(region, targetPeers)
-	r.ordinaryEngine.selectedPeer.Update(group, classified.ordinaryOldStores, classified.ordinaryNewStores)
-	specialEngines := make(map[string]struct{}, len(classified.specialOldStores)+len(classified.specialNewStores))
-	for engine := range classified.specialOldStores {
+	r.ordinaryEngine.selectedPeer.Update(group, ordinaryOldStores, ordinaryNewStores)
+	specialEngines := make(map[string]struct{}, len(specialOldStores)+len(specialNewStores))
+	for engine := range specialOldStores {
 		specialEngines[engine] = struct{}{}
 	}
-	for engine := range classified.specialNewStores {
+	for engine := range specialNewStores {
 		specialEngines[engine] = struct{}{}
 	}
 	for engine := range specialEngines {
 		ctx := r.getOrCreateSpecialEngineContext(engine)
-		ctx.selectedPeer.Update(group, classified.specialOldStores[engine], classified.specialNewStores[engine])
+		ctx.selectedPeer.Update(group, specialOldStores[engine], specialNewStores[engine])
 	}
 
 	oldLeaderStoreID := region.GetLeader().GetStoreId()
