@@ -16,7 +16,6 @@ package checker
 
 import (
 	"fmt"
-	"sort"
 	"time"
 
 	"go.uber.org/zap"
@@ -27,8 +26,6 @@ import (
 )
 
 const (
-	splitScatterPendingTTL      = 3 * time.Minute
-	splitScatterQueueGCInterval = time.Minute
 	splitScatterDispatchLimit   = 4
 	splitScatterRetryBackoff    = time.Second
 )
@@ -36,7 +33,6 @@ const (
 type splitScatterPendingItem struct {
 	regionID    uint64
 	group       string
-	waitVersion uint64
 	retryAt     time.Time
 }
 
@@ -53,44 +49,21 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 		return nil
 	}
 	now := time.Now()
-	c.splitScatterPendingMu.RLock()
-	pendingIDs := c.splitScatterPending.GetAllID()
-	pendingRegions := make([]splitScatterPendingItem, 0, len(pendingIDs))
-	for _, regionID := range pendingIDs {
-		value, ok := c.splitScatterPending.Get(regionID)
-		if !ok {
-			continue
-		}
-		pending, ok := value.(splitScatterPendingItem)
-		if !ok {
-			continue
-		}
-		pending.regionID = regionID
-		pendingRegions = append(pendingRegions, pending)
-	}
-	c.splitScatterPendingMu.RUnlock()
+	c.splitScatterPendingMu.Lock()
+	defer c.splitScatterPendingMu.Unlock()
 
-	candidates := make([]splitScatterPendingItem, 0, len(pendingRegions))
-	for _, pending := range pendingRegions {
-		region := c.cluster.GetRegion(pending.regionID)
+	candidates := make([]splitScatterPendingItem, 0, len(c.splitScatterPending))
+	for regionID, pending := range c.splitScatterPending {
+		region := c.cluster.GetRegion(regionID)
 		if region == nil {
+			delete(c.splitScatterPending, regionID)
 			continue
 		}
 		if !pending.retryAt.IsZero() && now.Before(pending.retryAt) {
 			continue
 		}
-		currentVersion := uint64(0)
-		if region.GetRegionEpoch() != nil {
-			currentVersion = region.GetRegionEpoch().GetVersion()
-		}
-		if pending.waitVersion > 0 && currentVersion < pending.waitVersion {
-			continue
-		}
 		candidates = append(candidates, pending)
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].regionID < candidates[j].regionID
-	})
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
@@ -100,16 +73,12 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 func (c *Controller) updatePendingSplitScatter(regionID uint64, update func(*splitScatterPendingItem)) {
 	c.splitScatterPendingMu.Lock()
 	defer c.splitScatterPendingMu.Unlock()
-	value, ok := c.splitScatterPending.Get(regionID)
-	if !ok {
-		return
-	}
-	pending, ok := value.(splitScatterPendingItem)
+	pending, ok := c.splitScatterPending[regionID]
 	if !ok {
 		return
 	}
 	update(&pending)
-	c.splitScatterPending.Put(regionID, pending)
+	c.splitScatterPending[regionID] = pending
 }
 
 func (c *Controller) delayPendingSplitScatter(regionID uint64, delay time.Duration) {
@@ -131,13 +100,8 @@ func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs
 	c.splitScatterPendingMu.Lock()
 	defer c.splitScatterPendingMu.Unlock()
 	for _, regionID := range newRegionIDs {
-		c.splitScatterPending.Put(regionID, splitScatterPendingItem{group: group})
+		c.splitScatterPending[regionID] = splitScatterPendingItem{regionID: regionID, group: group}
 	}
-	sourcePending := splitScatterPendingItem{group: group, waitVersion: 1}
-	if sourceRegion := c.cluster.GetRegion(sourceRegionID); sourceRegion != nil && sourceRegion.GetRegionEpoch() != nil {
-		sourcePending.waitVersion = sourceRegion.GetRegionEpoch().GetVersion() + 1
-	}
-	c.splitScatterPending.Put(sourceRegionID, sourcePending)
 }
 
 // DispatchSplitScatterRegions dispatches pending split-scatter regions.
@@ -187,7 +151,7 @@ func (c *Controller) DispatchSplitScatterRegions() {
 			c.regionScatterer.Commit(region, op, pending.group)
 		}
 		c.splitScatterPendingMu.Lock()
-		c.splitScatterPending.Remove(pending.regionID)
+		delete(c.splitScatterPending, pending.regionID)
 		c.splitScatterPendingMu.Unlock()
 	}
 }

@@ -37,24 +37,24 @@ const (
 	splitScatterTestIndexID      int64  = 7
 )
 
-func TestRecordSplitScatterBatchCollectsByRegionOrder(t *testing.T) {
+func TestRecordSplitScatterBatchCollectsPendingRegions(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
 
 	controller.RecordSplitScatterBatch(100, []uint64{101, 102, 103})
-	re.Equal(4, splitScatterPendingCount(controller))
+	re.Equal(3, splitScatterPendingCount(controller))
 
-	sourceGroup := splitScatterPendingGroup(t, controller, 100)
-	for _, regionID := range []uint64{101, 102} {
-		re.Equal(sourceGroup, splitScatterPendingGroup(t, controller, regionID))
+	group := splitScatterPendingGroup(t, controller, 101)
+	for _, regionID := range []uint64{102, 103} {
+		re.Equal(group, splitScatterPendingGroup(t, controller, regionID))
 	}
 
 	putSplitScatterRegion(tc, 101, "m", "n", 0)
 	putSplitScatterRegion(tc, 102, "n", "o", 120)
 	putSplitScatterRegion(tc, 103, "o", "", 999)
 
-	re.Equal([]uint64{101, 102, 103}, pendingRegionIDs(controller.collectTopPendingSplitScatter(3)))
+	re.ElementsMatch([]uint64{101, 102, 103}, pendingRegionIDs(controller.collectTopPendingSplitScatter(3)))
 }
 
 func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
@@ -82,12 +82,11 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal(group, opGroup)
-	re.Equal(1, splitScatterPendingCount(controller))
-	re.Equal(group, splitScatterPendingGroup(t, controller, 100))
+	re.Zero(splitScatterPendingCount(controller))
 	re.Empty(pendingRegionIDs(controller.collectTopPendingSplitScatter(4)))
 }
 
-func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
+func TestCollectTopPendingOnlyTracksNewRegions(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
@@ -95,13 +94,7 @@ func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
 	controller.RecordSplitScatterBatch(100, []uint64{101})
 	putSplitScatterRegion(tc, 101, "m", "", 120)
 
-	re.Equal([]uint64{101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
-
-	source := tc.GetRegion(100)
-	re.NotNil(source)
-	tc.PutRegion(source.Clone(core.WithIncVersion()))
-
-	re.Equal([]uint64{100, 101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
+	re.ElementsMatch([]uint64{101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
 }
 
 func TestCollectTopPendingResolvesRangeHint(t *testing.T) {
@@ -171,7 +164,7 @@ func TestDispatchSplitScatterBacksOffWhenRegionIsNotFullyReplicated(t *testing.T
 
 	controller.DispatchSplitScatterRegions()
 
-	re.Equal(2, splitScatterPendingCount(controller))
+	re.Equal(1, splitScatterPendingCount(controller))
 	pending := splitScatterPendingItemAt(t, controller, 101)
 	re.True(pending.retryAt.After(time.Now()))
 	re.Empty(pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
@@ -241,16 +234,14 @@ func putSplitScatterRegionWithStores(tc *mockcluster.Cluster, regionID uint64, s
 func splitScatterPendingCount(controller *Controller) int {
 	controller.splitScatterPendingMu.RLock()
 	defer controller.splitScatterPendingMu.RUnlock()
-	return len(controller.splitScatterPending.GetAllID())
+	return len(controller.splitScatterPending)
 }
 
 func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uint64) string {
 	t.Helper()
 	controller.splitScatterPendingMu.RLock()
 	defer controller.splitScatterPendingMu.RUnlock()
-	value, ok := controller.splitScatterPending.Get(regionID)
-	require.True(t, ok)
-	pending, ok := value.(splitScatterPendingItem)
+	pending, ok := controller.splitScatterPending[regionID]
 	require.True(t, ok)
 	return pending.group
 }
@@ -259,11 +250,8 @@ func splitScatterPendingItemAt(t *testing.T, controller *Controller, regionID ui
 	t.Helper()
 	controller.splitScatterPendingMu.RLock()
 	defer controller.splitScatterPendingMu.RUnlock()
-	value, ok := controller.splitScatterPending.Get(regionID)
+	pending, ok := controller.splitScatterPending[regionID]
 	require.True(t, ok)
-	pending, ok := value.(splitScatterPendingItem)
-	require.True(t, ok)
-	pending.regionID = regionID
 	return pending
 }
 

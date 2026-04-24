@@ -80,7 +80,7 @@ type Controller struct {
 	priorityInspector       *PriorityInspector
 	regionScatterer         *scatter.RegionScatterer
 	splitScatterPendingMu   syncutil.RWMutex
-	splitScatterPending     *cache.TTLUint64
+	splitScatterPending     map[uint64]splitScatterPendingItem
 	pendingProcessedRegions *cache.TTLUint64
 	suspectKeyRanges        *cache.TTLString // suspect key-range regions that may need fix
 	patrolRegionContext     *PatrolRegionContext
@@ -118,7 +118,7 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		affinityChecker:         NewAffinityChecker(ctx, cluster, conf),
 		jointStateChecker:       NewJointStateChecker(cluster),
 		priorityInspector:       NewPriorityInspector(cluster, conf),
-		splitScatterPending:     cache.NewIDTTL(ctx, splitScatterQueueGCInterval, splitScatterPendingTTL),
+		splitScatterPending:     make(map[uint64]splitScatterPendingItem),
 		pendingProcessedRegions: pendingProcessedRegions,
 		suspectKeyRanges:        cache.NewStringTTL(ctx, time.Minute, 3*time.Minute),
 		patrolRegionContext:     &PatrolRegionContext{},
