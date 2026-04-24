@@ -31,8 +31,9 @@ const (
 )
 
 type splitScatterPendingItem struct {
-	regionID uint64
-	group    string
+	regionID    uint64
+	group       string
+	waitVersion uint64
 }
 
 type splitScatterDispatchCandidate struct {
@@ -60,14 +61,12 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 		if !ok {
 			continue
 		}
-		group, ok := value.(string)
+		pending, ok := value.(splitScatterPendingItem)
 		if !ok {
 			continue
 		}
-		pendingRegions = append(pendingRegions, splitScatterPendingItem{
-			regionID: regionID,
-			group:    group,
-		})
+		pending.regionID = regionID
+		pendingRegions = append(pendingRegions, pending)
 	}
 	c.splitScatterPendingMu.RUnlock()
 
@@ -75,6 +74,13 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	for _, pending := range pendingRegions {
 		region := c.cluster.GetRegion(pending.regionID)
 		if region == nil {
+			continue
+		}
+		currentVersion := uint64(0)
+		if region.GetRegionEpoch() != nil {
+			currentVersion = region.GetRegionEpoch().GetVersion()
+		}
+		if pending.waitVersion > 0 && currentVersion < pending.waitVersion {
 			continue
 		}
 		candidates = append(candidates, splitScatterDispatchCandidate{
@@ -111,9 +117,13 @@ func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs
 	c.splitScatterPendingMu.Lock()
 	defer c.splitScatterPendingMu.Unlock()
 	for _, regionID := range newRegionIDs {
-		c.splitScatterPending.Put(regionID, group)
+		c.splitScatterPending.Put(regionID, splitScatterPendingItem{group: group})
 	}
-	c.splitScatterPending.Put(sourceRegionID, group)
+	sourcePending := splitScatterPendingItem{group: group, waitVersion: 1}
+	if sourceRegion := c.cluster.GetRegion(sourceRegionID); sourceRegion != nil && sourceRegion.GetRegionEpoch() != nil {
+		sourcePending.waitVersion = sourceRegion.GetRegionEpoch().GetVersion() + 1
+	}
+	c.splitScatterPending.Put(sourceRegionID, sourcePending)
 }
 
 // DispatchSplitScatterRegions dispatches pending split-scatter regions.
@@ -136,15 +146,8 @@ func (c *Controller) DispatchSplitScatterRegions() {
 			continue
 		}
 		if op != nil {
-			if c.opController.AddWaitingOperator(op) == 0 {
+			if !c.opController.AddOperator(op) {
 				log.Info("dispatch internal split scatter add operator failed",
-					zap.Uint64("region-id", pending.regionID),
-					zap.String("group", pending.group),
-					zap.String("operator-desc", op.Desc()))
-				continue
-			}
-			if c.opController.GetOperator(region.GetID()) != op {
-				log.Info("dispatch internal split scatter operator lost before commit",
 					zap.Uint64("region-id", pending.regionID),
 					zap.String("group", pending.group),
 					zap.String("operator-desc", op.Desc()))

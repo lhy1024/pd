@@ -52,7 +52,7 @@ func TestRecordSplitScatterBatchCollectsByLegacyCPUScore(t *testing.T) {
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "n", "o", 120)
 	putSplitScatterRegion(tc, 103, "o", "", 999)
 
-	re.Equal([]uint64{103, 102, 100}, pendingRegionIDs(controller.collectTopPendingSplitScatter(3)))
+	re.Equal([]uint64{103, 102, 101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(3)))
 }
 
 func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
@@ -80,7 +80,26 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal(group, opGroup)
-	re.Equal(0, splitScatterPendingCount(controller))
+	re.Equal(1, splitScatterPendingCount(controller))
+	re.Equal(group, splitScatterPendingGroup(t, controller, 100))
+	re.Empty(pendingRegionIDs(controller.collectTopPendingSplitScatter(4)))
+}
+
+func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
+	re := require.New(t)
+	controller, tc, _, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	controller.RecordSplitScatterBatch(100, []uint64{101})
+	putSplitScatterRegion(tc, 101, "m", "", 120)
+
+	re.Equal([]uint64{101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
+
+	source := tc.GetRegion(100)
+	re.NotNil(source)
+	tc.PutRegion(source.Clone(core.WithIncVersion()))
+
+	re.Equal([]uint64{101, 100}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
 }
 
 func TestCollectTopPendingResolvesRangeHint(t *testing.T) {
@@ -206,9 +225,9 @@ func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uin
 	defer controller.splitScatterPendingMu.RUnlock()
 	value, ok := controller.splitScatterPending.Get(regionID)
 	require.True(t, ok)
-	group, ok := value.(string)
+	pending, ok := value.(splitScatterPendingItem)
 	require.True(t, ok)
-	return group
+	return pending.group
 }
 
 func pendingRegionIDs(regions []splitScatterPendingItem) []uint64 {
