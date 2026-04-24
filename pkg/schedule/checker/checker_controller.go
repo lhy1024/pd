@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/logutil"
+	"github.com/tikv/pd/pkg/utils/syncutil"
 )
 
 const (
@@ -77,7 +78,9 @@ type Controller struct {
 	affinityChecker         *AffinityChecker
 	jointStateChecker       *JointStateChecker
 	priorityInspector       *PriorityInspector
-	splitScatter            *splitScatterController
+	regionScatterer         *scatter.RegionScatterer
+	splitScatterPendingMu   syncutil.RWMutex
+	splitScatterPending     *cache.TTLUint64
 	pendingProcessedRegions *cache.TTLUint64
 	suspectKeyRanges        *cache.TTLString // suspect key-range regions that may need fix
 	patrolRegionContext     *PatrolRegionContext
@@ -115,6 +118,7 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		affinityChecker:         NewAffinityChecker(ctx, cluster, conf),
 		jointStateChecker:       NewJointStateChecker(cluster),
 		priorityInspector:       NewPriorityInspector(cluster, conf),
+		splitScatterPending:     cache.NewIDTTL(ctx, splitScatterQueueGCInterval, splitScatterPendingTTL),
 		pendingProcessedRegions: pendingProcessedRegions,
 		suspectKeyRanges:        cache.NewStringTTL(ctx, time.Minute, 3*time.Minute),
 		patrolRegionContext:     &PatrolRegionContext{},
@@ -122,14 +126,14 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		patrolRegionScanLimit:   calculateScanLimit(cluster),
 		metrics:                 newCheckerControllerMetrics(),
 	}
-	c.splitScatter = newSplitScatterController(ctx, cluster, opController, c.AddPendingProcessedRegions)
+	c.regionScatterer = scatter.NewRegionScatterer(ctx, cluster, opController, c.AddPendingProcessedRegions)
 	c.duration.Store(time.Duration(0))
 	return c
 }
 
 // GetRegionScatterer returns the shared region scatterer.
 func (c *Controller) GetRegionScatterer() *scatter.RegionScatterer {
-	return c.splitScatter.regionScatterer
+	return c.regionScatterer
 }
 
 // PatrolRegions is used to scan regions.
@@ -175,7 +179,7 @@ func (c *Controller) PatrolRegions() {
 			})
 
 			measure(c.metrics.patrolPhaseHistograms[phaseCheckPending], func() {
-				c.dispatchSplitScatterRegions()
+				c.DispatchSplitScatterRegions()
 				c.checkPendingProcessedRegions()
 			})
 
