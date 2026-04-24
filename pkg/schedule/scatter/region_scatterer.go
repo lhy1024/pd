@@ -613,10 +613,9 @@ func (r *RegionScatterer) selectNewPeer(context engineContext, group string, pee
 	}
 
 	var newPeer *metapb.Peer
-	var uncoveredPeer *metapb.Peer
-	uncoveredPeerStoreRegionCount := math.MaxInt
 	minCount := uint64(math.MaxUint64)
 	originStorePickedCount := uint64(math.MaxUint64)
+	bestStoreRegionCount := math.MaxInt
 	for _, store := range stores {
 		storeCount := context.selectedPeer.Get(store.GetID(), group)
 		if store.GetID() == peer.GetStoreId() {
@@ -635,24 +634,18 @@ func (r *RegionScatterer) selectNewPeer(context engineContext, group string, pee
 			StoreId: store.GetID(),
 			Role:    peer.GetRole(),
 		}
-		if internalScatter && store.GetID() != peer.GetStoreId() && storeCount == 0 {
-			storeRegionCount := store.GetRegionCount()
-			if uncoveredPeer == nil || storeRegionCount < uncoveredPeerStoreRegionCount ||
-				(storeRegionCount == uncoveredPeerStoreRegionCount && store.GetID() < uncoveredPeer.GetStoreId()) {
-				uncoveredPeer = candidate
-				uncoveredPeerStoreRegionCount = storeRegionCount
-			}
-		}
-		if storeCount < minCount {
+		storeRegionCount := store.GetRegionCount()
+		if storeCount < minCount ||
+			(internalScatter && storeCount == minCount &&
+				(storeRegionCount < bestStoreRegionCount ||
+					(storeRegionCount == bestStoreRegionCount && (newPeer == nil || store.GetID() < newPeer.GetStoreId())))) {
 			minCount = storeCount
 			newPeer = candidate
+			bestStoreRegionCount = storeRegionCount
 		}
 	}
-	if internalScatter && uncoveredPeer != nil {
-		return uncoveredPeer
-	}
 	if internalScatter && newPeer != nil && peer.GetStoreId() != newPeer.GetStoreId() &&
-		!peerMoveImprovesGroupGap(stores, context.selectedPeer, group, peer.GetStoreId(), newPeer.GetStoreId()) {
+		!peerMoveReducesSourceTargetGap(context.selectedPeer, group, peer.GetStoreId(), newPeer.GetStoreId()) {
 		return peer
 	}
 	if originStorePickedCount <= minCount {
@@ -705,40 +698,10 @@ func (r *RegionScatterer) selectAvailableLeaderStore(group string, region *core.
 	return selectedID
 }
 
-func peerMoveImprovesGroupGap(stores []*core.StoreInfo, selectedPeers *selectedStores, group string, fromStoreID, toStoreID uint64) bool {
-	beforeMax := uint64(0)
-	beforeMin := uint64(math.MaxUint64)
-	afterMax := uint64(0)
-	afterMin := uint64(math.MaxUint64)
-	for _, store := range stores {
-		storeID := store.GetID()
-		count := selectedPeers.Get(storeID, group)
-		if count > beforeMax {
-			beforeMax = count
-		}
-		if count < beforeMin {
-			beforeMin = count
-		}
-		afterCount := count
-		if storeID == fromStoreID {
-			if afterCount > 0 {
-				afterCount--
-			}
-		}
-		if storeID == toStoreID {
-			afterCount++
-		}
-		if afterCount > afterMax {
-			afterMax = afterCount
-		}
-		if afterCount < afterMin {
-			afterMin = afterCount
-		}
-	}
-	if beforeMin == uint64(math.MaxUint64) || afterMin == uint64(math.MaxUint64) {
-		return false
-	}
-	return afterMax-afterMin < beforeMax-beforeMin
+func peerMoveReducesSourceTargetGap(selectedPeers *selectedStores, group string, fromStoreID, toStoreID uint64) bool {
+	fromCount := selectedPeers.Get(fromStoreID, group)
+	toCount := selectedPeers.Get(toStoreID, group)
+	return fromCount > toCount+1
 }
 
 // Commit updates the group distribution after the scatter operator has been

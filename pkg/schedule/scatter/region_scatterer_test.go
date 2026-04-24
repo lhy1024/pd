@@ -1301,7 +1301,7 @@ func TestScatterInternalSkipsHotOnlyForAdmin(t *testing.T) {
 	}
 }
 
-func TestInternalScatterPrefersUnusedPeerStore(t *testing.T) {
+func TestInternalScatterKeepsOriginWhenPeerCountsAreEven(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1329,10 +1329,10 @@ func TestInternalScatterPrefersUnusedPeerStore(t *testing.T) {
 	re.Equal(uint64(1), adminPeer.GetStoreId())
 
 	internalPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, filters, true)
-	re.Equal(uint64(4), internalPeer.GetStoreId())
+	re.Equal(uint64(1), internalPeer.GetStoreId())
 }
 
-func TestInternalScatterPrefersLessLoadedUnusedPeerStore(t *testing.T) {
+func TestInternalScatterPrefersLessLoadedLowestCountStore(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1352,7 +1352,13 @@ func TestInternalScatterPrefersLessLoadedUnusedPeerStore(t *testing.T) {
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	group := "test-peer-less-loaded"
-	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{}))
+	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
+		1: 3,
+		2: 3,
+		3: 3,
+		4: 1,
+		5: 1,
+	}))
 	filters := []filter.Filter{filter.NewExcludedFilter("test", nil, map[uint64]struct{}{
 		2: {},
 		3: {},
@@ -1362,7 +1368,7 @@ func TestInternalScatterPrefersLessLoadedUnusedPeerStore(t *testing.T) {
 	re.Equal(uint64(5), internalPeer.GetStoreId())
 }
 
-func TestInternalScatterPeerKeepsOriginAfterCoverageWithoutImprovement(t *testing.T) {
+func TestInternalScatterPeerKeepsOriginWhenSourceTargetGapIsOne(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1392,7 +1398,7 @@ func TestInternalScatterPeerKeepsOriginAfterCoverageWithoutImprovement(t *testin
 	re.Equal(uint64(1), internalPeer.GetStoreId())
 }
 
-func TestInternalScatterPeerMovesOnlyWhenGapImproves(t *testing.T) {
+func TestInternalScatterPeerMovesWhenSourceTargetGapExceedsOne(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
