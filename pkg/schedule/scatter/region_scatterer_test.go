@@ -27,6 +27,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
@@ -763,6 +764,211 @@ func TestSeedGroupDistributionByRange(t *testing.T) {
 	val, exist := op.GetAdditionalInfo("group")
 	re.True(exist)
 	re.Equal(group, val)
+}
+
+func TestSeedGroupDistributionByRangeAppliesNetChange(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(2, "j", "t", 2, 1, 3)
+	tc.AddLeaderRegionWithRange(3, "t", "z", 3, 1, 2)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "seeded-net-change"
+	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+
+	region := tc.GetRegion(1)
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
+
+	op, err := scatterer.Scatter(region, group, true)
+	re.NoError(err)
+	re.NotNil(op)
+	finalPeers, finalLeaderStoreID := finalPlacementAfterScatter(region, op)
+
+	expectedPeerDistribution := cloneDistribution(peerSnapshot)
+	for _, peer := range region.GetPeers() {
+		expectedPeerDistribution[peer.GetStoreId()]--
+	}
+	for storeID := range finalPeers {
+		expectedPeerDistribution[storeID]++
+	}
+
+	expectedLeaderDistribution := cloneDistribution(leaderSnapshot)
+	expectedLeaderDistribution[region.GetLeader().GetStoreId()]--
+	expectedLeaderDistribution[finalLeaderStoreID]++
+	removeZeroCountEntries(expectedPeerDistribution)
+	removeZeroCountEntries(expectedLeaderDistribution)
+
+	peerDistribution, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(peerSnapshot, peerDistribution)
+
+	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(leaderSnapshot, leaderDistribution)
+
+	re.True(oc.AddOperator(op))
+	scatterer.Commit(region, op, group)
+
+	peerDistribution, ok = scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedPeerDistribution, peerDistribution)
+
+	leaderDistribution, ok = scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedLeaderDistribution, leaderDistribution)
+}
+
+func TestSeededDistributionSkipsUpdateWhenAddOperatorRejected(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(2, "j", "t", 1, 2, 3)
+	tc.AddLeaderRegionWithRange(3, "t", "z", 1, 2, 3)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "seeded-rollback"
+	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
+
+	scheduleCfg := tc.GetScheduleConfig().Clone()
+	scheduleCfg.SchedulerMaxWaitingOperator = 0
+	tc.SetScheduleConfig(scheduleCfg)
+
+	region := tc.GetRegion(1)
+	op, err := scatterer.Scatter(region, group, true)
+	re.NoError(err)
+	re.NotNil(op)
+	re.False(oc.AddOperator(op))
+
+	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	for i := uint64(1); i <= 4; i++ {
+		re.Equal(peerSnapshot[i], peerAfter[i])
+	}
+
+	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	for i := uint64(1); i <= 4; i++ {
+		re.Equal(leaderSnapshot[i], leaderAfter[i])
+	}
+}
+
+func TestCreateScatterRegionOperatorFailureAccountsCurrentPlacement(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opt := mockconfig.NewTestOptions()
+	tc := mockcluster.NewCluster(ctx, opt)
+	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+	for i := uint64(1); i <= 4; i++ {
+		tc.AddRegionStore(i, 0)
+		tc.SetStoreLastHeartbeatInterval(i, -10*time.Minute)
+	}
+
+	tc.AddLeaderRegionWithRange(1, "a", "j", 1, 2, 3)
+	region := tc.GetRegion(1)
+	region = region.Clone(core.WithRole(region.GetPeers()[1].GetId(), metapb.PeerRole_IncomingVoter))
+	tc.PutRegion(region)
+	region = tc.GetRegion(1)
+
+	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	group := "create-fail"
+	for _, storeID := range []uint64{1, 2, 3} {
+		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{storeID})
+	}
+	scatterer.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{1})
+
+	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	peerSnapshot := cloneDistribution(peerBefore)
+	leaderSnapshot := cloneDistribution(leaderBefore)
+
+	op, err := scatterer.Scatter(region, group, true)
+	re.Nil(op)
+	re.Error(err)
+	re.Contains(err.Error(), "failed to create scatter region operator")
+
+	expectedPeerDistribution := cloneDistribution(peerSnapshot)
+	for _, peer := range region.GetPeers() {
+		expectedPeerDistribution[peer.GetStoreId()]++
+	}
+	expectedLeaderDistribution := cloneDistribution(leaderSnapshot)
+	expectedLeaderDistribution[region.GetLeader().GetStoreId()]++
+
+	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedPeerDistribution, peerAfter)
+
+	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	re.True(ok)
+	re.Equal(expectedLeaderDistribution, leaderAfter)
+}
+
+func finalPlacementAfterScatter(region *core.RegionInfo, op *operator.Operator) (map[uint64]struct{}, uint64) {
+	finalPeers := make(map[uint64]struct{}, len(region.GetPeers()))
+	for _, peer := range region.GetPeers() {
+		finalPeers[peer.GetStoreId()] = struct{}{}
+	}
+	finalLeaderStoreID := region.GetLeader().GetStoreId()
+	if op == nil {
+		return finalPeers, finalLeaderStoreID
+	}
+	for i := range op.Len() {
+		switch step := op.Step(i).(type) {
+		case operator.TransferLeader:
+			finalLeaderStoreID = step.ToStore
+		case operator.AddPeer:
+			finalPeers[step.ToStore] = struct{}{}
+		case operator.AddLearner:
+			finalPeers[step.ToStore] = struct{}{}
+		case operator.RemovePeer:
+			delete(finalPeers, step.FromStore)
+		}
+	}
+	return finalPeers, finalLeaderStoreID
+}
+
+func removeZeroCountEntries(distribution map[uint64]uint64) {
+	for storeID, count := range distribution {
+		if count == 0 {
+			delete(distribution, storeID)
+		}
+	}
 }
 
 // TestSelectedStoresTooManyPeers tests if the peer count has changed due to the picking strategy.
