@@ -757,19 +757,6 @@ func (r *RegionInfo) GetReadCPUUsage() uint64 {
 	return r.cpuStats.GetUnifiedRead()
 }
 
-// HasCPUStats returns whether the region heartbeat carries cpu_stats.
-func (r *RegionInfo) HasCPUStats() bool {
-	return r.cpuStats != nil
-}
-
-// GetSchedulerCPUUsage returns the region-level scheduler CPU usage reported in cpu_stats.
-func (r *RegionInfo) GetSchedulerCPUUsage() uint64 {
-	if r.cpuStats == nil {
-		return 0
-	}
-	return r.cpuStats.GetScheduler()
-}
-
 // GetBytesRead returns the read bytes of the region.
 func (r *RegionInfo) GetBytesRead() uint64 {
 	return r.readBytes

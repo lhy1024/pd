@@ -1285,9 +1285,6 @@ func (c *RaftCluster) processRegionHeartbeat(ctx *core.MetaProcessContext, regio
 	tracer.OnRegionGuideFinished()
 	regionID := region.GetID()
 	if !saveKV && !saveCache {
-		if !c.IsServiceIndependent(constant.SchedulingServiceName) && c.HasPotentialPendingSplitScatterRegions() {
-			c.ObserveSplitScatterRegion(region)
-		}
 		// Due to some config changes need to update the region stats as well,
 		// so we do some extra checks here.
 		// TODO: Due to the accuracy requirements of the API "/regions/check/xxx",
@@ -1357,9 +1354,6 @@ func (c *RaftCluster) processRegionHeartbeat(ctx *core.MetaProcessContext, regio
 	}
 
 	tracer.OnSaveCacheFinished()
-	if !c.IsServiceIndependent(constant.SchedulingServiceName) && c.HasPotentialPendingSplitScatterRegions() {
-		c.ObserveSplitScatterRegion(region)
-	}
 	if hasRegionStats {
 		// handle region stats
 		ctx.MiscRunner.RunTask(

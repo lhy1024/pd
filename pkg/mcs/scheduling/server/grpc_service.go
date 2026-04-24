@@ -439,9 +439,6 @@ func (s *Service) AskBatchSplit(_ context.Context, request *schedulingpb.AskBatc
 	// If region splits during the scheduling process, regions with abnormal
 	// status may be left, and these regions need to be checked with higher
 	// priority.
-	// TODO: split-scatter batch tracking is only wired in monolithic PD today.
-	// Scheduling service deployments still fall back to AddPendingProcessedRegions
-	// and do not get index/record-aware split-scatter behavior yet.
 	c.GetCoordinator().GetCheckerController().AddPendingProcessedRegions(false, recordRegions...)
 
 	return &schedulingpb.AskBatchSplitResponse{

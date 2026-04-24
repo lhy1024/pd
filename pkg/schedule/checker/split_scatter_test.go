@@ -37,7 +37,7 @@ const (
 	splitScatterTestIndexID      int64  = 7
 )
 
-func TestRecordSplitScatterBatchAndObserveQueueByCPUScore(t *testing.T) {
+func TestRecordSplitScatterBatchCollectsByLegacyCPUScore(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
@@ -54,11 +54,7 @@ func TestRecordSplitScatterBatchAndObserveQueueByCPUScore(t *testing.T) {
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 102, "n", "o", 120)
 	putSplitScatterRegionWithCPUStats(tc, 103, "o", "", 0, 80, 999)
 
-	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
-	controller.ObserveSplitScatterRegion(tc.GetRegion(103))
-
-	re.Equal([]uint64{101, 102, 103}, controller.splitScatterQueue.collectTopPending(3))
+	re.Equal([]uint64{103, 102, 100}, controller.splitScatter.collectTopPending(3))
 }
 
 func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
@@ -70,26 +66,26 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	putSplitScatterRegion(tc, 101, "m", "t", 120)
 	putSplitScatterRegion(tc, 102, "t", "", 80)
 
-	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
-
 	group := splitScatterPendingGroup(t, controller, 101)
 
 	controller.dispatchSplitScatterRegions()
 
-	op := oc.GetOperator(101)
-	if op == nil {
-		op = oc.GetOperator(102)
+	var op *operator.Operator
+	for _, regionID := range []uint64{100, 101, 102} {
+		op = oc.GetOperator(regionID)
+		if op != nil {
+			break
+		}
 	}
 	re.NotNil(op)
 	re.Equal(scatter.InternalScatterOperatorDesc, op.Desc())
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal(group, opGroup)
-	re.Equal(1, splitScatterPendingCount(controller))
+	re.Equal(0, splitScatterPendingCount(controller))
 }
 
-func TestObserveSplitScatterRegionResolvesRangeHint(t *testing.T) {
+func TestCollectTopPendingResolvesRangeHint(t *testing.T) {
 	testCases := []struct {
 		name      string
 		startKey  []byte
@@ -137,21 +133,16 @@ func TestObserveSplitScatterRegionResolvesRangeHint(t *testing.T) {
 			controller.RecordSplitScatterBatch(100, []uint64{101})
 			putSplitScatterRegionWithKeys(tc, testCase.startKey, testCase.endKey, 120)
 
-			controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-
 			re.Equal(makeSplitScatterGroup(100, 101), splitScatterPendingGroup(t, controller, 101))
-
-			snapshots := controller.splitScatterQueue.collectTopPending(1)
-			re.Len(snapshots, 1)
-			re.Equal([]uint64{101}, snapshots)
-			rangeHint := splitScatterPendingRangeHint(t, controller, 101)
+			re.Equal([]uint64{101}, controller.splitScatter.collectTopPending(1))
+			rangeHint := resolveSplitScatterRangeHint(tc.GetRegion(101))
 			re.Equal(testCase.wantRange.startKey, rangeHint.startKey)
 			re.Equal(testCase.wantRange.endKey, rangeHint.endKey)
 		})
 	}
 }
 
-func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *testing.T) {
+func TestCollectTopPendingUsesLegacyCPUUsage(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
 	defer cleanup()
@@ -160,27 +151,7 @@ func TestObserveSplitScatterRegionFallsBackToLegacyCPUWhenCPUStatsMissing(t *tes
 	putSplitScatterRegionWithLegacyOnlyCPU(tc, 101, "m", "t", 120)
 	putSplitScatterRegionWithCPUStats(tc, 102, "t", "", 0, 80, 999)
 
-	controller.ObserveSplitScatterRegion(tc.GetRegion(101))
-	controller.ObserveSplitScatterRegion(tc.GetRegion(102))
-
-	snapshots := controller.splitScatterQueue.collectTopPending(2)
-	re.Equal([]uint64{101, 102}, snapshots)
-}
-
-func TestHasPotentialPendingSplitScatterRegions(t *testing.T) {
-	re := require.New(t)
-	controller, _, _, cleanup := newTestSplitScatterController(t)
-	defer cleanup()
-
-	re.False(controller.HasPotentialPendingSplitScatterRegions())
-
-	controller.RecordSplitScatterBatch(100, []uint64{101})
-	re.True(controller.HasPotentialPendingSplitScatterRegions())
-
-	controller.splitScatterQueue.remove(100)
-	re.True(controller.HasPotentialPendingSplitScatterRegions())
-	controller.splitScatterQueue.remove(101)
-	re.False(controller.HasPotentialPendingSplitScatterRegions())
+	re.Equal([]uint64{102, 101}, controller.splitScatter.collectTopPending(2))
 }
 
 func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Cluster, *operator.Controller, func()) {
@@ -196,7 +167,6 @@ func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Clus
 	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
 	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
 	controller := NewController(ctx, tc, tc.GetCheckerConfig(), oc)
-	controller.SetSplitScatterer(scatter.NewRegionScatterer(ctx, tc, oc, controller.AddPendingProcessedRegions))
 
 	cleanup := func() {
 		stream.Close()
@@ -207,10 +177,6 @@ func newTestSplitScatterController(t *testing.T) (*Controller, *mockcluster.Clus
 
 func putSplitScatterRegion(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, cpu uint64) {
 	putSplitScatterRegionWithCPUStats(tc, regionID, startKey, endKey, cpu, 0, 0)
-}
-
-func putSplitScatterRegionWithLegacyCPU(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, readCPU, legacyCPU uint64) {
-	putSplitScatterRegionWithCPUStats(tc, regionID, startKey, endKey, readCPU, 0, legacyCPU)
 }
 
 func putSplitScatterRegionWithCPUStats(tc *mockcluster.Cluster, regionID uint64, startKey, endKey string, readCPU, schedulerCPU, legacyCPU uint64) {
@@ -238,27 +204,16 @@ func putSplitScatterRegionWithKeys(tc *mockcluster.Cluster, startKey, endKey []b
 }
 
 func splitScatterPendingCount(controller *Controller) int {
-	controller.splitScatterQueue.mu.RLock()
-	defer controller.splitScatterQueue.mu.RUnlock()
-	return len(controller.splitScatterQueue.mu.pending.GetAllID())
+	return len(controller.splitScatter.pending.pendingIDs())
 }
 
 func splitScatterPendingGroup(t *testing.T, controller *Controller, regionID uint64) string {
 	t.Helper()
-	controller.splitScatterQueue.mu.RLock()
-	defer controller.splitScatterQueue.mu.RUnlock()
-	item, ok := controller.splitScatterQueue.getPendingItemLocked(regionID)
+	controller.splitScatter.pending.mu.RLock()
+	defer controller.splitScatter.pending.mu.RUnlock()
+	item, ok := controller.splitScatter.pending.getPendingItemLocked(regionID)
 	require.True(t, ok)
 	return item.group
-}
-
-func splitScatterPendingRangeHint(t *testing.T, controller *Controller, regionID uint64) splitScatterRangeHint {
-	t.Helper()
-	controller.splitScatterQueue.mu.RLock()
-	defer controller.splitScatterQueue.mu.RUnlock()
-	item, ok := controller.splitScatterQueue.getPendingItemLocked(regionID)
-	require.True(t, ok)
-	return item.rangeHint.clone()
 }
 
 func splitScatterIndexKeyPrefix() []byte {

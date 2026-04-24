@@ -77,8 +77,7 @@ type Controller struct {
 	affinityChecker         *AffinityChecker
 	jointStateChecker       *JointStateChecker
 	priorityInspector       *PriorityInspector
-	splitScatterQueue       *splitScatterManager
-	regionScatterer         *scatter.RegionScatterer
+	splitScatter            *splitScatterController
 	pendingProcessedRegions *cache.TTLUint64
 	suspectKeyRanges        *cache.TTLString // suspect key-range regions that may need fix
 	patrolRegionContext     *PatrolRegionContext
@@ -123,14 +122,14 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		patrolRegionScanLimit:   calculateScanLimit(cluster),
 		metrics:                 newCheckerControllerMetrics(),
 	}
-	c.splitScatterQueue = newSplitScatterManager(ctx)
+	c.splitScatter = newSplitScatterController(ctx, cluster, opController, c.AddPendingProcessedRegions)
 	c.duration.Store(time.Duration(0))
 	return c
 }
 
-// SetSplitScatterer wires the shared region scatterer used by split-scatter dispatch.
-func (c *Controller) SetSplitScatterer(splitScatterer *scatter.RegionScatterer) {
-	c.regionScatterer = splitScatterer
+// GetRegionScatterer returns the shared region scatterer.
+func (c *Controller) GetRegionScatterer() *scatter.RegionScatterer {
+	return c.splitScatter.regionScatterer
 }
 
 // PatrolRegions is used to scan regions.
