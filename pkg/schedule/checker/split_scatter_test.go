@@ -80,6 +80,9 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	opGroup, ok := op.GetAdditionalInfo("group")
 	re.True(ok)
 	re.Equal(group, opGroup)
+	for _, runningOp := range oc.GetOperators() {
+		re.False(hasPeerScatterStep(runningOp))
+	}
 	re.Equal(0, splitScatterPendingCount(controller))
 }
 
@@ -217,6 +220,16 @@ func pendingRegionIDs(regions []splitScatterPendingItem) []uint64 {
 		ids = append(ids, region.regionID)
 	}
 	return ids
+}
+
+func hasPeerScatterStep(op *operator.Operator) bool {
+	for i := range op.Len() {
+		switch op.Step(i).(type) {
+		case operator.AddPeer, operator.AddLearner, operator.RemovePeer:
+			return true
+		}
+	}
+	return false
 }
 
 func splitScatterIndexKeyPrefix() []byte {

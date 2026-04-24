@@ -43,6 +43,7 @@ import (
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/ratelimit"
+	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/grpcutil"
 	"github.com/tikv/pd/pkg/utils/keypath"
@@ -2028,7 +2029,9 @@ func (s *GrpcServer) ScatterRegion(ctx context.Context, request *pdpb.ScatterReg
 					"operator canceled because cannot add an operator to the execute queue"),
 			}, nil
 		}
-		rc.GetRegionScatterer().Commit(region, op, request.GetGroup())
+		rc.GetOperatorController().ApplyOnCurrentOperator(region.GetID(), op, func(current *operator.Operator) {
+			rc.GetRegionScatterer().Commit(region, current, request.GetGroup())
+		})
 	}
 
 	return &pdpb.ScatterRegionResponse{

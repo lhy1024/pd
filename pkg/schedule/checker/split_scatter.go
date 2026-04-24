@@ -21,6 +21,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pingcap/log"
+	"github.com/tikv/pd/pkg/schedule/operator"
+	"github.com/tikv/pd/pkg/schedule/scatter"
 )
 
 const (
@@ -40,20 +42,6 @@ type splitScatterPendingItem struct {
 type splitScatterRangeHint struct {
 	startKey []byte
 	endKey   []byte
-}
-
-func (c *Controller) recordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
-	if len(newRegionIDs) == 0 {
-		return
-	}
-	group := makeSplitScatterGroup(sourceRegionID, newRegionIDs[0])
-	c.splitScatterPendingMu.Lock()
-	defer c.splitScatterPendingMu.Unlock()
-
-	for _, regionID := range newRegionIDs {
-		c.splitScatterPending.Put(regionID, group)
-	}
-	c.splitScatterPending.Put(sourceRegionID, group)
 }
 
 func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPendingItem {
@@ -117,19 +105,56 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	return regions
 }
 
-func (c *Controller) removePendingSplitScatter(regionID uint64) {
-	c.splitScatterPendingMu.Lock()
-	defer c.splitScatterPendingMu.Unlock()
-	c.splitScatterPending.Remove(regionID)
-}
-
 func makeSplitScatterGroup(sourceRegionID, firstNewRegionID uint64) string {
 	return fmt.Sprintf("split-scatter-%d-%d", sourceRegionID, firstNewRegionID)
 }
 
 // RecordSplitScatterBatch records a newly split batch for later scatter.
 func (c *Controller) RecordSplitScatterBatch(sourceRegionID uint64, newRegionIDs []uint64) {
-	c.recordSplitScatterBatch(sourceRegionID, newRegionIDs)
+	if len(newRegionIDs) == 0 {
+		return
+	}
+	group := makeSplitScatterGroup(sourceRegionID, newRegionIDs[0])
+	c.splitScatterPendingMu.Lock()
+	defer c.splitScatterPendingMu.Unlock()
+	for _, regionID := range newRegionIDs {
+		c.splitScatterPending.Put(regionID, group)
+	}
+	c.splitScatterPending.Put(sourceRegionID, group)
+}
+
+func (c *Controller) pendingSplitScatterGroupCount(group string) int {
+	c.splitScatterPendingMu.RLock()
+	defer c.splitScatterPendingMu.RUnlock()
+	count := 0
+	for _, regionID := range c.splitScatterPending.GetAllID() {
+		value, ok := c.splitScatterPending.Get(regionID)
+		if !ok {
+			continue
+		}
+		pendingGroup, ok := value.(string)
+		if ok && pendingGroup == group {
+			count++
+		}
+	}
+	return count
+}
+
+func (c *Controller) hasRunningSplitScatterGroup(regionID uint64, group string) bool {
+	for _, op := range c.opController.GetOperators() {
+		if op == nil || op.RegionID() == regionID || op.Desc() != scatter.InternalScatterOperatorDesc {
+			continue
+		}
+		opGroup, ok := op.GetAdditionalInfo("group")
+		if ok && opGroup == group {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Controller) shouldOnlyScatterLeader(regionID uint64, group string) bool {
+	return c.pendingSplitScatterGroupCount(group) > 1 || c.hasRunningSplitScatterGroup(regionID, group)
 }
 
 // DispatchSplitScatterRegions dispatches pending split-scatter regions.
@@ -143,7 +168,7 @@ func (c *Controller) DispatchSplitScatterRegions() {
 		if len(rangeHint.startKey) > 0 {
 			c.regionScatterer.SeedGroupDistributionByRange(pending.group, rangeHint.startKey, rangeHint.endKey)
 		}
-		op, err := c.regionScatterer.ScatterInternal(region, pending.group)
+		op, err := c.regionScatterer.ScatterInternal(region, pending.group, c.shouldOnlyScatterLeader(pending.regionID, pending.group))
 		if err != nil {
 			log.Info("dispatch internal split scatter failed",
 				zap.Uint64("region-id", pending.regionID),
@@ -159,15 +184,18 @@ func (c *Controller) DispatchSplitScatterRegions() {
 					zap.String("operator-desc", op.Desc()))
 				continue
 			}
-			if c.opController.GetOperator(region.GetID()) != op {
+			if !c.opController.ApplyOnCurrentOperator(region.GetID(), op, func(current *operator.Operator) {
+				c.regionScatterer.Commit(region, current, pending.group)
+			}) {
 				log.Info("dispatch internal split scatter operator lost before commit",
 					zap.Uint64("region-id", pending.regionID),
 					zap.String("group", pending.group),
 					zap.String("operator-desc", op.Desc()))
 				continue
 			}
-			c.regionScatterer.Commit(region, op, pending.group)
 		}
-		c.removePendingSplitScatter(pending.regionID)
+		c.splitScatterPendingMu.Lock()
+		c.splitScatterPending.Remove(pending.regionID)
+		c.splitScatterPendingMu.Unlock()
 	}
 }

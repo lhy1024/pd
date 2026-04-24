@@ -673,7 +673,13 @@ func (h *Handler) AddScatterRegionOperator(regionID uint64, group string) error 
 	if err := h.addOperator(op); err != nil {
 		return err
 	}
-	s.Commit(region, op, group)
+	oc, err := h.GetOperatorController()
+	if err != nil {
+		return err
+	}
+	oc.ApplyOnCurrentOperator(region.GetID(), op, func(current *operator.Operator) {
+		s.Commit(region, current, group)
+	})
 	return nil
 }
 
