@@ -176,7 +176,11 @@ func dispatchSplitScatterInPatrol(t *testing.T, cluster *RaftCluster, cancelPatr
 	if wait != nil {
 		testutil.Eventually(require.New(t), wait)
 	} else {
-		time.Sleep(50 * time.Millisecond)
+		// Let patrol run at least one dispatch cycle before cancelling.
+		// A short sleep is sufficient since patrol iterates quickly over
+		// the pending set; the context cancel below ensures the goroutine
+		// exits cleanly.
+		time.Sleep(10 * time.Millisecond)
 	}
 	cancelPatrol()
 	select {
