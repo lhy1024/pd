@@ -458,7 +458,7 @@ func TestScatterGroupInConcurrency(t *testing.T) {
 			}
 		}
 
-		checker := func(selectStores func(*scatterState) *selectedStores, expected uint64, delta float64) {
+		checker := func(selectStores func(*scatterState) *localSelectedStores, expected uint64, delta float64) {
 			for i := range testCase.groupCount {
 				group := fmt.Sprintf("group-%v", i)
 				state := states[group]
@@ -480,11 +480,11 @@ func TestScatterGroupInConcurrency(t *testing.T) {
 			}
 		}
 		// For leader, we expect each store have about 20 leader for each group
-		checker(func(state *scatterState) *selectedStores {
+		checker(func(state *scatterState) *localSelectedStores {
 			return state.ordinaryEngine.selectedLeader
 		}, 20, 5)
 		// For peer, we expect each store have about 60 peers for each group
-		checker(func(state *scatterState) *selectedStores {
+		checker(func(state *scatterState) *localSelectedStores {
 			return state.ordinaryEngine.selectedPeer
 		}, 60, 15)
 	}
@@ -640,7 +640,7 @@ func TestRegionHasLearner(t *testing.T) {
 		re.NoError(err)
 		commitScatterOp(scatterer, state, region, op, group)
 	}
-	check := func(ss *selectedStores) {
+	check := func(ss *localSelectedStores) {
 		max := uint64(0)
 		min := uint64(math.MaxUint64)
 		for i := uint64(1); i <= max; i++ {
@@ -655,7 +655,7 @@ func TestRegionHasLearner(t *testing.T) {
 		re.LessOrEqual(max-min, uint64(2))
 	}
 	check(state.ordinaryEngine.selectedPeer)
-	checkLeader := func(ss *selectedStores) {
+	checkLeader := func(ss *localSelectedStores) {
 		max := uint64(0)
 		min := uint64(math.MaxUint64)
 		for i := uint64(1); i <= voterCount; i++ {
@@ -1290,17 +1290,18 @@ func TestInternalScatterKeepsOriginWhenPeerCountsAreEven(t *testing.T) {
 	re.NotNil(peer)
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	group := "test-peer-coverage"
-	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{}))
+	re.True(state.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{}))
 	filters := []filter.Filter{filter.NewExcludedFilter("test", nil, map[uint64]struct{}{
 		2: {},
 		3: {},
 	})}
 
-	adminPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, filters, false)
+	adminPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine.asSelectionContext(), group, peer, filters, false)
 	re.Equal(uint64(1), adminPeer.GetStoreId())
 
-	internalPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, filters, true)
+	internalPeer := scatterer.selectNewPeer(state.ordinaryEngine.asSelectionContext(), group, peer, filters, true)
 	re.Equal(uint64(1), internalPeer.GetStoreId())
 }
 
@@ -1323,8 +1324,9 @@ func TestInternalScatterPrefersLessLoadedLowestCountStore(t *testing.T) {
 	re.NotNil(peer)
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	group := "test-peer-less-loaded"
-	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
+	re.True(state.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
 		1: 3,
 		2: 3,
 		3: 3,
@@ -1336,7 +1338,7 @@ func TestInternalScatterPrefersLessLoadedLowestCountStore(t *testing.T) {
 		3: {},
 	})}
 
-	internalPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, filters, true)
+	internalPeer := scatterer.selectNewPeer(state.ordinaryEngine.asSelectionContext(), group, peer, filters, true)
 	re.Equal(uint64(5), internalPeer.GetStoreId())
 }
 
@@ -1357,8 +1359,9 @@ func TestInternalScatterPeerKeepsOriginWhenSourceTargetGapIsOne(t *testing.T) {
 	re.NotNil(peer)
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	group := "test-peer-post-coverage"
-	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
+	re.True(state.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
 		1: 2,
 		2: 2,
 		3: 2,
@@ -1366,7 +1369,7 @@ func TestInternalScatterPeerKeepsOriginWhenSourceTargetGapIsOne(t *testing.T) {
 		5: 1,
 	}))
 
-	internalPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, nil, true)
+	internalPeer := scatterer.selectNewPeer(state.ordinaryEngine.asSelectionContext(), group, peer, nil, true)
 	re.Equal(uint64(1), internalPeer.GetStoreId())
 }
 
@@ -1387,8 +1390,9 @@ func TestInternalScatterPeerMovesWhenSourceTargetGapExceedsOne(t *testing.T) {
 	re.NotNil(peer)
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	group := "test-peer-strict-improvement"
-	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
+	re.True(state.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
 		1: 6,
 		2: 4,
 		3: 4,
@@ -1396,7 +1400,7 @@ func TestInternalScatterPeerMovesWhenSourceTargetGapExceedsOne(t *testing.T) {
 		5: 1,
 	}))
 
-	internalPeer := scatterer.selectNewPeer(scatterer.ordinaryEngine, group, peer, nil, true)
+	internalPeer := scatterer.selectNewPeer(state.ordinaryEngine.asSelectionContext(), group, peer, nil, true)
 	re.Contains([]uint64{4, 5}, internalPeer.GetStoreId())
 }
 
@@ -1415,12 +1419,13 @@ func TestInternalScatterLeaderPrefersUnusedStore(t *testing.T) {
 	region := tc.AddLeaderRegion(1, 1, 2, 3)
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	group := "test-leader-coverage"
 
-	adminLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
+	adminLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
 	re.Equal(uint64(1), adminLeader)
 
-	internalLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
+	internalLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
 	re.Equal(uint64(4), internalLeader)
 }
 
@@ -1439,21 +1444,22 @@ func TestInternalScatterLeaderBreaksTiesByPeerDeficit(t *testing.T) {
 	region := tc.AddLeaderRegion(1, 1, 2, 3)
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	group := "test-leader-peer-deficit"
-	re.True(scatterer.ordinaryEngine.selectedLeader.InitGroupDistribution(group, map[uint64]uint64{
+	re.True(state.ordinaryEngine.selectedLeader.InitGroupDistribution(group, map[uint64]uint64{
 		1: 1,
 		4: 1,
 		5: 1,
 	}))
-	re.True(scatterer.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
+	re.True(state.ordinaryEngine.selectedPeer.InitGroupDistribution(group, map[uint64]uint64{
 		1: 10,
 		4: 9,
 		5: 2,
 	}))
 
-	adminLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, false)
+	adminLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
 	re.Equal(uint64(1), adminLeader)
 
-	internalLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine, true)
+	internalLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
 	re.Equal(uint64(5), internalLeader)
 }
