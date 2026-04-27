@@ -42,6 +42,10 @@ func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPend
 	return c.splitScatter.collectTopPendingSplitScatter(limit)
 }
 
+func (c *Controller) dispatchSplitScatterRegions() {
+	c.splitScatter.dispatchSplitScatterRegions()
+}
+
 func TestRecordSplitScatterBatchCollectsPendingRegions(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
@@ -73,7 +77,7 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 
 	group := splitScatterPendingGroup(t, controller, 101)
 
-	controller.DispatchSplitScatterRegions()
+	controller.dispatchSplitScatterRegions()
 
 	var op *operator.Operator
 	for _, regionID := range []uint64{100, 101, 102} {
@@ -99,7 +103,7 @@ func TestDispatchSplitScatterKeepsPendingUntilSplitHeartbeat(t *testing.T) {
 
 	controller.RecordSplitScatterBatch(100, []uint64{101})
 
-	controller.DispatchSplitScatterRegions()
+	controller.dispatchSplitScatterRegions()
 
 	re.Equal(2, splitScatterPendingCount(controller))
 	re.Nil(oc.GetOperator(101))
@@ -108,7 +112,7 @@ func TestDispatchSplitScatterKeepsPendingUntilSplitHeartbeat(t *testing.T) {
 
 	re.Equal([]uint64{101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
 
-	controller.DispatchSplitScatterRegions()
+	controller.dispatchSplitScatterRegions()
 
 	op := oc.GetOperator(101)
 	re.NotNil(op)
@@ -197,7 +201,7 @@ func TestDispatchSplitScatterBacksOffWhenRegionIsNotFullyReplicated(t *testing.T
 	controller.RecordSplitScatterBatch(100, []uint64{101})
 	putSplitScatterRegionWithStores(tc, 101, "m", "", 120, 1, 2)
 
-	controller.DispatchSplitScatterRegions()
+	controller.dispatchSplitScatterRegions()
 
 	re.Equal(2, splitScatterPendingCount(controller))
 	pending := splitScatterPendingItemAt(t, controller, 101)

@@ -142,11 +142,6 @@ func (c *splitScatterController) recordSplitScatterBatch(sourceRegionID uint64, 
 	c.pending[sourceRegionID] = sourcePending
 }
 
-// DispatchSplitScatterRegions dispatches pending split-scatter regions.
-func (c *Controller) DispatchSplitScatterRegions() {
-	c.splitScatter.dispatchSplitScatterRegions()
-}
-
 func (c *splitScatterController) dispatchSplitScatterRegions() {
 	for _, pending := range c.collectTopPendingSplitScatter(splitScatterDispatchLimit) {
 		region := c.cluster.GetRegion(pending.regionID)

@@ -16,8 +16,10 @@ package cluster
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 
@@ -52,7 +54,7 @@ func TestHandleAskBatchSplitSchedulesSplitScatterInPatrol(t *testing.T) {
 	re.NoError(cluster.processRegionHeartbeat(core.ContextTODO(), newSplitScatterRegion(splitRegionIDs[0], []byte("m"), []byte("t"), 120)))
 	re.NoError(cluster.processRegionHeartbeat(core.ContextTODO(), newSplitScatterRegion(splitRegionIDs[1], []byte("t"), []byte(""), 80)))
 
-	cluster.GetCoordinator().GetCheckerController().DispatchSplitScatterRegions()
+	dispatchSplitScatterForTest(t, cluster)
 
 	group := ""
 	for _, regionID := range splitRegionIDs {
@@ -97,7 +99,7 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 		newSplitScatterRegion(splitRegionID, newSplitScatterIndexKey("t"), newSplitScatterIndexKey("w"), 120),
 	))
 
-	cluster.GetCoordinator().GetCheckerController().DispatchSplitScatterRegions()
+	dispatchSplitScatterForTest(t, cluster)
 
 	op := cluster.GetOperatorController().GetOperator(splitRegionID)
 	re.NotNil(op)
@@ -126,7 +128,7 @@ func TestHandleAskBatchSplitSkipsSplitScatterForSizeReason(t *testing.T) {
 		newSplitScatterRegion(splitRegionID, []byte("m"), []byte(""), 120),
 	))
 
-	cluster.GetCoordinator().GetCheckerController().DispatchSplitScatterRegions()
+	dispatchSplitScatterForTest(t, cluster)
 
 	re.Nil(cluster.GetOperatorController().GetOperator(splitRegionID))
 	re.Nil(cluster.GetOperatorController().GetOperator(100))
@@ -153,6 +155,21 @@ func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
 
 	re.NoError(cluster.putRegion(newSplitScatterRegion(100, []byte(""), []byte("m"), 0)))
 	return cluster
+}
+
+type splitScatterControllerForTest struct{}
+
+//go:linkname dispatchSplitScatterRegionsForTest github.com/tikv/pd/pkg/schedule/checker.(*splitScatterController).dispatchSplitScatterRegions
+func dispatchSplitScatterRegionsForTest(*splitScatterControllerForTest)
+
+func dispatchSplitScatterForTest(t *testing.T, cluster *RaftCluster) {
+	t.Helper()
+	re := require.New(t)
+	checkerController := cluster.GetCoordinator().GetCheckerController()
+	splitScatterField := reflect.ValueOf(checkerController).Elem().FieldByName("splitScatter")
+	re.True(splitScatterField.IsValid())
+	re.False(splitScatterField.IsNil())
+	dispatchSplitScatterRegionsForTest((*splitScatterControllerForTest)(unsafe.Pointer(splitScatterField.Pointer())))
 }
 
 func newSplitScatterRegion(regionID uint64, start, end []byte, cpu uint64) *core.RegionInfo {
