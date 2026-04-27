@@ -575,7 +575,7 @@ func TestScattersGroup(t *testing.T) {
 
 func TestSelectedStoreGetGroupDistributionClone(t *testing.T) {
 	re := require.New(t)
-	stores := newSelectedStores()
+	stores := newLocalSelectedStores()
 	stores.Update("testgroup", nil, []uint64{1})
 	distribution, ok := stores.getGroupDistributionClone("testgroup")
 	re.True(ok)
