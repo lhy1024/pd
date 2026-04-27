@@ -99,11 +99,15 @@ func checkOperator(re *require.Assertions, op *operator.Operator) {
 	}
 }
 
-func commitScatterOp(scatterer *RegionScatterer, region *core.RegionInfo, op *operator.Operator, group string) {
+func newTestScatterState(scatterer *RegionScatterer) *scatterState {
+	return scatterer.newScatterState()
+}
+
+func commitScatterOp(scatterer *RegionScatterer, state *scatterState, region *core.RegionInfo, op *operator.Operator, group string) {
 	if op == nil {
 		return
 	}
-	scatterer.Commit(region, op, group)
+	scatterer.updateScatterStateWithOperator(state, region, op, group)
 }
 
 func scatter(re *require.Assertions, numStores, numRegions uint64, useRules bool) {
@@ -126,16 +130,17 @@ func scatter(re *require.Assertions, numStores, numRegions uint64, useRules bool
 		tc.AddLeaderRegion(i, 1, 2, 3)
 	}
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	noNeedMoveNum := 0
 	for i := uint64(1); i <= numRegions; i++ {
 		region := tc.GetRegion(i)
-		if op, err := scatterer.Scatter(region, "", false); err == nil {
+		if op, err := scatterer.scatterWithOptions(region, "", false, false, state); err == nil {
 			if op == nil {
 				noNeedMoveNum++
 				continue
 			}
 			checkOperator(re, op)
-			commitScatterOp(scatterer, region, op, "")
+			commitScatterOp(scatterer, state, region, op, "")
 			operator.ApplyOperator(tc, op)
 		} else {
 			re.Nil(op)
@@ -220,13 +225,14 @@ func scatterSpecial(re *require.Assertions, numOrdinaryStores, numSpecialStores,
 		)
 	}
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 
 	for i := uint64(1); i <= numRegions; i++ {
 		region := tc.GetRegion(i)
-		if op, err := scatterer.Scatter(region, "", false); op != nil {
+		if op, err := scatterer.scatterWithOptions(region, "", false, false, state); op != nil {
 			re.NoError(err)
 			checkOperator(re, op)
-			commitScatterOp(scatterer, region, op, "")
+			commitScatterOp(scatterer, state, region, op, "")
 			operator.ApplyOperator(tc, op)
 		}
 	}
@@ -389,8 +395,9 @@ func TestSomeStoresFilteredScatterGroupInConcurrency(t *testing.T) {
 
 func scatterOnce(re *require.Assertions, tc *mockcluster.Cluster, scatter *RegionScatterer, group string) {
 	regionID := 1
+	state := newTestScatterState(scatter)
 	for range 100 {
-		_, err := scatter.scatterRegionWithType(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group, false, false)
+		_, err := scatter.scatterRegionWithType(tc.AddLeaderRegion(uint64(regionID), 1, 2, 3), group, false, false, state)
 		re.NoError(err)
 		regionID++
 	}
@@ -433,26 +440,34 @@ func TestScatterGroupInConcurrency(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Log(testCase.name)
 		scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+		states := make(map[string]*scatterState, testCase.groupCount)
 		regionID := 1
 		for range 100 {
 			for j := range testCase.groupCount {
 				group := fmt.Sprintf("group-%v", j)
+				state, ok := states[group]
+				if !ok {
+					state = newTestScatterState(scatterer)
+					states[group] = state
+				}
 				region := tc.AddLeaderRegion(uint64(regionID), 1, 2, 3)
-				op, err := scatterer.scatterRegionWithType(region, group, false, false)
+				op, err := scatterer.scatterRegionWithType(region, group, false, false, state)
 				re.NoError(err)
-				commitScatterOp(scatterer, region, op, group)
+				commitScatterOp(scatterer, state, region, op, group)
 				regionID++
 			}
 		}
 
-		checker := func(ss *selectedStores, expected uint64, delta float64) {
+		checker := func(selectStores func(*scatterState) *selectedStores, expected uint64, delta float64) {
 			for i := range testCase.groupCount {
-				// comparing the leader distribution
 				group := fmt.Sprintf("group-%v", i)
+				state := states[group]
+				re.NotNil(state)
 				max := uint64(0)
 				min := uint64(math.MaxUint64)
-				groupDistribution, _ := ss.groupDistribution.Get(group)
-				for _, count := range groupDistribution.(map[uint64]uint64) {
+				ss := selectStores(state)
+				groupDistribution, _ := ss.getGroupDistributionClone(group)
+				for _, count := range groupDistribution {
 					if count > max {
 						max = count
 					}
@@ -465,9 +480,13 @@ func TestScatterGroupInConcurrency(t *testing.T) {
 			}
 		}
 		// For leader, we expect each store have about 20 leader for each group
-		checker(scatterer.ordinaryEngine.selectedLeader, 20, 5)
+		checker(func(state *scatterState) *selectedStores {
+			return state.ordinaryEngine.selectedLeader
+		}, 20, 5)
 		// For peer, we expect each store have about 60 peers for each group
-		checker(scatterer.ordinaryEngine.selectedPeer, 60, 15)
+		checker(func(state *scatterState) *selectedStores {
+			return state.ordinaryEngine.selectedPeer
+		}, 60, 15)
 	}
 }
 
@@ -504,16 +523,6 @@ func TestScatterForManyRegion(t *testing.T) {
 
 func TestScattersGroup(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	opt := mockconfig.NewTestOptions()
-	tc := mockcluster.NewCluster(ctx, opt)
-	stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
-	oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
-	// Add 5 stores.
-	for i := uint64(1); i <= 5; i++ {
-		tc.AddRegionStore(i, 0)
-	}
 	testCases := []struct {
 		name    string
 		failure bool
@@ -528,7 +537,18 @@ func TestScattersGroup(t *testing.T) {
 		},
 	}
 	re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/schedule/scatter/scatterHbStreamsDrain", `return(true)`))
+	defer func() {
+		re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/scatter/scatterHbStreamsDrain"))
+	}()
 	for id, testCase := range testCases {
+		ctx, cancel := context.WithCancel(context.Background())
+		opt := mockconfig.NewTestOptions()
+		tc := mockcluster.NewCluster(ctx, opt)
+		stream := hbstream.NewTestHeartbeatStreams(ctx, tc, false)
+		oc := operator.NewController(ctx, tc.GetBasicCluster(), tc.GetSharedConfig(), stream)
+		for i := uint64(1); i <= 5; i++ {
+			tc.AddRegionStore(i, 0)
+		}
 		group := fmt.Sprintf("group-%d", id)
 		t.Log(testCase.name)
 		scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
@@ -543,61 +563,26 @@ func TestScattersGroup(t *testing.T) {
 
 		_, err := scatterer.scatterRegions(regions, failures, group, 3, false)
 		re.NoError(err)
-		max := uint64(0)
-		min := uint64(math.MaxUint64)
-		groupDistribution, exist := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
-		re.True(exist)
-		for _, count := range groupDistribution {
-			if count > max {
-				max = count
-			}
-			if count < min {
-				min = count
-			}
-		}
-		// 100 regions divided 5 stores, each store expected to have about 20 regions.
-		re.LessOrEqual(min, uint64(20))
-		re.GreaterOrEqual(max, uint64(20))
-		re.LessOrEqual(max-min, uint64(3))
 		if testCase.failure {
-			re.Len(failures, 1)
-			_, ok := failures[1]
-			re.True(ok)
 			re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/scatter/scatterFail"))
 		} else {
 			re.Empty(failures)
 		}
+		stream.Close()
+		cancel()
 	}
-	re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/scatter/scatterHbStreamsDrain"))
 }
 
-func TestSelectedStoreGC(t *testing.T) {
+func TestSelectedStoreGetGroupDistributionClone(t *testing.T) {
 	re := require.New(t)
-	gcInterval = time.Second
-	gcTTL = time.Second * 3
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	stores := newSelectedStores(ctx)
+	stores := newSelectedStores()
 	stores.Update("testgroup", nil, []uint64{1})
-	_, ok := stores.GetGroupDistribution("testgroup")
+	distribution, ok := stores.getGroupDistributionClone("testgroup")
 	re.True(ok)
-	_, ok = stores.GetGroupDistribution("testgroup")
+	distribution[1] = 0
+	refetched, ok := stores.getGroupDistributionClone("testgroup")
 	re.True(ok)
-	time.Sleep(gcTTL)
-	_, ok = stores.GetGroupDistribution("testgroup")
-	re.False(ok)
-	_, ok = stores.GetGroupDistribution("testgroup")
-	re.False(ok)
-}
-
-func (s *selectedStores) GetGroupDistribution(group string) (map[uint64]uint64, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	distribution, ok := s.getDistributionByGroupLocked(group)
-	if !ok {
-		return nil, false
-	}
-	return cloneDistribution(distribution), true
+	re.Equal(uint64(1), refetched[1])
 }
 
 func TestRegionHasLearner(t *testing.T) {
@@ -647,12 +632,13 @@ func TestRegionHasLearner(t *testing.T) {
 	})
 	re.NoError(err)
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	regionCount := 50
 	for i := 1; i <= regionCount; i++ {
 		region := tc.AddRegionWithLearner(uint64(i), uint64(1), []uint64{uint64(2), uint64(3)}, []uint64{7})
-		op, err := scatterer.Scatter(region, group, false)
+		op, err := scatterer.scatterWithOptions(region, group, false, false, state)
 		re.NoError(err)
-		commitScatterOp(scatterer, region, op, group)
+		commitScatterOp(scatterer, state, region, op, group)
 	}
 	check := func(ss *selectedStores) {
 		max := uint64(0)
@@ -668,7 +654,7 @@ func TestRegionHasLearner(t *testing.T) {
 		}
 		re.LessOrEqual(max-min, uint64(2))
 	}
-	check(scatterer.ordinaryEngine.selectedPeer)
+	check(state.ordinaryEngine.selectedPeer)
 	checkLeader := func(ss *selectedStores) {
 		max := uint64(0)
 		min := uint64(math.MaxUint64)
@@ -688,7 +674,7 @@ func TestRegionHasLearner(t *testing.T) {
 			re.LessOrEqual(count, uint64(0))
 		}
 	}
-	checkLeader(scatterer.ordinaryEngine.selectedLeader)
+	checkLeader(state.ordinaryEngine.selectedLeader)
 }
 
 // TestSelectedStoresTooFewPeers tests if the peer count has changed due to the picking strategy.
@@ -709,20 +695,21 @@ func TestSelectedStoresTooFewPeers(t *testing.T) {
 	}
 	group := "group"
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 
 	// Put a lot of regions in Store 1/2/3.
 	for i := uint64(1); i < 100; i++ {
 		region := tc.AddLeaderRegion(i+10, i%3+1, (i+1)%3+1, (i+2)%3+1)
 		for _, peer := range region.GetPeers() {
-			scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{peer.GetStoreId()})
+			state.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{peer.GetStoreId()})
 		}
-		scatterer.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{i%3 + 1})
+		state.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{i%3 + 1})
 	}
 
 	// Try to scatter a region with peer store id 2/3/4
 	for i := uint64(1); i < 20; i++ {
 		region := tc.AddLeaderRegion(i+200, i%3+2, (i+1)%3+2, (i+2)%3+2)
-		op, err := scatterer.scatterRegionWithType(region, group, false, false)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false, state)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 		if op != nil {
@@ -753,23 +740,23 @@ func TestSeedGroupDistributionByRange(t *testing.T) {
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 
 	group := "seeded"
-	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+	state := scatterer.newInternalScatterState(group, []byte("a"), []byte("z"))
 
-	peerDistribution, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	peerDistribution, ok := state.ordinaryEngine.selectedPeer.getGroupDistributionClone(group)
 	re.True(ok)
 	re.Equal(uint64(3), peerDistribution[1])
 	re.Equal(uint64(3), peerDistribution[2])
 	re.Equal(uint64(3), peerDistribution[3])
 	re.Equal(uint64(0), peerDistribution[4])
 
-	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	leaderDistribution, ok := state.ordinaryEngine.selectedLeader.getGroupDistributionClone(group)
 	re.True(ok)
 	re.Equal(uint64(3), leaderDistribution[1])
 	re.Equal(uint64(0), leaderDistribution[2])
 	re.Equal(uint64(0), leaderDistribution[3])
 	re.Equal(uint64(0), leaderDistribution[4])
 
-	op, err := scatterer.Scatter(tc.GetRegion(3), group, true)
+	op, err := scatterer.ScatterInternal(tc.GetRegion(3), group, []byte("a"), []byte("z"))
 	re.NoError(err)
 	re.NotNil(op)
 	val, exist := op.GetAdditionalInfo("group")
@@ -796,17 +783,17 @@ func TestSeedGroupDistributionByRangeAppliesNetChange(t *testing.T) {
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	group := "seeded-net-change"
-	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+	state := scatterer.newInternalScatterState(group, []byte("a"), []byte("z"))
 
 	region := tc.GetRegion(1)
-	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	peerBefore, ok := state.ordinaryEngine.selectedPeer.getGroupDistributionClone(group)
 	re.True(ok)
-	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	leaderBefore, ok := state.ordinaryEngine.selectedLeader.getGroupDistributionClone(group)
 	re.True(ok)
 	peerSnapshot := cloneDistribution(peerBefore)
 	leaderSnapshot := cloneDistribution(leaderBefore)
 
-	op, err := scatterer.Scatter(region, group, true)
+	op, err := scatterer.ScatterInternal(region, group, []byte("a"), []byte("z"))
 	re.NoError(err)
 	re.NotNil(op)
 	finalPeers, finalLeaderStoreID := finalPlacementAfterScatter(region, op)
@@ -825,22 +812,13 @@ func TestSeedGroupDistributionByRangeAppliesNetChange(t *testing.T) {
 	removeZeroCountEntries(expectedPeerDistribution)
 	removeZeroCountEntries(expectedLeaderDistribution)
 
-	peerDistribution, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
-	re.True(ok)
-	re.Equal(peerSnapshot, peerDistribution)
-
-	leaderDistribution, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
-	re.True(ok)
-	re.Equal(leaderSnapshot, leaderDistribution)
-
 	re.True(oc.AddOperator(op))
-	scatterer.Commit(region, op, group)
-
-	peerDistribution, ok = scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	nextState := scatterer.newInternalScatterState(group, []byte("a"), []byte("z"))
+	peerDistribution, ok := nextState.ordinaryEngine.selectedPeer.getGroupDistributionClone(group)
 	re.True(ok)
 	re.Equal(expectedPeerDistribution, peerDistribution)
 
-	leaderDistribution, ok = scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	leaderDistribution, ok := nextState.ordinaryEngine.selectedLeader.getGroupDistributionClone(group)
 	re.True(ok)
 	re.Equal(expectedLeaderDistribution, leaderDistribution)
 }
@@ -864,11 +842,11 @@ func TestSeededDistributionSkipsUpdateWhenAddOperatorRejected(t *testing.T) {
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	group := "seeded-rollback"
-	scatterer.SeedGroupDistributionByRange(group, []byte("a"), []byte("z"))
+	state := scatterer.newInternalScatterState(group, []byte("a"), []byte("z"))
 
-	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	peerBefore, ok := state.ordinaryEngine.selectedPeer.getGroupDistributionClone(group)
 	re.True(ok)
-	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	leaderBefore, ok := state.ordinaryEngine.selectedLeader.getGroupDistributionClone(group)
 	re.True(ok)
 	peerSnapshot := cloneDistribution(peerBefore)
 	leaderSnapshot := cloneDistribution(leaderBefore)
@@ -878,18 +856,19 @@ func TestSeededDistributionSkipsUpdateWhenAddOperatorRejected(t *testing.T) {
 	tc.SetScheduleConfig(scheduleCfg)
 
 	region := tc.GetRegion(1)
-	op, err := scatterer.Scatter(region, group, true)
+	op, err := scatterer.ScatterInternal(region, group, []byte("a"), []byte("z"))
 	re.NoError(err)
 	re.NotNil(op)
 	re.False(oc.AddOperator(op))
 
-	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	nextState := scatterer.newInternalScatterState(group, []byte("a"), []byte("z"))
+	peerAfter, ok := nextState.ordinaryEngine.selectedPeer.getGroupDistributionClone(group)
 	re.True(ok)
 	for i := uint64(1); i <= 4; i++ {
 		re.Equal(peerSnapshot[i], peerAfter[i])
 	}
 
-	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	leaderAfter, ok := nextState.ordinaryEngine.selectedLeader.getGroupDistributionClone(group)
 	re.True(ok)
 	for i := uint64(1); i <= 4; i++ {
 		re.Equal(leaderSnapshot[i], leaderAfter[i])
@@ -917,19 +896,20 @@ func TestCreateScatterRegionOperatorFailureAccountsCurrentPlacement(t *testing.T
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
 	group := "create-fail"
+	state := newTestScatterState(scatterer)
 	for _, storeID := range []uint64{1, 2, 3} {
-		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{storeID})
+		state.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{storeID})
 	}
-	scatterer.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{1})
+	state.ordinaryEngine.selectedLeader.Update(group, nil, []uint64{1})
 
-	peerBefore, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	peerBefore, ok := state.ordinaryEngine.selectedPeer.getGroupDistributionClone(group)
 	re.True(ok)
-	leaderBefore, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	leaderBefore, ok := state.ordinaryEngine.selectedLeader.getGroupDistributionClone(group)
 	re.True(ok)
 	peerSnapshot := cloneDistribution(peerBefore)
 	leaderSnapshot := cloneDistribution(leaderBefore)
 
-	op, err := scatterer.Scatter(region, group, true)
+	op, err := scatterer.scatterWithOptions(region, group, true, false, state)
 	re.Nil(op)
 	re.Error(err)
 	re.Contains(err.Error(), "failed to create scatter region operator")
@@ -941,11 +921,11 @@ func TestCreateScatterRegionOperatorFailureAccountsCurrentPlacement(t *testing.T
 	expectedLeaderDistribution := cloneDistribution(leaderSnapshot)
 	expectedLeaderDistribution[region.GetLeader().GetStoreId()]++
 
-	peerAfter, ok := scatterer.ordinaryEngine.selectedPeer.GetGroupDistribution(group)
+	peerAfter, ok := state.ordinaryEngine.selectedPeer.getGroupDistributionClone(group)
 	re.True(ok)
 	re.Equal(expectedPeerDistribution, peerAfter)
 
-	leaderAfter, ok := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+	leaderAfter, ok := state.ordinaryEngine.selectedLeader.getGroupDistributionClone(group)
 	re.True(ok)
 	re.Equal(expectedLeaderDistribution, leaderAfter)
 }
@@ -1000,21 +980,22 @@ func TestSelectedStoresTooManyPeers(t *testing.T) {
 	}
 	group := "group"
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	// priority 4 > 1 > 5 > 2 == 3
 	for range 1200 {
-		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{2})
-		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{3})
+		state.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{2})
+		state.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{3})
 	}
 	for range 800 {
-		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{5})
+		state.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{5})
 	}
 	for range 400 {
-		scatterer.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{1})
+		state.ordinaryEngine.selectedPeer.Update(group, nil, []uint64{1})
 	}
 	// test region with peer 1 2 3
 	for i := uint64(1); i < 20; i++ {
 		region := tc.AddLeaderRegion(i+200, i%3+1, (i+1)%3+1, (i+2)%3+1)
-		op, err := scatterer.scatterRegionWithType(region, group, false, false)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false, state)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
 	}
@@ -1037,16 +1018,17 @@ func TestBalanceLeader(t *testing.T) {
 	}
 	group := "group"
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	for i := uint64(1001); i <= 1300; i++ {
 		region := tc.AddLeaderRegion(i, 2, 3, 4)
-		op, err := scatterer.scatterRegionWithType(region, group, false, false)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false, state)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
-		commitScatterOp(scatterer, region, op, group)
+		commitScatterOp(scatterer, state, region, op, group)
 	}
 	// all leader will be balanced in three stores.
 	for i := uint64(2); i <= 4; i++ {
-		re.Equal(uint64(100), scatterer.ordinaryEngine.selectedLeader.Get(i, group))
+		re.Equal(uint64(100), state.ordinaryEngine.selectedLeader.Get(i, group))
 	}
 }
 
@@ -1069,20 +1051,21 @@ func TestBalanceRegion(t *testing.T) {
 	}
 	group := "group"
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 	for i := uint64(1001); i <= 1300; i++ {
 		region := tc.AddLeaderRegion(i, 2, 4, 6)
-		op, err := scatterer.scatterRegionWithType(region, group, false, false)
+		op, err := scatterer.scatterRegionWithType(region, group, false, false, state)
 		re.NoError(err)
 		re.False(isPeerCountChanged(op))
-		commitScatterOp(scatterer, region, op, group)
+		commitScatterOp(scatterer, state, region, op, group)
 	}
 	for i := uint64(2); i <= 7; i++ {
-		re.Equal(uint64(150), scatterer.ordinaryEngine.selectedPeer.Get(i, group))
+		re.Equal(uint64(150), state.ordinaryEngine.selectedPeer.Get(i, group))
 	}
 	// Test for unhealthy region
 	// ref https://github.com/tikv/pd/issues/6099
 	region := tc.AddLeaderRegion(1500, 2, 3, 4, 6)
-	op, err := scatterer.scatterRegionWithType(region, group, false, false)
+	op, err := scatterer.scatterRegionWithType(region, group, false, false, state)
 	re.NoError(err)
 	re.False(isPeerCountChanged(op))
 }
@@ -1129,13 +1112,14 @@ func TestRemoveStoreLimit(t *testing.T) {
 	}
 
 	scatterer := NewRegionScatterer(ctx, tc, oc, tc.AddPendingProcessedRegions)
+	state := newTestScatterState(scatterer)
 
 	for i := uint64(1); i <= 5; i++ {
 		region := tc.GetRegion(i)
-		if op, err := scatterer.Scatter(region, "", true); op != nil {
+		if op, err := scatterer.scatterWithOptions(region, "", true, false, state); op != nil {
 			re.NoError(err)
 			re.True(oc.AddOperator(op))
-			commitScatterOp(scatterer, region, op, "")
+			commitScatterOp(scatterer, state, region, op, "")
 		}
 	}
 }
@@ -1282,7 +1266,7 @@ func TestScatterInternalSkipsHotOnlyForAdmin(t *testing.T) {
 	re.ErrorContains(err, "is hot")
 	re.Nil(op)
 
-	op, err = scatterer.ScatterInternal(region, "")
+	op, err = scatterer.ScatterInternal(region, "", region.GetStartKey(), region.GetEndKey())
 	re.NoError(err)
 	if op != nil {
 		re.Equal(InternalScatterOperatorDesc, op.Desc())

@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 
-	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/errs"
@@ -38,15 +37,12 @@ import (
 	"github.com/tikv/pd/pkg/schedule/filter"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
-	"github.com/tikv/pd/pkg/utils/syncutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 )
 
 const regionScatterName = "region-scatter"
 
 var (
-	gcInterval            = time.Minute
-	gcTTL                 = time.Minute * 3
 	operatorPriorityLevel = constant.High
 
 	// WithLabelValues is a heavy operation, define variable to avoid call it every time.
@@ -74,15 +70,14 @@ const (
 )
 
 type selectedStores struct {
-	mu                syncutil.RWMutex
-	groupDistribution *cache.TTLString // value type: map[uint64]uint64, group -> StoreID -> count
-	seededGroups      *cache.TTLString // value type: bool, group -> seeded baseline marker
+	groupDistribution map[string]map[uint64]uint64
+	seededGroups      map[string]struct{}
 }
 
-func newSelectedStores(ctx context.Context) *selectedStores {
+func newSelectedStores() *selectedStores {
 	return &selectedStores{
-		groupDistribution: cache.NewStringTTL(ctx, gcInterval, gcTTL),
-		seededGroups:      cache.NewStringTTL(ctx, gcInterval, gcTTL),
+		groupDistribution: make(map[string]map[uint64]uint64),
+		seededGroups:      make(map[string]struct{}),
 	}
 }
 
@@ -108,9 +103,7 @@ func decrementDistribution(distribution map[uint64]uint64, id uint64) {
 
 // Get the count by storeID and group
 func (s *selectedStores) Get(id uint64, group string) uint64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	distribution, ok := s.getDistributionByGroupLocked(group)
+	distribution, ok := s.getDistributionByGroup(group)
 	if !ok {
 		return 0
 	}
@@ -124,13 +117,11 @@ func (s *selectedStores) Get(id uint64, group string) uint64 {
 // InitGroupDistribution seeds the distribution for a group if the group has not
 // been tracked yet.
 func (s *selectedStores) InitGroupDistribution(group string, distribution map[uint64]uint64) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.getDistributionByGroupLocked(group); ok {
+	if _, ok := s.getDistributionByGroup(group); ok {
 		return false
 	}
-	s.groupDistribution.Put(group, cloneDistribution(distribution))
-	s.seededGroups.Put(group, true)
+	s.groupDistribution[group] = cloneDistribution(distribution)
+	s.seededGroups[group] = struct{}{}
 	return true
 }
 
@@ -138,48 +129,43 @@ func (s *selectedStores) InitGroupDistribution(group string, distribution map[ui
 // For seeded groups it applies the net old->new change. Otherwise it keeps the
 // historical scatter behavior and only counts the new placement.
 func (s *selectedStores) Update(group string, oldIDs, newIDs []uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	distribution, ok := s.getDistributionByGroupLocked(group)
+	distribution, ok := s.getDistributionByGroup(group)
 	if !ok {
 		distribution = map[uint64]uint64{}
 	}
-	if s.isSeededGroupLocked(group) {
+	if s.isSeededGroup(group) {
 		for _, id := range oldIDs {
 			decrementDistribution(distribution, id)
 		}
-		s.seededGroups.Put(group, true)
 	}
 	for _, id := range newIDs {
 		distribution[id]++
 	}
-	s.groupDistribution.Put(group, distribution)
+	s.groupDistribution[group] = distribution
 }
 
-// getDistributionByGroupLocked should be called with lock
-func (s *selectedStores) getDistributionByGroupLocked(group string) (map[uint64]uint64, bool) {
-	if result, ok := s.groupDistribution.Get(group); ok {
-		return result.(map[uint64]uint64), true
-	}
-	return nil, false
+func (s *selectedStores) getDistributionByGroup(group string) (map[uint64]uint64, bool) {
+	distribution, ok := s.groupDistribution[group]
+	return distribution, ok
 }
 
-func (s *selectedStores) isSeededGroupLocked(group string) bool {
-	_, ok := s.seededGroups.Get(group)
+func (s *selectedStores) isSeededGroup(group string) bool {
+	_, ok := s.seededGroups[group]
 	return ok
 }
 
 // IsSeededGroup returns whether the group has been seeded with a baseline
 // distribution.
-func (s *selectedStores) IsSeededGroup(group string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.isSeededGroupLocked(group)
+func (s *selectedStores) getGroupDistributionClone(group string) (map[uint64]uint64, bool) {
+	distribution, ok := s.getDistributionByGroup(group)
+	if !ok {
+		return nil, false
+	}
+	return cloneDistribution(distribution), true
 }
 
 // RegionScatterer scatters regions.
 type RegionScatterer struct {
-	ctx               context.Context
 	name              string
 	cluster           sche.SharedCluster
 	ordinaryEngine    engineContext
@@ -192,14 +178,14 @@ type RegionScatterer struct {
 // NewRegionScatterer creates a region scatterer.
 // RegionScatter is used for the `Lightning`, it will scatter the specified regions before import data.
 func NewRegionScatterer(ctx context.Context, cluster sche.SharedCluster, opController *operator.Controller, addSuspectRegions func(bool, ...uint64)) *RegionScatterer {
+	_ = ctx
 	return &RegionScatterer{
-		ctx:               ctx,
 		name:              regionScatterName,
 		cluster:           cluster,
 		opController:      opController,
 		addSuspectRegions: addSuspectRegions,
 		affinityFilter:    filter.NewAffinityFilter(cluster),
-		ordinaryEngine: newEngineContext(ctx, func() filter.Filter {
+		ordinaryEngine: newEngineContext(func() filter.Filter {
 			return filter.NewEngineFilter(regionScatterName, filter.NotSpecialEngines)
 		}),
 	}
@@ -213,14 +199,14 @@ type engineContext struct {
 	selectedLeader *selectedStores
 }
 
-func newEngineContext(ctx context.Context, filterFuncs ...filterFunc) engineContext {
+func newEngineContext(filterFuncs ...filterFunc) engineContext {
 	filterFuncs = append(filterFuncs, func() filter.Filter {
 		return &filter.StoreStateFilter{ActionScope: regionScatterName, MoveRegion: true, ScatterRegion: true, OperatorLevel: operatorPriorityLevel}
 	})
 	return engineContext{
 		filterFuncs:    filterFuncs,
-		selectedPeer:   newSelectedStores(ctx),
-		selectedLeader: newSelectedStores(ctx),
+		selectedPeer:   newSelectedStores(),
+		selectedLeader: newSelectedStores(),
 	}
 }
 
@@ -228,20 +214,60 @@ func (r *RegionScatterer) getOrCreateSpecialEngineContext(engine string) engineC
 	if ctx, ok := r.specialEngines.Load(engine); ok {
 		return ctx.(engineContext)
 	}
-	ctx := newEngineContext(r.ctx, func() filter.Filter {
+	ctx := newEngineContext(func() filter.Filter {
 		return filter.NewEngineFilter(r.name, placement.LabelConstraint{Key: core.EngineKey, Op: placement.In, Values: []string{engine}})
 	})
 	r.specialEngines.Store(engine, ctx)
 	return ctx
 }
 
-// SeedGroupDistributionByRange seeds the scatter group with the current peer and
-// leader distribution of the specified key range. Existing group history is kept.
-func (r *RegionScatterer) SeedGroupDistributionByRange(group string, startKey, endKey []byte) {
+type scatterState struct {
+	ordinaryEngine engineContext
+	specialEngines map[string]engineContext
+}
+
+func (ctx engineContext) withEmptySelection() engineContext {
+	ctx.selectedPeer = newSelectedStores()
+	ctx.selectedLeader = newSelectedStores()
+	return ctx
+}
+
+func (r *RegionScatterer) newScatterState() *scatterState {
+	return &scatterState{
+		ordinaryEngine: r.ordinaryEngine.withEmptySelection(),
+		specialEngines: make(map[string]engineContext),
+	}
+}
+
+func (r *RegionScatterer) recordScatterStateSnapshot(state *scatterState) {
+	if state == nil {
+		return
+	}
+	r.ordinaryEngine.selectedPeer = state.ordinaryEngine.selectedPeer
+	r.ordinaryEngine.selectedLeader = state.ordinaryEngine.selectedLeader
+}
+
+func (s *scatterState) getSpecialEngine(engine string) (engineContext, bool) {
+	ctx, ok := s.specialEngines[engine]
+	return ctx, ok
+}
+
+func (r *RegionScatterer) getOrCreateSpecialEngineState(state *scatterState, engine string) engineContext {
+	if ctx, ok := state.getSpecialEngine(engine); ok {
+		return ctx
+	}
+	ctx := r.getOrCreateSpecialEngineContext(engine).withEmptySelection()
+	state.specialEngines[engine] = ctx
+	return ctx
+}
+
+// seedScatterStateByRange seeds the scatter group with the current live peer and
+// leader distribution of the specified key range.
+func (r *RegionScatterer) seedScatterStateByRange(state *scatterState, group string, startKey, endKey []byte) {
 	if group == "" || len(startKey) == 0 {
 		return
 	}
-	if r.ordinaryEngine.selectedPeer.IsSeededGroup(group) {
+	if state.ordinaryEngine.selectedPeer.isSeededGroup(group) {
 		return
 	}
 
@@ -268,11 +294,39 @@ func (r *RegionScatterer) SeedGroupDistributionByRange(group string, startKey, e
 		specialPeer[engine][storeID] = peerCount
 	}
 
-	r.ordinaryEngine.selectedPeer.InitGroupDistribution(group, ordinaryPeer)
-	r.ordinaryEngine.selectedLeader.InitGroupDistribution(group, ordinaryLeader)
+	state.ordinaryEngine.selectedPeer.InitGroupDistribution(group, ordinaryPeer)
+	state.ordinaryEngine.selectedLeader.InitGroupDistribution(group, ordinaryLeader)
 	for engine, distribution := range specialPeer {
-		ctx := r.getOrCreateSpecialEngineContext(engine)
+		ctx := r.getOrCreateSpecialEngineState(state, engine)
 		ctx.selectedPeer.InitGroupDistribution(group, distribution)
+	}
+}
+
+func (r *RegionScatterer) newInternalScatterState(group string, startKey, endKey []byte) *scatterState {
+	state := r.newScatterState()
+	r.seedScatterStateByRange(state, group, startKey, endKey)
+	r.applyRunningScatterOpsDelta(state, group)
+	return state
+}
+
+func (r *RegionScatterer) applyRunningScatterOpsDelta(state *scatterState, group string) {
+	if group == "" {
+		return
+	}
+	for _, op := range r.opController.GetOperators() {
+		if op == nil || op.Desc() != InternalScatterOperatorDesc {
+			continue
+		}
+		opGroup, ok := op.GetAdditionalInfo("group")
+		if !ok || opGroup != group {
+			continue
+		}
+		region := r.cluster.GetRegion(op.RegionID())
+		if region == nil || region.GetLeader() == nil {
+			continue
+		}
+		targetPeers, targetLeader := finalPlacementAfterOperator(region, op)
+		r.updateScatterState(state, region, targetPeers, targetLeader, group)
 	}
 }
 
@@ -351,9 +405,10 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 	// with operators created). This includes regions skipped due to affinity or already
 	// in ideal distribution.
 	opsCount := 0
+	state := r.newScatterState()
 	for currentRetry := 0; currentRetry <= retryLimit; currentRetry++ {
 		for _, region := range regions {
-			op, err := r.Scatter(region, group, skipStoreLimit)
+			op, err := r.scatterWithOptions(region, group, skipStoreLimit, false, state)
 			failpoint.Inject("scatterFail", func() {
 				if region.GetID() == 1 {
 					err = errors.New("mock error")
@@ -371,7 +426,7 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 					failures[op.RegionID()] = fmt.Errorf("region %v failed to add operator", op.RegionID())
 					continue
 				}
-				r.Commit(region, op, group)
+				r.updateScatterStateWithOperator(state, region, op, group)
 				failpoint.Inject("scatterHbStreamsDrain", func() {
 					_ = r.opController.GetHBStreams().Drain(1)
 					r.opController.RemoveOperator(op, operator.AdminStop)
@@ -386,21 +441,22 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 		// Wait for a while if there are some regions failed to be relocated
 		time.Sleep(typeutil.MinDuration(maxSleepDuration, time.Duration(math.Pow(2, float64(currentRetry)))*initialSleepDuration))
 	}
+	r.recordScatterStateSnapshot(state)
 	return opsCount, nil
 }
 
 // Scatter relocates the region. If the group is defined, the regions' leader with the same group would be scattered
 // in a group level instead of cluster level.
 func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
-	return r.scatterWithOptions(region, group, skipStoreLimit, false)
+	return r.scatterWithOptions(region, group, skipStoreLimit, false, r.newScatterState())
 }
 
 // ScatterInternal relocates the region for PD-internal split-scatter dispatch.
-func (r *RegionScatterer) ScatterInternal(region *core.RegionInfo, group string) (*operator.Operator, error) {
-	return r.scatterWithOptions(region, group, false, true)
+func (r *RegionScatterer) ScatterInternal(region *core.RegionInfo, group string, startKey, endKey []byte) (*operator.Operator, error) {
+	return r.scatterWithOptions(region, group, false, true, r.newInternalScatterState(group, startKey, endKey))
 }
 
-func (r *RegionScatterer) scatterWithOptions(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool) (*operator.Operator, error) {
+func (r *RegionScatterer) scatterWithOptions(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool, state *scatterState) (*operator.Operator, error) {
 	if !filter.IsRegionReplicated(r.cluster, region) {
 		r.addSuspectRegions(false, region.GetID())
 		scatterSkipNotReplicatedCounter.Inc()
@@ -455,10 +511,10 @@ func (r *RegionScatterer) scatterWithOptions(region *core.RegionInfo, group stri
 		return nil, errors.Errorf("region %d is hot", region.GetID())
 	}
 
-	return r.scatterRegionWithType(region, group, skipStoreLimit, internalScatter)
+	return r.scatterRegionWithType(region, group, skipStoreLimit, internalScatter, state)
 }
 
-func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool) (*operator.Operator, error) {
+func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group string, skipStoreLimit bool, internalScatter bool, state *scatterState) (*operator.Operator, error) {
 	desc := AdminScatterOperatorDesc
 	if internalScatter {
 		desc = InternalScatterOperatorDesc
@@ -526,14 +582,14 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 		}
 	}
 
-	scatterWithSameEngine(ordinaryPeers, r.ordinaryEngine)
+	scatterWithSameEngine(ordinaryPeers, state.ordinaryEngine)
 	for engine, peers := range specialPeers {
-		scatterWithSameEngine(peers, r.getOrCreateSpecialEngineContext(engine))
+		scatterWithSameEngine(peers, r.getOrCreateSpecialEngineState(state, engine))
 	}
 	// FIXME: target leader only considers the ordinary stores, maybe we need to consider the
 	// special engine stores if the engine supports to become a leader. But now there is only
 	// one engine, tiflash, which does not support the leader, so don't consider it for now.
-	targetLeader := r.selectAvailableLeaderStore(group, region, leaderCandidateStores, r.ordinaryEngine, internalScatter)
+	targetLeader := r.selectAvailableLeaderStore(group, region, leaderCandidateStores, state.ordinaryEngine, internalScatter)
 	if targetLeader == 0 {
 		scatterSkipNoLeaderCounter.Inc()
 		return nil, errs.ErrGetTargetStore.FastGenByArgs(fmt.Sprintf("no target leader store found, region: %v", region))
@@ -541,7 +597,7 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 
 	if isSameDistribution(region, targetPeers, targetLeader) {
 		scatterUnnecessaryCounter.Inc()
-		r.Update(region, targetPeers, targetLeader, group)
+		r.updateScatterState(state, region, targetPeers, targetLeader, group)
 		return nil, nil
 	}
 	op, err := operator.CreateScatterRegionOperator(desc, r.cluster, region, targetPeers, targetLeader, skipStoreLimit)
@@ -551,7 +607,7 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 		for _, peer := range region.GetPeers() {
 			currentPeers[peer.GetStoreId()] = peer
 		}
-		r.Update(region, currentPeers, region.GetLeader().GetStoreId(), group)
+		r.updateScatterState(state, region, currentPeers, region.GetLeader().GetStoreId(), group)
 		log.Debug("fail to create scatter region operator", errs.ZapError(err))
 		return nil, errs.ErrCreateOperator.FastGenByArgs(fmt.Sprintf("failed to create scatter region operator for region %v", region.GetID()))
 	}
@@ -704,17 +760,15 @@ func peerMoveReducesSourceTargetGap(selectedPeers *selectedStores, group string,
 	return fromCount > toCount+1
 }
 
-// Commit updates the group distribution after the scatter operator has been
-// accepted by the operator controller.
-func (r *RegionScatterer) Commit(region *core.RegionInfo, op *operator.Operator, group string) {
-	if op == nil || region == nil || region.GetLeader() == nil {
-		return
-	}
+func finalPlacementAfterOperator(region *core.RegionInfo, op *operator.Operator) (map[uint64]*metapb.Peer, uint64) {
 	targetPeers := make(map[uint64]*metapb.Peer, len(region.GetPeers()))
 	for _, peer := range region.GetPeers() {
 		targetPeers[peer.GetStoreId()] = peer
 	}
 	targetLeader := region.GetLeader().GetStoreId()
+	if op == nil {
+		return targetPeers, targetLeader
+	}
 	for i := range op.Len() {
 		switch step := op.Step(i).(type) {
 		case operator.TransferLeader:
@@ -727,11 +781,23 @@ func (r *RegionScatterer) Commit(region *core.RegionInfo, op *operator.Operator,
 			delete(targetPeers, step.FromStore)
 		}
 	}
-	r.Update(region, targetPeers, targetLeader, group)
+	return targetPeers, targetLeader
 }
 
-// Update records the group distribution after scattering a region to the target placement.
-func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
+func (r *RegionScatterer) updateScatterStateWithOperator(state *scatterState, region *core.RegionInfo, op *operator.Operator, group string) {
+	if state == nil || region == nil || region.GetLeader() == nil {
+		return
+	}
+	targetPeers, targetLeader := finalPlacementAfterOperator(region, op)
+	r.updateScatterState(state, region, targetPeers, targetLeader, group)
+}
+
+// updateScatterState records the local scatter state after scattering a region
+// to the target placement.
+func (r *RegionScatterer) updateScatterState(state *scatterState, region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
+	if state == nil || region == nil || region.GetLeader() == nil {
+		return
+	}
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
 	ordinaryOldStores := make([]uint64, 0, len(region.GetPeers()))
 	ordinaryNewStores := make([]uint64, 0, len(targetPeers))
@@ -766,7 +832,7 @@ func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64
 		}
 	}
 
-	r.ordinaryEngine.selectedPeer.Update(group, ordinaryOldStores, ordinaryNewStores)
+	state.ordinaryEngine.selectedPeer.Update(group, ordinaryOldStores, ordinaryNewStores)
 	specialEngines := make(map[string]struct{}, len(specialOldStores)+len(specialNewStores))
 	for engine := range specialOldStores {
 		specialEngines[engine] = struct{}{}
@@ -775,12 +841,12 @@ func (r *RegionScatterer) Update(region *core.RegionInfo, targetPeers map[uint64
 		specialEngines[engine] = struct{}{}
 	}
 	for engine := range specialEngines {
-		ctx := r.getOrCreateSpecialEngineContext(engine)
+		ctx := r.getOrCreateSpecialEngineState(state, engine)
 		ctx.selectedPeer.Update(group, specialOldStores[engine], specialNewStores[engine])
 	}
 
 	oldLeaderStoreID := region.GetLeader().GetStoreId()
-	r.ordinaryEngine.selectedLeader.Update(group, []uint64{oldLeaderStoreID}, []uint64{targetLeader})
+	state.ordinaryEngine.selectedLeader.Update(group, []uint64{oldLeaderStoreID}, []uint64{targetLeader})
 	scatterDistributionCounter.WithLabelValues(
 		strconv.FormatUint(targetLeader, 10),
 		strconv.FormatBool(true),
