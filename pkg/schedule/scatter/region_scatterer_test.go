@@ -562,6 +562,9 @@ func TestScattersGroup(t *testing.T) {
 		re.GreaterOrEqual(max, uint64(20))
 		re.LessOrEqual(max-min, uint64(3))
 		if testCase.failure {
+			re.Len(failures, 1)
+			_, ok := failures[1]
+			re.True(ok)
 			re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/scatter/scatterFail"))
 		} else {
 			re.Empty(failures)
