@@ -750,7 +750,7 @@ func isSameDistribution(region *core.RegionInfo, targetPeers map[uint64]*metapb.
 	return region.GetLeader().GetStoreId() == targetLeader
 }
 
-// selectNewPeerWithTrace returns the new peer which pick the fewest picked count.
+// selectNewPeer returns the new peer which pick the fewest picked count.
 // it keeps the origin peer if the origin store's pick count is equal the fewest pick.
 // it can be divided into three steps:
 // 1. found the max pick count and the min pick count.
