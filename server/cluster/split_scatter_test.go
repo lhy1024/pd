@@ -16,10 +16,9 @@ package cluster
 
 import (
 	"context"
-	"reflect"
 	"strings"
 	"testing"
-	"unsafe"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -30,13 +29,15 @@ import (
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mock/mockid"
 	"github.com/tikv/pd/pkg/schedule/hbstream"
+	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/storage"
+	"github.com/tikv/pd/pkg/utils/testutil"
 )
 
 func TestHandleAskBatchSplitSchedulesSplitScatterInPatrol(t *testing.T) {
 	re := require.New(t)
-	cluster := newSplitScatterTestCluster(t)
+	cluster, cancelPatrol := newSplitScatterTestCluster(t)
 
 	request := &pdpb.AskBatchSplitRequest{
 		Region:     cluster.GetRegion(100).GetMeta(),
@@ -54,7 +55,10 @@ func TestHandleAskBatchSplitSchedulesSplitScatterInPatrol(t *testing.T) {
 	re.NoError(cluster.processRegionHeartbeat(core.ContextTODO(), newSplitScatterRegion(splitRegionIDs[0], []byte("m"), []byte("t"), 120)))
 	re.NoError(cluster.processRegionHeartbeat(core.ContextTODO(), newSplitScatterRegion(splitRegionIDs[1], []byte("t"), []byte(""), 80)))
 
-	dispatchSplitScatterForTest(t, cluster)
+	dispatchSplitScatterInPatrol(t, cluster, cancelPatrol, func() bool {
+		return cluster.GetOperatorController().GetOperator(splitRegionIDs[0]) != nil ||
+			cluster.GetOperatorController().GetOperator(splitRegionIDs[1]) != nil
+	})
 
 	group := ""
 	for _, regionID := range splitRegionIDs {
@@ -78,7 +82,7 @@ func TestHandleAskBatchSplitSchedulesSplitScatterInPatrol(t *testing.T) {
 
 func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) {
 	re := require.New(t)
-	cluster := newSplitScatterTestCluster(t)
+	cluster, cancelPatrol := newSplitScatterTestCluster(t)
 
 	re.NoError(cluster.putRegion(newSplitScatterRegion(90, newSplitScatterIndexKey("a"), newSplitScatterIndexKey("j"), 0)))
 	re.NoError(cluster.putRegion(newSplitScatterRegion(91, newSplitScatterIndexKey("j"), newSplitScatterIndexKey("t"), 0)))
@@ -99,7 +103,9 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 		newSplitScatterRegion(splitRegionID, newSplitScatterIndexKey("t"), newSplitScatterIndexKey("w"), 120),
 	))
 
-	dispatchSplitScatterForTest(t, cluster)
+	dispatchSplitScatterInPatrol(t, cluster, cancelPatrol, func() bool {
+		return cluster.GetOperatorController().GetOperator(splitRegionID) != nil
+	})
 
 	op := cluster.GetOperatorController().GetOperator(splitRegionID)
 	re.NotNil(op)
@@ -111,7 +117,7 @@ func TestHandleAskBatchSplitSeedsIndexBaselineForFirstSplitRegion(t *testing.T) 
 
 func TestHandleAskBatchSplitSkipsSplitScatterForSizeReason(t *testing.T) {
 	re := require.New(t)
-	cluster := newSplitScatterTestCluster(t)
+	cluster, cancelPatrol := newSplitScatterTestCluster(t)
 
 	request := &pdpb.AskBatchSplitRequest{
 		Region:     cluster.GetRegion(100).GetMeta(),
@@ -128,13 +134,13 @@ func TestHandleAskBatchSplitSkipsSplitScatterForSizeReason(t *testing.T) {
 		newSplitScatterRegion(splitRegionID, []byte("m"), []byte(""), 120),
 	))
 
-	dispatchSplitScatterForTest(t, cluster)
+	dispatchSplitScatterInPatrol(t, cluster, cancelPatrol, nil)
 
 	re.Nil(cluster.GetOperatorController().GetOperator(splitRegionID))
 	re.Nil(cluster.GetOperatorController().GetOperator(100))
 }
 
-func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
+func newSplitScatterTestCluster(t *testing.T) (*RaftCluster, context.CancelFunc) {
 	t.Helper()
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -143,6 +149,8 @@ func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
 	_, opt, err := newTestScheduleConfig()
 	re.NoError(err)
 	cluster := newTestRaftCluster(ctx, mockid.NewIDAllocator(), opt, storage.NewStorageWithMemoryBackend())
+	cluster.regionLabeler, err = labeler.NewRegionLabeler(ctx, cluster.storage, time.Second*5)
+	re.NoError(err)
 	hbStreams := hbstream.NewTestHeartbeatStreams(ctx, cluster.BasicCluster, false)
 	cluster.initCoordinator(ctx, cluster, hbStreams)
 	t.Cleanup(func() {
@@ -154,22 +162,28 @@ func newSplitScatterTestCluster(t *testing.T) *RaftCluster {
 	}
 
 	re.NoError(cluster.putRegion(newSplitScatterRegion(100, []byte(""), []byte("m"), 0)))
-	return cluster
+	return cluster, cancel
 }
 
-type splitScatterControllerForTest struct{}
-
-//go:linkname dispatchSplitScatterRegionsForTest github.com/tikv/pd/pkg/schedule/checker.(*splitScatterController).dispatchSplitScatterRegions
-func dispatchSplitScatterRegionsForTest(*splitScatterControllerForTest)
-
-func dispatchSplitScatterForTest(t *testing.T, cluster *RaftCluster) {
+func dispatchSplitScatterInPatrol(t *testing.T, cluster *RaftCluster, cancelPatrol context.CancelFunc, wait func() bool) {
 	t.Helper()
-	re := require.New(t)
 	checkerController := cluster.GetCoordinator().GetCheckerController()
-	splitScatterField := reflect.ValueOf(checkerController).Elem().FieldByName("splitScatter")
-	re.True(splitScatterField.IsValid())
-	re.False(splitScatterField.IsNil())
-	dispatchSplitScatterRegionsForTest((*splitScatterControllerForTest)(unsafe.Pointer(splitScatterField.Pointer())))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		checkerController.PatrolRegions()
+	}()
+	if wait != nil {
+		testutil.Eventually(require.New(t), wait)
+	} else {
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancelPatrol()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("patrol regions did not exit after cancel")
+	}
 }
 
 func newSplitScatterRegion(regionID uint64, start, end []byte, cpu uint64) *core.RegionInfo {
