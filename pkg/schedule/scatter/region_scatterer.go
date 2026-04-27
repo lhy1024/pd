@@ -239,14 +239,6 @@ func (r *RegionScatterer) newScatterState() *scatterState {
 	}
 }
 
-func (r *RegionScatterer) recordScatterStateSnapshot(state *scatterState) {
-	if state == nil {
-		return
-	}
-	r.ordinaryEngine.selectedPeer = state.ordinaryEngine.selectedPeer
-	r.ordinaryEngine.selectedLeader = state.ordinaryEngine.selectedLeader
-}
-
 func (s *scatterState) getSpecialEngine(engine string) (engineContext, bool) {
 	ctx, ok := s.specialEngines[engine]
 	return ctx, ok
@@ -326,7 +318,7 @@ func (r *RegionScatterer) applyRunningScatterOpsDelta(state *scatterState, group
 			continue
 		}
 		targetPeers, targetLeader := finalPlacementAfterOperator(region, op)
-		r.updateScatterState(state, region, targetPeers, targetLeader, group)
+		r.applyScatterStateDelta(state, region, targetPeers, targetLeader, group, false)
 	}
 }
 
@@ -441,7 +433,6 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 		// Wait for a while if there are some regions failed to be relocated
 		time.Sleep(typeutil.MinDuration(maxSleepDuration, time.Duration(math.Pow(2, float64(currentRetry)))*initialSleepDuration))
 	}
-	r.recordScatterStateSnapshot(state)
 	return opsCount, nil
 }
 
@@ -597,7 +588,7 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 
 	if isSameDistribution(region, targetPeers, targetLeader) {
 		scatterUnnecessaryCounter.Inc()
-		r.updateScatterState(state, region, targetPeers, targetLeader, group)
+		r.applyScatterStateDelta(state, region, targetPeers, targetLeader, group, true)
 		return nil, nil
 	}
 	op, err := operator.CreateScatterRegionOperator(desc, r.cluster, region, targetPeers, targetLeader, skipStoreLimit)
@@ -607,7 +598,7 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 		for _, peer := range region.GetPeers() {
 			currentPeers[peer.GetStoreId()] = peer
 		}
-		r.updateScatterState(state, region, currentPeers, region.GetLeader().GetStoreId(), group)
+		r.applyScatterStateDelta(state, region, currentPeers, region.GetLeader().GetStoreId(), group, true)
 		log.Debug("fail to create scatter region operator", errs.ZapError(err))
 		return nil, errs.ErrCreateOperator.FastGenByArgs(fmt.Sprintf("failed to create scatter region operator for region %v", region.GetID()))
 	}
@@ -789,12 +780,13 @@ func (r *RegionScatterer) updateScatterStateWithOperator(state *scatterState, re
 		return
 	}
 	targetPeers, targetLeader := finalPlacementAfterOperator(region, op)
-	r.updateScatterState(state, region, targetPeers, targetLeader, group)
+	r.applyScatterStateDelta(state, region, targetPeers, targetLeader, group, true)
 }
 
-// updateScatterState records the local scatter state after scattering a region
-// to the target placement.
-func (r *RegionScatterer) updateScatterState(state *scatterState, region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
+// applyScatterStateDelta records a local scatter state change after scattering a
+// region to the target placement. Metrics are only emitted when this delta
+// corresponds to a new scatter decision accepted in the current request/round.
+func (r *RegionScatterer) applyScatterStateDelta(state *scatterState, region *core.RegionInfo, targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string, recordMetrics bool) {
 	if state == nil || region == nil || region.GetLeader() == nil {
 		return
 	}
@@ -824,7 +816,7 @@ func (r *RegionScatterer) updateScatterState(state *scatterState, region *core.R
 	for _, peer := range targetPeers {
 		storeID := peer.GetStoreId()
 		engine := classifyStore(storeID, &ordinaryNewStores, specialNewStores)
-		if engine != "" {
+		if recordMetrics && engine != "" {
 			scatterDistributionCounter.WithLabelValues(
 				strconv.FormatUint(storeID, 10),
 				strconv.FormatBool(false),
@@ -847,8 +839,10 @@ func (r *RegionScatterer) updateScatterState(state *scatterState, region *core.R
 
 	oldLeaderStoreID := region.GetLeader().GetStoreId()
 	state.ordinaryEngine.selectedLeader.Update(group, []uint64{oldLeaderStoreID}, []uint64{targetLeader})
-	scatterDistributionCounter.WithLabelValues(
-		strconv.FormatUint(targetLeader, 10),
-		strconv.FormatBool(true),
-		core.EngineTiKV).Inc()
+	if recordMetrics {
+		scatterDistributionCounter.WithLabelValues(
+			strconv.FormatUint(targetLeader, 10),
+			strconv.FormatBool(true),
+			core.EngineTiKV).Inc()
+	}
 }
