@@ -103,6 +103,25 @@ func newTestScatterState(scatterer *RegionScatterer) *scatterState {
 	return scatterer.newScatterState()
 }
 
+func (s *localSelectedStores) getGroupDistributionClone(group string) (map[uint64]uint64, bool) {
+	distribution, ok := s.groupDistribution[group]
+	if !ok {
+		return nil, false
+	}
+	return cloneDistribution(distribution), true
+}
+
+func (r *RegionScatterer) updateScatterStateWithOperator(state *scatterState, region *core.RegionInfo, op *operator.Operator, group string) {
+	if region == nil || region.GetLeader() == nil {
+		return
+	}
+	if state == nil || op == nil {
+		return
+	}
+	targetPeers, targetLeader := finalPlacementAfterOperator(region, op)
+	r.applyScatterStateDelta(state, region, targetPeers, targetLeader, group, true)
+}
+
 func commitScatterOp(scatterer *RegionScatterer, state *scatterState, region *core.RegionInfo, op *operator.Operator, group string) {
 	if op == nil {
 		return

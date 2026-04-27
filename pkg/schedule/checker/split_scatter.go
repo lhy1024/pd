@@ -73,10 +73,6 @@ type splitScatterRangeHint struct {
 	endKey   []byte
 }
 
-func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPendingItem {
-	return c.splitScatter.collectTopPendingSplitScatter(limit)
-}
-
 func (c *splitScatterController) collectTopPendingSplitScatter(limit int) []splitScatterPendingItem {
 	if limit <= 0 {
 		return nil

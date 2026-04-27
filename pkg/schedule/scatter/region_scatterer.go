@@ -210,14 +210,6 @@ func (s *localSelectedStores) isSeededGroup(group string) bool {
 	return ok
 }
 
-func (s *localSelectedStores) getGroupDistributionClone(group string) (map[uint64]uint64, bool) {
-	distribution, ok := s.groupDistribution[group]
-	if !ok {
-		return nil, false
-	}
-	return cloneDistribution(distribution), true
-}
-
 // RegionScatterer scatters regions.
 type RegionScatterer struct {
 	ctx               context.Context
@@ -920,17 +912,6 @@ func (r *RegionScatterer) Put(peers map[uint64]*metapb.Peer, leaderStoreID uint6
 		strconv.FormatUint(leaderStoreID, 10),
 		strconv.FormatBool(true),
 		core.EngineTiKV).Inc()
-}
-
-func (r *RegionScatterer) updateScatterStateWithOperator(state *scatterState, region *core.RegionInfo, op *operator.Operator, group string) {
-	if region == nil || region.GetLeader() == nil {
-		return
-	}
-	if state == nil || op == nil {
-		return
-	}
-	targetPeers, targetLeader := finalPlacementAfterOperator(region, op)
-	r.applyScatterStateDelta(state, region, targetPeers, targetLeader, group, true)
 }
 
 // applyScatterStateDelta records a local scatter state change after scattering a

@@ -38,6 +38,10 @@ const (
 	splitScatterTestIndexID      int64  = 7
 )
 
+func (c *Controller) collectTopPendingSplitScatter(limit int) []splitScatterPendingItem {
+	return c.splitScatter.collectTopPendingSplitScatter(limit)
+}
+
 func TestRecordSplitScatterBatchCollectsPendingRegions(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
