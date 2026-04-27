@@ -77,8 +77,7 @@ type selectedStoreCounter interface {
 }
 
 type selectedStores struct {
-	mu syncutil.RWMutex
-
+	mu                syncutil.RWMutex
 	groupDistribution *cache.TTLString // value type: map[uint64]uint64, group -> StoreID -> count
 }
 
@@ -120,7 +119,7 @@ func decrementDistribution(distribution map[uint64]uint64, id uint64) {
 	distribution[id] = count - 1
 }
 
-// Put increments the picked count by storeID and group.
+// Put plus count by storeID and group
 func (s *selectedStores) Put(id uint64, group string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -133,7 +132,7 @@ func (s *selectedStores) Put(id uint64, group string) {
 	s.groupDistribution.Put(group, distribution)
 }
 
-// Get the count by storeID and group.
+// Get the count by storeID and group
 func (s *selectedStores) Get(id uint64, group string) uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -148,17 +147,14 @@ func (s *selectedStores) Get(id uint64, group string) uint64 {
 	return count
 }
 
-// GetGroupDistribution returns the current distribution for a group.
+// GetGroupDistribution get distribution group by `group`
 func (s *selectedStores) GetGroupDistribution(group string) (map[uint64]uint64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	distribution, ok := s.getDistributionByGroupLocked(group)
-	if !ok {
-		return nil, false
-	}
-	return distribution, true
+	return s.getDistributionByGroupLocked(group)
 }
 
+// getDistributionByGroupLocked should be called with lock
 func (s *selectedStores) getDistributionByGroupLocked(group string) (map[uint64]uint64, bool) {
 	if result, ok := s.groupDistribution.Get(group); ok {
 		return result.(map[uint64]uint64), true
@@ -681,7 +677,7 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 	// FIXME: target leader only considers the ordinary stores, maybe we need to consider the
 	// special engine stores if the engine supports to become a leader. But now there is only
 	// one engine, tiflash, which does not support the leader, so don't consider it for now.
-	targetLeader := r.selectAvailableLeaderStore(group, region, leaderCandidateStores, ordinaryContext, internalScatter)
+	targetLeader, leaderStorePickedCount := r.selectAvailableLeaderStore(group, region, leaderCandidateStores, ordinaryContext, internalScatter)
 	if targetLeader == 0 {
 		scatterSkipNoLeaderCounter.Inc()
 		return nil, errs.ErrGetTargetStore.FastGenByArgs(fmt.Sprintf("no target leader store found, region: %v", region))
@@ -717,6 +713,9 @@ func (r *RegionScatterer) scatterRegionWithType(region *core.RegionInfo, group s
 			r.Put(targetPeers, targetLeader, group)
 		}
 		op.SetAdditionalInfo("group", group)
+		if !internalScatter {
+			op.SetAdditionalInfo("leader-picked-count", strconv.FormatUint(leaderStorePickedCount, 10))
+		}
 		op.SetPriorityLevel(operatorPriorityLevel)
 	}
 	return op, nil
@@ -819,10 +818,10 @@ func (r *RegionScatterer) selectNewPeer(context scatterSelectionContext, group s
 // selectAvailableLeaderStore selects the target leader store from the candidates.
 // The candidates are collected by the existing peer stores at the group level.
 func (r *RegionScatterer) selectAvailableLeaderStore(group string, region *core.RegionInfo,
-	leaderCandidateStores []uint64, context scatterSelectionContext, internalScatter bool) uint64 {
+	leaderCandidateStores []uint64, context scatterSelectionContext, internalScatter bool) (leaderID uint64, leaderStorePickedCount uint64) {
 	if r.cluster.GetStore(region.GetLeader().GetStoreId()) == nil {
 		log.Error("failed to get the store", zap.Uint64("store-id", region.GetLeader().GetStoreId()), errs.ZapError(errs.ErrGetSourceStore))
-		return 0
+		return 0, 0
 	}
 	minStoreGroupLeader := uint64(math.MaxUint64)
 	minStoreGroupPeer := uint64(math.MaxUint64)
@@ -854,7 +853,7 @@ func (r *RegionScatterer) selectAvailableLeaderStore(group string, region *core.
 	if internalScatter && unusedAlternativeID != 0 {
 		selectedID = unusedAlternativeID
 	}
-	return selectedID
+	return selectedID, minStoreGroupLeader
 }
 
 func peerMoveReducesSourceTargetGap(selectedPeers selectedStoreCounter, group string, fromStoreID, toStoreID uint64) bool {

@@ -1422,10 +1422,10 @@ func TestInternalScatterLeaderPrefersUnusedStore(t *testing.T) {
 	state := newTestScatterState(scatterer)
 	group := "test-leader-coverage"
 
-	adminLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
+	adminLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
 	re.Equal(uint64(1), adminLeader)
 
-	internalLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
+	internalLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
 	re.Equal(uint64(4), internalLeader)
 }
 
@@ -1457,9 +1457,9 @@ func TestInternalScatterLeaderBreaksTiesByPeerDeficit(t *testing.T) {
 		5: 2,
 	}))
 
-	adminLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
+	adminLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
 	re.Equal(uint64(1), adminLeader)
 
-	internalLeader := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
+	internalLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
 	re.Equal(uint64(5), internalLeader)
 }
