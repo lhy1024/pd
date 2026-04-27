@@ -85,7 +85,6 @@ func (c *splitScatterController) collectTopPendingSplitScatter(limit int) []spli
 	for regionID, pending := range c.pending {
 		region := c.cluster.GetRegion(regionID)
 		if region == nil {
-			delete(c.pending, regionID)
 			continue
 		}
 		if !pending.retryAt.IsZero() && now.Before(pending.retryAt) {

@@ -92,6 +92,29 @@ func TestCheckSplitScatterRegionsCreatesScatterOperator(t *testing.T) {
 	re.Empty(pendingRegionIDs(controller.collectTopPendingSplitScatter(4)))
 }
 
+func TestDispatchSplitScatterKeepsPendingUntilSplitHeartbeat(t *testing.T) {
+	re := require.New(t)
+	controller, tc, oc, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	controller.RecordSplitScatterBatch(100, []uint64{101})
+
+	controller.DispatchSplitScatterRegions()
+
+	re.Equal(2, splitScatterPendingCount(controller))
+	re.Nil(oc.GetOperator(101))
+
+	putSplitScatterRegion(tc, 101, "m", "", 120)
+
+	re.Equal([]uint64{101}, pendingRegionIDs(controller.collectTopPendingSplitScatter(2)))
+
+	controller.DispatchSplitScatterRegions()
+
+	op := oc.GetOperator(101)
+	re.NotNil(op)
+	re.Equal(scatter.InternalScatterOperatorDesc, op.Desc())
+}
+
 func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
