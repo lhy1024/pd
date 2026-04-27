@@ -815,8 +815,8 @@ func (r *RegionScatterer) selectNewPeer(context scatterSelectionContext, group s
 	return newPeer
 }
 
-// selectAvailableLeaderStore selects the target leader store from the candidates.
-// The candidates are collected by the existing peer stores at the group level.
+// selectAvailableLeaderStore select the target leader store from the candidates. The candidates would be collected by
+// the existed peers store depended on the leader counts in the group level. Please use this func before scatter spacial engines.
 func (r *RegionScatterer) selectAvailableLeaderStore(group string, region *core.RegionInfo,
 	leaderCandidateStores []uint64, context scatterSelectionContext, internalScatter bool) (leaderID uint64, leaderStorePickedCount uint64) {
 	if r.cluster.GetStore(region.GetLeader().GetStoreId()) == nil {
@@ -886,14 +886,14 @@ func finalPlacementAfterOperator(region *core.RegionInfo, op *operator.Operator)
 	return targetPeers, targetLeader
 }
 
-// Put records the final admin scatter distribution no matter whether an
-// operator was created.
-func (r *RegionScatterer) Put(targetPeers map[uint64]*metapb.Peer, targetLeader uint64, group string) {
-	if targetLeader == 0 {
+// Put put the final distribution in the context no matter the operator was created
+func (r *RegionScatterer) Put(peers map[uint64]*metapb.Peer, leaderStoreID uint64, group string) {
+	if leaderStoreID == 0 {
 		return
 	}
 	engineFilter := filter.NewEngineFilter(r.name, filter.NotSpecialEngines)
-	for _, peer := range targetPeers {
+	// Group peers by the engine of their stores
+	for _, peer := range peers {
 		storeID := peer.GetStoreId()
 		store := r.cluster.GetStore(storeID)
 		if store == nil {
@@ -915,9 +915,9 @@ func (r *RegionScatterer) Put(targetPeers map[uint64]*metapb.Peer, targetLeader 
 			strconv.FormatBool(false),
 			engine).Inc()
 	}
-	r.ordinaryEngine.selectedLeader.Put(targetLeader, group)
+	r.ordinaryEngine.selectedLeader.Put(leaderStoreID, group)
 	scatterDistributionCounter.WithLabelValues(
-		strconv.FormatUint(targetLeader, 10),
+		strconv.FormatUint(leaderStoreID, 10),
 		strconv.FormatBool(true),
 		core.EngineTiKV).Inc()
 }
