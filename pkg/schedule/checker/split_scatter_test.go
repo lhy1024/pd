@@ -119,6 +119,19 @@ func TestDispatchSplitScatterKeepsPendingUntilSplitHeartbeat(t *testing.T) {
 	re.Equal(scatter.InternalScatterOperatorDesc, op.Desc())
 }
 
+func TestCollectTopPendingRemovesExpiredPending(t *testing.T) {
+	re := require.New(t)
+	controller, _, _, cleanup := newTestSplitScatterController(t)
+	defer cleanup()
+
+	controller.RecordSplitScatterBatch(100, []uint64{101})
+	expireSplitScatterPendingAt(t, controller, 100, time.Now().Add(-time.Second))
+	expireSplitScatterPendingAt(t, controller, 101, time.Now().Add(-time.Second))
+
+	re.Empty(controller.collectTopPendingSplitScatter(2))
+	re.Equal(0, splitScatterPendingCount(controller))
+}
+
 func TestCollectTopPendingDefersSourceUntilVersionAdvances(t *testing.T) {
 	re := require.New(t)
 	controller, tc, _, cleanup := newTestSplitScatterController(t)
@@ -292,6 +305,16 @@ func splitScatterPendingItemAt(t *testing.T, controller *Controller, regionID ui
 	pending, ok := controller.splitScatter.pending[regionID]
 	require.True(t, ok)
 	return pending
+}
+
+func expireSplitScatterPendingAt(t *testing.T, controller *Controller, regionID uint64, expireAt time.Time) {
+	t.Helper()
+	controller.splitScatter.pendingMu.Lock()
+	defer controller.splitScatter.pendingMu.Unlock()
+	pending, ok := controller.splitScatter.pending[regionID]
+	require.True(t, ok)
+	pending.expireAt = expireAt
+	controller.splitScatter.pending[regionID] = pending
 }
 
 func pendingRegionIDs(regions []splitScatterPendingItem) []uint64 {

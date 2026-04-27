@@ -582,6 +582,22 @@ func TestScattersGroup(t *testing.T) {
 
 		_, err := scatterer.scatterRegions(regions, failures, group, 3, false)
 		re.NoError(err)
+		max := uint64(0)
+		min := uint64(math.MaxUint64)
+		groupDistribution, exist := scatterer.ordinaryEngine.selectedLeader.GetGroupDistribution(group)
+		re.True(exist)
+		for _, count := range groupDistribution {
+			if count > max {
+				max = count
+			}
+			if count < min {
+				min = count
+			}
+		}
+		// 100 regions divided 5 stores, each store expected to have about 20 regions.
+		re.LessOrEqual(min, uint64(20))
+		re.GreaterOrEqual(max, uint64(20))
+		re.LessOrEqual(max-min, uint64(3))
 		if testCase.failure {
 			re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/scatter/scatterFail"))
 		} else {
@@ -602,6 +618,32 @@ func TestSelectedStoreGetGroupDistributionClone(t *testing.T) {
 	refetched, ok := stores.getGroupDistributionClone("testgroup")
 	re.True(ok)
 	re.Equal(uint64(1), refetched[1])
+}
+
+func TestSelectedStoreGC(t *testing.T) {
+	re := require.New(t)
+	originalGCInterval := gcInterval
+	originalGCTTL := gcTTL
+	gcInterval = time.Second
+	gcTTL = time.Second * 3
+	defer func() {
+		gcInterval = originalGCInterval
+		gcTTL = originalGCTTL
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stores := newSelectedStores(ctx)
+	stores.Put(1, "testgroup")
+	_, ok := stores.GetGroupDistribution("testgroup")
+	re.True(ok)
+	_, ok = stores.GetGroupDistribution("testgroup")
+	re.True(ok)
+	time.Sleep(gcTTL)
+	_, ok = stores.GetGroupDistribution("testgroup")
+	re.False(ok)
+	_, ok = stores.GetGroupDistribution("testgroup")
+	re.False(ok)
 }
 
 func TestRegionHasLearner(t *testing.T) {
@@ -1441,11 +1483,13 @@ func TestInternalScatterLeaderPrefersUnusedStore(t *testing.T) {
 	state := newTestScatterState(scatterer)
 	group := "test-leader-coverage"
 
-	adminLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
+	adminLeader, adminCount := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
 	re.Equal(uint64(1), adminLeader)
+	re.Equal(scatterer.ordinaryEngine.selectedLeader.Get(adminLeader, group), adminCount)
 
-	internalLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
+	internalLeader, internalCount := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
 	re.Equal(uint64(4), internalLeader)
+	re.Equal(state.ordinaryEngine.selectedLeader.Get(internalLeader, group), internalCount)
 }
 
 func TestInternalScatterLeaderBreaksTiesByPeerDeficit(t *testing.T) {
@@ -1476,9 +1520,11 @@ func TestInternalScatterLeaderBreaksTiesByPeerDeficit(t *testing.T) {
 		5: 2,
 	}))
 
-	adminLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
+	adminLeader, adminCount := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, scatterer.ordinaryEngine.asSelectionContext(), false)
 	re.Equal(uint64(1), adminLeader)
+	re.Equal(scatterer.ordinaryEngine.selectedLeader.Get(adminLeader, group), adminCount)
 
-	internalLeader, _ := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
+	internalLeader, internalCount := scatterer.selectAvailableLeaderStore(group, region, []uint64{1, 4, 5}, state.ordinaryEngine.asSelectionContext(), true)
 	re.Equal(uint64(5), internalLeader)
+	re.Equal(state.ordinaryEngine.selectedLeader.Get(internalLeader, group), internalCount)
 }

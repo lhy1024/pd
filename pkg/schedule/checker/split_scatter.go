@@ -33,6 +33,7 @@ import (
 const (
 	splitScatterDispatchLimit = 4
 	splitScatterRetryBackoff  = time.Second
+	splitScatterPendingTTL    = 3 * time.Minute
 )
 
 type splitScatterPendingItem struct {
@@ -40,6 +41,7 @@ type splitScatterPendingItem struct {
 	group       string
 	waitVersion uint64
 	retryAt     time.Time
+	expireAt    time.Time
 }
 
 type splitScatterController struct {
@@ -78,11 +80,15 @@ func (c *splitScatterController) collectTopPendingSplitScatter(limit int) []spli
 		return nil
 	}
 	now := time.Now()
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
+	c.pendingMu.RLock()
 
 	candidates := make([]splitScatterPendingItem, 0, len(c.pending))
+	expiredRegionIDs := make([]uint64, 0)
 	for regionID, pending := range c.pending {
+		if !pending.expireAt.IsZero() && !now.Before(pending.expireAt) {
+			expiredRegionIDs = append(expiredRegionIDs, regionID)
+			continue
+		}
 		region := c.cluster.GetRegion(regionID)
 		if region == nil {
 			continue
@@ -101,6 +107,21 @@ func (c *splitScatterController) collectTopPendingSplitScatter(limit int) []spli
 	}
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
+	}
+	c.pendingMu.RUnlock()
+
+	if len(expiredRegionIDs) > 0 {
+		c.pendingMu.Lock()
+		for _, regionID := range expiredRegionIDs {
+			pending, ok := c.pending[regionID]
+			if !ok {
+				continue
+			}
+			if !pending.expireAt.IsZero() && !now.Before(pending.expireAt) {
+				delete(c.pending, regionID)
+			}
+		}
+		c.pendingMu.Unlock()
 	}
 	return candidates
 }
@@ -130,12 +151,13 @@ func (c *splitScatterController) recordSplitScatterBatch(sourceRegionID uint64, 
 		return
 	}
 	group := makeSplitScatterGroup(sourceRegionID, newRegionIDs[0])
+	expireAt := time.Now().Add(splitScatterPendingTTL)
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
 	for _, regionID := range newRegionIDs {
-		c.pending[regionID] = splitScatterPendingItem{regionID: regionID, group: group}
+		c.pending[regionID] = splitScatterPendingItem{regionID: regionID, group: group, expireAt: expireAt}
 	}
-	sourcePending := splitScatterPendingItem{regionID: sourceRegionID, group: group, waitVersion: 1}
+	sourcePending := splitScatterPendingItem{regionID: sourceRegionID, group: group, waitVersion: 1, expireAt: expireAt}
 	if sourceRegion := c.cluster.GetRegion(sourceRegionID); sourceRegion != nil && sourceRegion.GetRegionEpoch() != nil {
 		sourcePending.waitVersion = sourceRegion.GetRegionEpoch().GetVersion() + 1
 	}

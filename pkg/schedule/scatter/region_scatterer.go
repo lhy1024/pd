@@ -845,7 +845,10 @@ func (r *RegionScatterer) selectAvailableLeaderStore(group string, region *core.
 	if internalScatter && unusedAlternativeID != 0 {
 		selectedID = unusedAlternativeID
 	}
-	return selectedID, minStoreGroupLeader
+	if selectedID == 0 {
+		return 0, 0
+	}
+	return selectedID, context.selectedLeader.Get(selectedID, group)
 }
 
 func peerMoveReducesSourceTargetGap(selectedPeers selectedStoreCounter, group string, fromStoreID, toStoreID uint64) bool {
