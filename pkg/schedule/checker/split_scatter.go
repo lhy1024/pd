@@ -183,6 +183,7 @@ func (c *splitScatterController) dispatchSplitScatterRegions() {
 		rangeHint := resolveSplitScatterRangeHint(region)
 		op, err := c.regionScatterer.ScatterInternal(region, pending.group, rangeHint.startKey, rangeHint.endKey)
 		if err != nil {
+			c.delayPendingSplitScatter(pending.regionID, splitScatterRetryBackoff)
 			log.Info("dispatch internal split scatter failed",
 				zap.Uint64("region-id", pending.regionID),
 				zap.String("group", pending.group),
@@ -200,6 +201,7 @@ func (c *splitScatterController) dispatchSplitScatterRegions() {
 				continue
 			}
 			if !c.opController.AddOperator(op) {
+				c.delayPendingSplitScatter(pending.regionID, splitScatterRetryBackoff)
 				log.Info("dispatch internal split scatter add operator failed",
 					zap.Uint64("region-id", pending.regionID),
 					zap.String("group", pending.group),
