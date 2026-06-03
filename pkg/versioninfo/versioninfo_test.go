@@ -46,3 +46,11 @@ func TestIsHotScheduleWithCPUSupported(t *testing.T) {
 		re.Equal(test.expect, IsHotScheduleWithCPUSupported(MustParseVersion(test.version)), test.version)
 	}
 }
+
+func TestIsHotScheduleWithCPUSupportedInNextGen(t *testing.T) {
+	re := require.New(t)
+
+	re.False(isHotScheduleWithCPUSupported(nil, true))
+	re.True(isHotScheduleWithCPUSupported(MustParseVersion("8.5.4"), true))
+	re.True(isHotScheduleWithCPUSupported(MustParseVersion("8.5.4+branch-HEAD"), true))
+}
