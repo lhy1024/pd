@@ -221,7 +221,7 @@ func storeLoadDebugFields(prefix string, detail *statistics.StoreLoadDetail) []z
 	}
 	pending := detail.LoadPred.Pending()
 	fields := []zap.Field{
-		zap.Uint64(prefix+"store-id", detail.GetID()),
+		zap.Uint64(prefix+"store-id", storeLoadDebugID(detail)),
 		zap.Int(prefix+"hot-peer-count", len(detail.HotPeers)),
 		zap.Float64(prefix+"cur-byte", loadByDim(detail.LoadPred.Current.Loads, utils.ByteDim)),
 		zap.Float64(prefix+"cur-query", loadByDim(detail.LoadPred.Current.Loads, utils.QueryDim)),
@@ -248,6 +248,13 @@ func storeLoadDebugFields(prefix string, detail *statistics.StoreLoadDetail) []z
 	return fields
 }
 
+func storeLoadDebugID(detail *statistics.StoreLoadDetail) uint64 {
+	if detail == nil || detail.StoreSummaryInfo == nil || detail.StoreInfo == nil {
+		return 0
+	}
+	return detail.GetID()
+}
+
 func (bs *balanceSolver) logHotReadCPUDebug(msg string, fields ...zap.Field) {
 	if !bs.isHotReadCPUDebug() {
 		return
@@ -267,16 +274,29 @@ func (bs *balanceSolver) getPriorities() []string {
 	cpuSupport := bs.sche.conf.checkCPUSupport(bs.SchedulerCluster)
 	// For read, transfer-leader and move-peer have the same priority config
 	// For write, they are different
+	var priorities []string
 	switch bs.resourceTy {
 	case readLeader, readPeer:
-		return adjustPrioritiesConfig(querySupport, cpuSupport, bs.sche.conf.getReadPriorities(), getReadPriorities)
+		origins := bs.sche.conf.getReadPriorities()
+		priorities = adjustPrioritiesConfig(querySupport, cpuSupport, origins, getReadPriorities)
+		first, second := prioritiesToDim(priorities)
+		log.Info("hot-read-cpu-debug priority config resolved",
+			zap.Stringer("resource-type", bs.resourceTy),
+			zap.Bool("query-supported", querySupport),
+			zap.Bool("cpu-supported", cpuSupport),
+			zap.Strings("origin-priorities", origins),
+			zap.Strings("effective-priorities", priorities),
+			zap.String("effective-first-priority", utils.DimToString(first)),
+			zap.String("effective-second-priority", utils.DimToString(second)))
+		return priorities
 	case writeLeader:
-		return adjustPrioritiesConfig(querySupport, cpuSupport, bs.sche.conf.getWriteLeaderPriorities(), getWriteLeaderPriorities)
+		priorities = adjustPrioritiesConfig(querySupport, cpuSupport, bs.sche.conf.getWriteLeaderPriorities(), getWriteLeaderPriorities)
 	case writePeer:
-		return adjustPrioritiesConfig(querySupport, cpuSupport, bs.sche.conf.getWritePeerPriorities(), getWritePeerPriorities)
+		priorities = adjustPrioritiesConfig(querySupport, cpuSupport, bs.sche.conf.getWritePeerPriorities(), getWritePeerPriorities)
+	default:
+		log.Error("illegal type or illegal operator while getting the priority", zap.String("type", bs.rwTy.String()), zap.String("operator", bs.opTy.String()))
 	}
-	log.Error("illegal type or illegal operator while getting the priority", zap.String("type", bs.rwTy.String()), zap.String("operator", bs.opTy.String()))
-	return []string{}
+	return priorities
 }
 
 func newBalanceSolver(sche *hotScheduler, cluster sche.SchedulerCluster, rwTy utils.RWType, opTy opType) *balanceSolver {
@@ -377,6 +397,9 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 	for _, srcStore := range bs.filterSrcStores() {
 		bs.cur.srcStore = srcStore
 		srcStoreID := srcStore.GetID()
+		fields := storeLoadDebugFields("", srcStore)
+		fields = append(fields, zap.Int("filtered-hot-peer-count", len(bs.filteredHotPeers[srcStoreID])))
+		bs.logHotReadCPUDebug("src store selected for iteration", fields...)
 		for _, mainPeerStat := range bs.filteredHotPeers[srcStoreID] {
 			if bs.cur.region = bs.getRegion(mainPeerStat, srcStoreID); bs.cur.region == nil {
 				bs.logHotReadCPUDebug("hot peer skipped because region unavailable", hotPeerDebugFields(mainPeerStat)...)
@@ -407,6 +430,11 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 
 			for _, dstStore := range bs.filterDstStores() {
 				bs.cur.dstStore = dstStore
+				fields := storeLoadDebugFields("", dstStore)
+				fields = append(fields,
+					zap.Uint64("region-id", bs.cur.region.GetID()),
+					zap.Uint64("src-store-id", srcStoreID))
+				bs.logHotReadCPUDebug("dst store selected for scoring", fields...)
 				bs.calcProgressiveRank()
 				tryUpdateBestSolution()
 				if bs.needSearchRevertRegions() {
@@ -620,6 +648,9 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 		fields = append(fields, zap.Float64("src-tolerance-ratio", srcToleranceRatio))
 		bs.logHotReadCPUDebug("src store accepted", fields...)
 	}
+	bs.logHotReadCPUDebug("src candidate set finished",
+		zap.Int("accepted-source-store-count", len(ret)),
+		zap.Int("total-store-count", len(bs.stLoadDetail)))
 	return ret
 }
 
@@ -648,19 +679,19 @@ func (bs *balanceSolver) filterHotPeers(storeLoad *statistics.StoreLoadDetail) [
 	appendItem := func(item *statistics.HotPeerStat) {
 		if _, ok := bs.sche.regionPendings[item.ID()]; ok {
 			fields := hotPeerDebugFields(item)
-			fields = append(fields, zap.Uint64("store-id", storeLoad.GetID()), zap.String("reason", "pending-operator"))
+			fields = append(fields, zap.Uint64("store-id", storeLoadDebugID(storeLoad)), zap.String("reason", "pending-operator"))
 			bs.logHotReadCPUDebug("hot peer filtered", fields...)
 			return
 		}
 		if item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy) {
 			fields := hotPeerDebugFields(item)
-			fields = append(fields, zap.Uint64("store-id", storeLoad.GetID()), zap.String("reason", "transfer-leader-cooldown"))
+			fields = append(fields, zap.Uint64("store-id", storeLoadDebugID(storeLoad)), zap.String("reason", "transfer-leader-cooldown"))
 			bs.logHotReadCPUDebug("hot peer filtered", fields...)
 			return
 		}
 		if bs.isHotReadCPUDebug() {
 			fields := hotPeerDebugFields(item)
-			fields = append(fields, zap.Uint64("store-id", storeLoad.GetID()))
+			fields = append(fields, zap.Uint64("store-id", storeLoadDebugID(storeLoad)))
 			bs.logHotReadCPUDebug("hot peer accepted", fields...)
 		}
 		// no in pending operator and no need cool down after transfer leader
@@ -681,14 +712,14 @@ func (bs *balanceSolver) filterHotPeers(storeLoad *statistics.StoreLoadDetail) [
 		})
 	}
 	if len(hotPeers) >= topnPosition {
-		storeID := storeLoad.GetID()
+		storeID := storeLoadDebugID(storeLoad)
 		bs.nthHotPeer[storeID][bs.firstPriority] = firstSort[topnPosition-1]
 		bs.nthHotPeer[storeID][bs.secondPriority] = secondSort[topnPosition-1]
 	}
 	if len(hotPeers) > bs.maxPeerNum {
 		union := sortHotPeers(firstSort, secondSort, bs.maxPeerNum)
 		bs.logHotReadCPUDebug("hot peer topn union applied",
-			zap.Uint64("store-id", storeLoad.GetID()),
+			zap.Uint64("store-id", storeLoadDebugID(storeLoad)),
 			zap.Int("raw-hot-peer-count", len(hotPeers)),
 			zap.Int("max-peer-number", bs.maxPeerNum),
 			zap.Int("union-count", len(union)))
@@ -938,6 +969,11 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 			bs.logHotReadCPUDebug("dst store rejected", fields...)
 		}
 	}
+	bs.logHotReadCPUDebug("dst candidate set finished",
+		zap.Uint64("region-id", bs.cur.region.GetID()),
+		zap.Uint64("src-store-id", bs.cur.srcStore.GetID()),
+		zap.Int("accepted-dst-store-count", len(ret)),
+		zap.Int("candidate-count", len(candidates)))
 	return ret
 }
 
