@@ -20,6 +20,10 @@ import (
 	"fmt"
 	"math"
 
+	"go.uber.org/zap"
+
+	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/statistics"
 	"github.com/tikv/pd/pkg/statistics/utils"
 )
@@ -148,6 +152,23 @@ func (r *rankV2) filterUniformStore() (string, bool) {
 	}
 	// Because region is available for src and dst, so stddev is the same for both, only need to calculate one.
 	isUniformFirstPriority, isUniformSecondPriority := r.isUniformFirstPriority(r.cur.srcStore), r.isUniformSecondPriority(r.cur.srcStore)
+	if r.isHotReadCPUDebug() {
+		log.Info("hot-read-cpu-debug uniform check",
+			zap.Stringer("op-type", r.opTy),
+			zap.Uint64("region-id", r.cur.region.GetID()),
+			zap.Uint64("src-store-id", r.cur.srcStore.GetID()),
+			zap.Uint64("dst-store-id", r.cur.dstStore.GetID()),
+			zap.String("first-priority", utils.DimToString(r.firstPriority)),
+			zap.String("second-priority", utils.DimToString(r.secondPriority)),
+			zap.Bool("is-uniform-first-priority", isUniformFirstPriority),
+			zap.Bool("is-uniform-second-priority", isUniformSecondPriority),
+			zap.Int64("progressive-rank", r.cur.progressiveRank),
+			zap.Float64("src-stddev-byte", loadByDim(r.cur.srcStore.LoadPred.Stddev.Loads, utils.ByteDim)),
+			zap.Float64("src-stddev-query", loadByDim(r.cur.srcStore.LoadPred.Stddev.Loads, utils.QueryDim)),
+			zap.Float64("src-stddev-cpu", loadByDim(r.cur.srcStore.LoadPred.Stddev.Loads, utils.CPUDim)),
+			zap.Float64("stddev-threshold-first", stddevThreshold*0.5),
+			zap.Float64("stddev-threshold-second", stddevThreshold))
+	}
 	if isUniformFirstPriority && isUniformSecondPriority {
 		// If both dims are enough uniform, any schedule is unnecessary.
 		return "all-dim", true
@@ -204,6 +225,17 @@ func (r *rankV2) calcProgressiveRank() {
 	r.cur.calcPeersRate(r.firstPriority, r.secondPriority)
 	if r.cur.getPeersRateFromCache(r.firstPriority) < r.getMinRate(r.firstPriority) &&
 		r.cur.getPeersRateFromCache(r.secondPriority) < r.getMinRate(r.secondPriority) {
+		if r.isHotReadCPUDebug() {
+			log.Info("hot-read-cpu-debug rank skipped by min peer rate",
+				zap.Stringer("op-type", r.opTy),
+				zap.Uint64("region-id", r.cur.region.GetID()),
+				zap.Uint64("src-store-id", r.cur.srcStore.GetID()),
+				zap.Uint64("dst-store-id", r.cur.dstStore.GetID()),
+				zap.Float64("peer-first-rate", r.cur.getPeersRateFromCache(r.firstPriority)),
+				zap.Float64("peer-second-rate", r.cur.getPeersRateFromCache(r.secondPriority)),
+				zap.Float64("min-first-rate", r.getMinRate(r.firstPriority)),
+				zap.Float64("min-second-rate", r.getMinRate(r.secondPriority)))
+		}
 		return
 	}
 
@@ -238,6 +270,66 @@ func (r *rankV2) calcProgressiveRank() {
 		// It's a solution that cannot be used directly, but can be optimized.
 		r.cur.progressiveRank = 0
 	}
+	if r.isHotReadCPUDebug() {
+		log.Info("hot-read-cpu-debug rank result",
+			zap.Stringer("op-type", r.opTy),
+			zap.Uint64("region-id", r.cur.region.GetID()),
+			zap.Uint64("src-store-id", r.cur.srcStore.GetID()),
+			zap.Uint64("dst-store-id", r.cur.dstStore.GetID()),
+			zap.Int("first-score", firstScore),
+			zap.Int("second-score", secondScore),
+			zap.Int64("progressive-rank", r.cur.progressiveRank),
+			zap.String("rank-dim", rankToDimString(r.firstPriority, r.secondPriority, r.cur.progressiveRank)),
+			zap.Float64("peer-byte", r.cur.getPeersRateFromCache(utils.ByteDim)),
+			zap.Float64("peer-query", r.cur.getPeersRateFromCache(utils.QueryDim)),
+			zap.Float64("peer-cpu", r.cur.getPeersRateFromCache(utils.CPUDim)))
+	}
+}
+
+func (r *rankV2) logScoreDecision(
+	dim int, state, reason string, score int,
+	srcRate, dstRate, highRate, lowRate, peersRate, srcPendingRate, dstPendingRate, topnRate,
+	minNotWorsenedRate, minBetterRate, minBalancedRate, maxBalancedRate, maxBetterRate, maxNotWorsenedRate float64,
+	reverse, pendingRateLimit, toleranceOK, minRateOK, pendingOK bool,
+) {
+	if !r.isHotReadCPUDebug() {
+		return
+	}
+	log.Info("hot-read-cpu-debug score decision",
+		zap.Stringer("op-type", r.opTy),
+		zap.Uint64("region-id", r.cur.region.GetID()),
+		zap.Uint64("src-store-id", r.cur.srcStore.GetID()),
+		zap.Uint64("dst-store-id", r.cur.dstStore.GetID()),
+		zap.String("dim", utils.DimToString(dim)),
+		zap.String("state", state),
+		zap.String("reason", reason),
+		zap.Int("score", score),
+		zap.Float64("src-rate", srcRate),
+		zap.Float64("dst-rate", dstRate),
+		zap.Float64("high-rate", highRate),
+		zap.Float64("low-rate", lowRate),
+		zap.Float64("peers-rate", peersRate),
+		zap.Float64("src-pending-rate", srcPendingRate),
+		zap.Float64("dst-pending-rate", dstPendingRate),
+		zap.Float64("topn-rate", topnRate),
+		zap.Float64("min-hot-rate", r.getMinRate(dim)),
+		zap.Float64("min-not-worsened-rate", minNotWorsenedRate),
+		zap.Float64("min-better-rate", minBetterRate),
+		zap.Float64("min-balanced-rate", minBalancedRate),
+		zap.Float64("max-balanced-rate", maxBalancedRate),
+		zap.Float64("max-better-rate", maxBetterRate),
+		zap.Float64("max-not-worsened-rate", maxNotWorsenedRate),
+		zap.Bool("reverse", reverse),
+		zap.Bool("pending-rate-limit", pendingRateLimit),
+		zap.Bool("tolerance-ok", toleranceOK),
+		zap.Bool("min-rate-ok", minRateOK),
+		zap.Bool("pending-ok", pendingOK),
+		zap.Float64("src-cur-byte", loadByDim(r.cur.srcStore.LoadPred.Current.Loads, utils.ByteDim)),
+		zap.Float64("src-cur-query", loadByDim(r.cur.srcStore.LoadPred.Current.Loads, utils.QueryDim)),
+		zap.Float64("src-cur-cpu", loadByDim(r.cur.srcStore.LoadPred.Current.Loads, utils.CPUDim)),
+		zap.Float64("dst-cur-byte", loadByDim(r.cur.dstStore.LoadPred.Current.Loads, utils.ByteDim)),
+		zap.Float64("dst-cur-query", loadByDim(r.cur.dstStore.LoadPred.Current.Loads, utils.QueryDim)),
+		zap.Float64("dst-cur-cpu", loadByDim(r.cur.dstStore.LoadPred.Current.Loads, utils.CPUDim)))
 }
 
 func (r *rankV2) getScoreByPriorities(dim int, rs *rankRatios) int {
@@ -314,8 +406,16 @@ func (r *rankV2) getScoreByPriorities(dim int, rs *rankRatios) int {
 		}
 
 		if peersRate >= minNotWorsenedRate && peersRate <= maxNotWorsenedRate {
+			r.logScoreDecision(dim, "balanced", "not-worsened", 0,
+				srcRate, dstRate, highRate, lowRate, peersRate, srcPendingRate, dstPendingRate, topnRate,
+				minNotWorsenedRate, 0, 0, 0, 0, maxNotWorsenedRate,
+				reverse, false, true, peersRate >= r.getMinRate(dim), true)
 			return 0
 		}
+		r.logScoreDecision(dim, "balanced", "break-balanced", -2,
+			srcRate, dstRate, highRate, lowRate, peersRate, srcPendingRate, dstPendingRate, topnRate,
+			minNotWorsenedRate, 0, 0, 0, 0, maxNotWorsenedRate,
+			reverse, false, true, peersRate >= r.getMinRate(dim), true)
 		return -2
 	}
 
@@ -415,23 +515,46 @@ func (r *rankV2) getScoreByPriorities(dim int, rs *rankRatios) int {
 	switch {
 	case minBetterRate <= peersRate && peersRate <= maxBetterRate:
 		// Positive score requires some restrictions.
-		if peersRate >= r.getMinRate(dim) && r.isTolerance(dim, reverse) &&
-			(!pendingRateLimit || math.Abs(srcPendingRate)+math.Abs(dstPendingRate) < 1 /*byte*/) { // avoid with pending influence when approaching the balanced state
+		minRateOK := peersRate >= r.getMinRate(dim)
+		toleranceOK := r.isTolerance(dim, reverse)
+		pendingOK := !pendingRateLimit || math.Abs(srcPendingRate)+math.Abs(dstPendingRate) < 1 /*byte*/
+		if minRateOK && toleranceOK && pendingOK {                                              // avoid with pending influence when approaching the balanced state
+			score := 3
+			reason := "balanced-range"
 			switch {
 			case peersRate < minBalancedRate:
-				return 2
+				score, reason = 2, "better-low-range"
 			case peersRate > maxBalancedRate:
-				return 1
-			default: // minBalancedRate <= peersRate <= maxBalancedRate
-				return 3
+				score, reason = 1, "better-high-range"
 			}
+			r.logScoreDecision(dim, "unbalanced-or-pre-balanced", reason, score,
+				srcRate, dstRate, highRate, lowRate, peersRate, srcPendingRate, dstPendingRate, topnRate,
+				minNotWorsenedRate, minBetterRate, minBalancedRate, maxBalancedRate, maxBetterRate, maxNotWorsenedRate,
+				reverse, pendingRateLimit, toleranceOK, minRateOK, pendingOK)
+			return score
 		}
+		r.logScoreDecision(dim, "unbalanced-or-pre-balanced", "positive-range-blocked", 0,
+			srcRate, dstRate, highRate, lowRate, peersRate, srcPendingRate, dstPendingRate, topnRate,
+			minNotWorsenedRate, minBetterRate, minBalancedRate, maxBalancedRate, maxBetterRate, maxNotWorsenedRate,
+			reverse, pendingRateLimit, toleranceOK, minRateOK, pendingOK)
 		return 0
 	case minNotWorsenedRate <= peersRate && peersRate < minBetterRate:
+		r.logScoreDecision(dim, "unbalanced-or-pre-balanced", "not-worsened-low-range", 0,
+			srcRate, dstRate, highRate, lowRate, peersRate, srcPendingRate, dstPendingRate, topnRate,
+			minNotWorsenedRate, minBetterRate, minBalancedRate, maxBalancedRate, maxBetterRate, maxNotWorsenedRate,
+			reverse, pendingRateLimit, true, peersRate >= r.getMinRate(dim), true)
 		return 0
 	case maxBetterRate < peersRate && peersRate <= maxNotWorsenedRate:
+		r.logScoreDecision(dim, "unbalanced-or-pre-balanced", "worsened-but-within-not-worsened-high-range", -1,
+			srcRate, dstRate, highRate, lowRate, peersRate, srcPendingRate, dstPendingRate, topnRate,
+			minNotWorsenedRate, minBetterRate, minBalancedRate, maxBalancedRate, maxBetterRate, maxNotWorsenedRate,
+			reverse, pendingRateLimit, true, peersRate >= r.getMinRate(dim), true)
 		return -1
 	default: // peersRate < minNotWorsenedRate || peersRate > maxNotWorsenedRate
+		r.logScoreDecision(dim, "unbalanced-or-pre-balanced", "outside-not-worsened-range", -2,
+			srcRate, dstRate, highRate, lowRate, peersRate, srcPendingRate, dstPendingRate, topnRate,
+			minNotWorsenedRate, minBetterRate, minBalancedRate, maxBalancedRate, maxBetterRate, maxNotWorsenedRate,
+			reverse, pendingRateLimit, true, peersRate >= r.getMinRate(dim), true)
 		return -2
 	}
 }

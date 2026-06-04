@@ -114,6 +114,47 @@ func (s *baseHotScheduler) prepareForBalance(typ resourceType, cluster sche.Sche
 			regionStats,
 			isTraceRegionFlow,
 			rw, resource)
+		if rw == utils.Read {
+			rawPeers := 0
+			rawCPU := 0.0
+			rawQuery := 0.0
+			rawByte := 0.0
+			for _, peers := range regionStats {
+				for _, peer := range peers {
+					rawPeers++
+					rawCPU += peer.GetLoad(utils.CPUDim)
+					rawQuery += peer.GetLoad(utils.QueryDim)
+					rawByte += peer.GetLoad(utils.ByteDim)
+				}
+			}
+			loadInfos := s.stLoadInfos[ty]
+			summaryPeers := 0
+			summaryCPU := 0.0
+			summaryQuery := 0.0
+			summaryByte := 0.0
+			for _, detail := range loadInfos {
+				summaryPeers += len(detail.HotPeers)
+				for _, peer := range detail.HotPeers {
+					summaryCPU += peer.GetLoad(utils.CPUDim)
+					summaryQuery += peer.GetLoad(utils.QueryDim)
+					summaryByte += peer.GetLoad(utils.ByteDim)
+				}
+			}
+			log.Info("hot-read-cpu-debug hot cache summary",
+				zap.Stringer("resource-type", ty),
+				zap.Stringer("resource-kind", resource),
+				zap.Int("raw-store-count", len(regionStats)),
+				zap.Int("raw-hot-peer-count", rawPeers),
+				zap.Float64("raw-hot-peer-byte-sum", rawByte),
+				zap.Float64("raw-hot-peer-query-sum", rawQuery),
+				zap.Float64("raw-hot-peer-cpu-sum", rawCPU),
+				zap.Int("summary-store-count", len(loadInfos)),
+				zap.Int("summary-hot-peer-count", summaryPeers),
+				zap.Float64("summary-hot-peer-byte-sum", summaryByte),
+				zap.Float64("summary-hot-peer-query-sum", summaryQuery),
+				zap.Float64("summary-hot-peer-cpu-sum", summaryCPU),
+				zap.Bool("trace-region-flow", isTraceRegionFlow))
+		}
 	}
 	switch typ {
 	case readLeader, readPeer:

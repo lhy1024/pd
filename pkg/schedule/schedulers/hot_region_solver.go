@@ -121,10 +121,145 @@ func (bs *balanceSolver) init() {
 		Loads:        stepLoads,
 		HotPeerCount: maxCur.HotPeerCount * bs.sche.conf.getCountRankStepRatio(),
 	}
+
+	if bs.isHotReadCPUDebug() {
+		totalRawPeers := 0
+		totalFilteredPeers := 0
+		for _, detail := range bs.stLoadDetail {
+			totalRawPeers += len(detail.HotPeers)
+			totalFilteredPeers += len(bs.filteredHotPeers[detail.GetID()])
+		}
+		bs.logHotReadCPUDebug("solver init",
+			zap.Int("store-count", len(bs.stLoadDetail)),
+			zap.Int("raw-hot-peer-count", totalRawPeers),
+			zap.Int("filtered-hot-peer-count", totalFilteredPeers),
+			zap.Bool("enable-region-bucket", bs.GetStoreConfig().IsEnableRegionBucket()),
+			zap.Float64("src-tolerance-ratio", bs.sche.conf.getSrcToleranceRatio()),
+			zap.Float64("dst-tolerance-ratio", bs.sche.conf.getDstToleranceRatio()),
+			zap.Float64("split-thresholds", bs.sche.conf.getSplitThresholds()),
+			zap.Float64("min-hot-byte-rate", bs.sche.conf.getMinHotByteRate()),
+			zap.Float64("min-hot-query-rate", bs.sche.conf.getMinHotQueryRate()),
+			zap.Float64("min-hot-cpu-rate", bs.sche.conf.getMinHotCPURate()),
+			zap.Float64("rank-step-byte", bs.rankStep.Loads[utils.ByteDim]),
+			zap.Float64("rank-step-query", bs.rankStep.Loads[utils.QueryDim]),
+			zap.Float64("rank-step-cpu", bs.rankStep.Loads[utils.CPUDim]),
+			zap.Float64("max-src-byte", bs.maxSrc.Loads[utils.ByteDim]),
+			zap.Float64("max-src-query", bs.maxSrc.Loads[utils.QueryDim]),
+			zap.Float64("max-src-cpu", bs.maxSrc.Loads[utils.CPUDim]),
+			zap.Float64("min-dst-byte", bs.minDst.Loads[utils.ByteDim]),
+			zap.Float64("min-dst-query", bs.minDst.Loads[utils.QueryDim]),
+			zap.Float64("min-dst-cpu", bs.minDst.Loads[utils.CPUDim]),
+		)
+		for _, detail := range bs.stLoadDetail {
+			fields := storeLoadDebugFields("", detail)
+			fields = append(fields,
+				zap.Int("filtered-hot-peer-count", len(bs.filteredHotPeers[detail.GetID()])),
+			)
+			bs.logHotReadCPUDebug("store load summary", fields...)
+		}
+	}
 }
 
 func (bs *balanceSolver) isSelectedDim(dim int) bool {
 	return dim == bs.firstPriority || dim == bs.secondPriority
+}
+
+func (bs *balanceSolver) isHotReadCPUDebug() bool {
+	return bs != nil && bs.rwTy == utils.Read && bs.firstPriority == utils.CPUDim
+}
+
+func loadByDim(loads statistics.Loads, dim int) float64 {
+	if dim < 0 || dim >= len(loads) {
+		return 0
+	}
+	return loads[dim]
+}
+
+func historyLenByDim(loads statistics.HistoryLoads, dim int) int {
+	if dim < 0 || dim >= len(loads) {
+		return 0
+	}
+	return len(loads[dim])
+}
+
+func rankToDimString(firstPriority, secondPriority int, rank int64) string {
+	switch rank {
+	case 4:
+		return "all"
+	case 3:
+		return utils.DimToString(firstPriority)
+	case 2:
+		return utils.DimToString(firstPriority) + "-only"
+	case 1:
+		return utils.DimToString(secondPriority)
+	default:
+		return "none"
+	}
+}
+
+func hotPeerDebugFields(peer *statistics.HotPeerStat) []zap.Field {
+	if peer == nil {
+		return []zap.Field{zap.Bool("peer-nil", true)}
+	}
+	return []zap.Field{
+		zap.Uint64("region-id", peer.RegionID),
+		zap.Uint64("peer-store-id", peer.StoreID),
+		zap.Bool("peer-is-leader", peer.IsLeader()),
+		zap.Int("hot-degree", peer.HotDegree),
+		zap.Int("anti-count", peer.AntiCount),
+		zap.Float64("peer-byte", peer.GetLoad(utils.ByteDim)),
+		zap.Float64("peer-key", peer.GetLoad(utils.KeyDim)),
+		zap.Float64("peer-query", peer.GetLoad(utils.QueryDim)),
+		zap.Float64("peer-cpu", peer.GetLoad(utils.CPUDim)),
+		zap.String("action-type", peer.GetActionType().String()),
+	}
+}
+
+func storeLoadDebugFields(prefix string, detail *statistics.StoreLoadDetail) []zap.Field {
+	if detail == nil || detail.LoadPred == nil {
+		return []zap.Field{zap.Bool(prefix+"store-nil", true)}
+	}
+	pending := detail.LoadPred.Pending()
+	fields := []zap.Field{
+		zap.Uint64(prefix+"store-id", detail.GetID()),
+		zap.Int(prefix+"hot-peer-count", len(detail.HotPeers)),
+		zap.Float64(prefix+"cur-byte", loadByDim(detail.LoadPred.Current.Loads, utils.ByteDim)),
+		zap.Float64(prefix+"cur-query", loadByDim(detail.LoadPred.Current.Loads, utils.QueryDim)),
+		zap.Float64(prefix+"cur-cpu", loadByDim(detail.LoadPred.Current.Loads, utils.CPUDim)),
+		zap.Float64(prefix+"expect-byte", loadByDim(detail.LoadPred.Expect.Loads, utils.ByteDim)),
+		zap.Float64(prefix+"expect-query", loadByDim(detail.LoadPred.Expect.Loads, utils.QueryDim)),
+		zap.Float64(prefix+"expect-cpu", loadByDim(detail.LoadPred.Expect.Loads, utils.CPUDim)),
+		zap.Float64(prefix+"min-byte", loadByDim(detail.LoadPred.Min().Loads, utils.ByteDim)),
+		zap.Float64(prefix+"min-query", loadByDim(detail.LoadPred.Min().Loads, utils.QueryDim)),
+		zap.Float64(prefix+"min-cpu", loadByDim(detail.LoadPred.Min().Loads, utils.CPUDim)),
+		zap.Float64(prefix+"max-byte", loadByDim(detail.LoadPred.Max().Loads, utils.ByteDim)),
+		zap.Float64(prefix+"max-query", loadByDim(detail.LoadPred.Max().Loads, utils.QueryDim)),
+		zap.Float64(prefix+"max-cpu", loadByDim(detail.LoadPred.Max().Loads, utils.CPUDim)),
+		zap.Float64(prefix+"pending-byte", loadByDim(pending.Loads, utils.ByteDim)),
+		zap.Float64(prefix+"pending-query", loadByDim(pending.Loads, utils.QueryDim)),
+		zap.Float64(prefix+"pending-cpu", loadByDim(pending.Loads, utils.CPUDim)),
+		zap.Float64(prefix+"stddev-byte", loadByDim(detail.LoadPred.Stddev.Loads, utils.ByteDim)),
+		zap.Float64(prefix+"stddev-query", loadByDim(detail.LoadPred.Stddev.Loads, utils.QueryDim)),
+		zap.Float64(prefix+"stddev-cpu", loadByDim(detail.LoadPred.Stddev.Loads, utils.CPUDim)),
+		zap.Int(prefix+"history-byte-len", historyLenByDim(detail.LoadPred.Current.HistoryLoads, utils.ByteDim)),
+		zap.Int(prefix+"history-query-len", historyLenByDim(detail.LoadPred.Current.HistoryLoads, utils.QueryDim)),
+		zap.Int(prefix+"history-cpu-len", historyLenByDim(detail.LoadPred.Current.HistoryLoads, utils.CPUDim)),
+	}
+	return fields
+}
+
+func (bs *balanceSolver) logHotReadCPUDebug(msg string, fields ...zap.Field) {
+	if !bs.isHotReadCPUDebug() {
+		return
+	}
+	base := []zap.Field{
+		zap.Stringer("rw-type", bs.rwTy),
+		zap.Stringer("op-type", bs.opTy),
+		zap.Stringer("resource-type", bs.resourceTy),
+		zap.String("first-priority", utils.DimToString(bs.firstPriority)),
+		zap.String("second-priority", utils.DimToString(bs.secondPriority)),
+	}
+	log.Info("hot-read-cpu-debug "+msg, append(base, fields...)...)
 }
 
 func (bs *balanceSolver) getPriorities() []string {
@@ -168,21 +303,60 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 	if !bs.isValid() {
 		return nil
 	}
+	bs.logHotReadCPUDebug("solve begin")
 	bs.cur = &solution{}
 	tryUpdateBestSolution := func() {
 		if label, ok := bs.filterUniformStore(); ok {
+			bs.logHotReadCPUDebug("candidate filtered by uniform store",
+				zap.String("uniform-dim", label),
+				zap.Int64("progressive-rank", bs.cur.progressiveRank),
+				zap.Int("first-score", bs.cur.firstScore),
+				zap.Int("second-score", bs.cur.secondScore),
+				zap.String("candidate-dim", rankToDimString(bs.firstPriority, bs.secondPriority, bs.cur.progressiveRank)),
+				zap.Uint64("region-id", bs.cur.region.GetID()),
+				zap.Uint64("src-store-id", bs.cur.srcStore.GetID()),
+				zap.Uint64("dst-store-id", bs.cur.dstStore.GetID()))
 			bs.skipCounter(label).Inc()
 			return
 		}
-		if bs.isAvailable(bs.cur) && bs.betterThan(bs.best) {
-			if !bs.isReadyToBuild() {
-				return
-			}
-			if newOps := bs.buildOperators(); len(newOps) > 0 {
-				bs.ops = newOps
-				clone := *bs.cur
-				bs.best = &clone
-			}
+		available := bs.isAvailable(bs.cur)
+		better := bs.betterThan(bs.best)
+		ready := bs.isReadyToBuild()
+		bs.logHotReadCPUDebug("candidate evaluated",
+			zap.Uint64("region-id", bs.cur.region.GetID()),
+			zap.Uint64("src-store-id", bs.cur.srcStore.GetID()),
+			zap.Uint64("dst-store-id", bs.cur.dstStore.GetID()),
+			zap.Int64("progressive-rank", bs.cur.progressiveRank),
+			zap.Int("first-score", bs.cur.firstScore),
+			zap.Int("second-score", bs.cur.secondScore),
+			zap.String("candidate-dim", rankToDimString(bs.firstPriority, bs.secondPriority, bs.cur.progressiveRank)),
+			zap.Bool("available", available),
+			zap.Bool("better-than-current-best", better),
+			zap.Bool("ready-to-build", ready),
+			zap.Bool("has-revert-region", bs.cur.revertRegion != nil),
+			zap.Float64("peer-byte", bs.cur.getPeersRateFromCache(utils.ByteDim)),
+			zap.Float64("peer-query", bs.cur.getPeersRateFromCache(utils.QueryDim)),
+			zap.Float64("peer-cpu", bs.cur.getPeersRateFromCache(utils.CPUDim)))
+		if !available || !better {
+			return
+		}
+		if !ready {
+			bs.logHotReadCPUDebug("candidate not ready to build",
+				zap.Uint64("region-id", bs.cur.region.GetID()),
+				zap.Uint64("src-store-id", bs.cur.srcStore.GetID()),
+				zap.Uint64("dst-store-id", bs.cur.dstStore.GetID()))
+			return
+		}
+		if newOps := bs.buildOperators(); len(newOps) > 0 {
+			bs.ops = newOps
+			clone := *bs.cur
+			bs.best = &clone
+			bs.logHotReadCPUDebug("candidate became best",
+				zap.Uint64("region-id", bs.cur.region.GetID()),
+				zap.Uint64("src-store-id", bs.cur.srcStore.GetID()),
+				zap.Uint64("dst-store-id", bs.cur.dstStore.GetID()),
+				zap.Int("operator-count", len(newOps)),
+				zap.String("candidate-dim", rankToDimString(bs.firstPriority, bs.secondPriority, bs.cur.progressiveRank)))
 		}
 	}
 
@@ -205,17 +379,21 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 		srcStoreID := srcStore.GetID()
 		for _, mainPeerStat := range bs.filteredHotPeers[srcStoreID] {
 			if bs.cur.region = bs.getRegion(mainPeerStat, srcStoreID); bs.cur.region == nil {
+				bs.logHotReadCPUDebug("hot peer skipped because region unavailable", hotPeerDebugFields(mainPeerStat)...)
 				continue
 			}
 			if bs.opTy == movePeer && !snapshotFilter.Select(bs.cur.region).IsOK() {
 				hotSchedulerSnapshotSenderLimitCounter.Inc()
+				bs.logHotReadCPUDebug("hot peer skipped by snapshot sender limit", hotPeerDebugFields(mainPeerStat)...)
 				continue
 			}
 			if !affinityFilter.Select(bs.cur.region).IsOK() {
 				hotSchedulerIgnoredAffinity.Inc()
+				bs.logHotReadCPUDebug("hot peer skipped by affinity filter", hotPeerDebugFields(mainPeerStat)...)
 				continue
 			}
 			bs.cur.mainPeerStat = mainPeerStat
+			bs.logHotReadCPUDebug("hot peer selected", hotPeerDebugFields(mainPeerStat)...)
 			if bs.GetStoreConfig().IsEnableRegionBucket() && bs.tooHotNeedSplit(srcStore, mainPeerStat, splitThresholds) {
 				hotSchedulerRegionTooHotNeedSplitCounter.Inc()
 				ops := bs.createSplitOperator([]*core.RegionInfo{bs.cur.region}, byLoad)
@@ -253,6 +431,19 @@ func (bs *balanceSolver) solve() []*operator.Operator {
 	}
 
 	bs.setSearchRevertRegions()
+	if bs.best == nil {
+		bs.logHotReadCPUDebug("solve end without best")
+	} else {
+		bs.logHotReadCPUDebug("solve end with best",
+			zap.Uint64("region-id", bs.best.region.GetID()),
+			zap.Uint64("src-store-id", bs.best.srcStore.GetID()),
+			zap.Uint64("dst-store-id", bs.best.dstStore.GetID()),
+			zap.Int64("progressive-rank", bs.best.progressiveRank),
+			zap.Int("first-score", bs.best.firstScore),
+			zap.Int("second-score", bs.best.secondScore),
+			zap.String("candidate-dim", rankToDimString(bs.firstPriority, bs.secondPriority, bs.best.progressiveRank)),
+			zap.Int("operator-count", len(bs.ops)))
+	}
 	return bs.ops
 }
 
@@ -384,28 +575,50 @@ func (bs *balanceSolver) filterSrcStores() map[uint64]*statistics.StoreLoadDetai
 		srcToleranceRatio := confSrcToleranceRatio
 		if !detail.IsTiKV() {
 			if !confEnableForTiFlash || detail.IsTiFlashCompute() {
+				fields := storeLoadDebugFields("", detail)
+				fields = append(fields, zap.String("reason", "non-tikv-disabled-or-compute"))
+				bs.logHotReadCPUDebug("src store rejected", fields...)
 				continue
 			}
 			if bs.rwTy != utils.Write || bs.opTy != movePeer {
+				fields := storeLoadDebugFields("", detail)
+				fields = append(fields, zap.String("reason", "non-tikv-only-write-peer-supported"))
+				bs.logHotReadCPUDebug("src store rejected", fields...)
 				continue
 			}
 			srcToleranceRatio += tiflashToleranceRatioCorrection
 		}
 		if len(detail.HotPeers) == 0 {
+			fields := storeLoadDebugFields("", detail)
+			fields = append(fields, zap.String("reason", "no-hot-peers"))
+			bs.logHotReadCPUDebug("src store rejected", fields...)
 			continue
 		}
 
 		if !bs.checkSrcByPriorityAndTolerance(detail.LoadPred.Min(), &detail.LoadPred.Expect, srcToleranceRatio) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+			fields := storeLoadDebugFields("", detail)
+			fields = append(fields,
+				zap.String("reason", "min-load-not-over-expect-tolerance"),
+				zap.Float64("src-tolerance-ratio", srcToleranceRatio))
+			bs.logHotReadCPUDebug("src store rejected", fields...)
 			continue
 		}
 		if !bs.checkSrcHistoryLoadsByPriorityAndTolerance(&detail.LoadPred.Current, &detail.LoadPred.Expect, srcToleranceRatio) {
 			hotSchedulerResultCounter.WithLabelValues("src-store-history-loads-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+			fields := storeLoadDebugFields("", detail)
+			fields = append(fields,
+				zap.String("reason", "history-load-not-over-expect-tolerance"),
+				zap.Float64("src-tolerance-ratio", srcToleranceRatio))
+			bs.logHotReadCPUDebug("src store rejected", fields...)
 			continue
 		}
 
 		ret[id] = detail
 		hotSchedulerResultCounter.WithLabelValues("src-store-succ-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+		fields := storeLoadDebugFields("", detail)
+		fields = append(fields, zap.Float64("src-tolerance-ratio", srcToleranceRatio))
+		bs.logHotReadCPUDebug("src store accepted", fields...)
 	}
 	return ret
 }
@@ -433,10 +646,25 @@ func (bs *balanceSolver) filterHotPeers(storeLoad *statistics.StoreLoadDetail) [
 	hotPeers := storeLoad.HotPeers
 	ret := make([]*statistics.HotPeerStat, 0, len(hotPeers))
 	appendItem := func(item *statistics.HotPeerStat) {
-		if _, ok := bs.sche.regionPendings[item.ID()]; !ok && !item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy) {
-			// no in pending operator and no need cool down after transfer leader
-			ret = append(ret, item)
+		if _, ok := bs.sche.regionPendings[item.ID()]; ok {
+			fields := hotPeerDebugFields(item)
+			fields = append(fields, zap.Uint64("store-id", storeLoad.GetID()), zap.String("reason", "pending-operator"))
+			bs.logHotReadCPUDebug("hot peer filtered", fields...)
+			return
 		}
+		if item.IsNeedCoolDownTransferLeader(bs.minHotDegree, bs.rwTy) {
+			fields := hotPeerDebugFields(item)
+			fields = append(fields, zap.Uint64("store-id", storeLoad.GetID()), zap.String("reason", "transfer-leader-cooldown"))
+			bs.logHotReadCPUDebug("hot peer filtered", fields...)
+			return
+		}
+		if bs.isHotReadCPUDebug() {
+			fields := hotPeerDebugFields(item)
+			fields = append(fields, zap.Uint64("store-id", storeLoad.GetID()))
+			bs.logHotReadCPUDebug("hot peer accepted", fields...)
+		}
+		// no in pending operator and no need cool down after transfer leader
+		ret = append(ret, item)
 	}
 
 	var firstSort, secondSort []*statistics.HotPeerStat
@@ -459,6 +687,11 @@ func (bs *balanceSolver) filterHotPeers(storeLoad *statistics.StoreLoadDetail) [
 	}
 	if len(hotPeers) > bs.maxPeerNum {
 		union := sortHotPeers(firstSort, secondSort, bs.maxPeerNum)
+		bs.logHotReadCPUDebug("hot peer topn union applied",
+			zap.Uint64("store-id", storeLoad.GetID()),
+			zap.Int("raw-hot-peer-count", len(hotPeers)),
+			zap.Int("max-peer-number", bs.maxPeerNum),
+			zap.Int("union-count", len(union)))
 		ret = make([]*statistics.HotPeerStat, 0, len(union))
 		for peer := range union {
 			appendItem(peer)
@@ -503,17 +736,24 @@ func sortHotPeers[T any](firstSort, secondSort []*T, maxPeerNum int) map[*T]stru
 func (bs *balanceSolver) isRegionAvailable(region *core.RegionInfo) bool {
 	if region == nil {
 		hotSchedulerNoRegionCounter.Inc()
+		bs.logHotReadCPUDebug("region unavailable", zap.String("reason", "nil-region"))
 		return false
 	}
 
 	if !filter.IsRegionHealthyAllowPending(region) {
 		hotSchedulerUnhealthyReplicaCounter.Inc()
+		bs.logHotReadCPUDebug("region unavailable",
+			zap.String("reason", "unhealthy-replica"),
+			zap.Uint64("region-id", region.GetID()))
 		return false
 	}
 
 	if !filter.IsRegionReplicated(bs.SchedulerCluster, region) {
 		log.Debug("region has abnormal replica count", zap.String("scheduler", bs.sche.GetName()), zap.Uint64("region-id", region.GetID()))
 		hotSchedulerAbnormalReplicaCounter.Inc()
+		bs.logHotReadCPUDebug("region unavailable",
+			zap.String("reason", "not-replicated"),
+			zap.Uint64("region-id", region.GetID()))
 		return false
 	}
 
@@ -533,6 +773,9 @@ func (bs *balanceSolver) getRegion(peerStat *statistics.HotPeerStat, storeID uin
 			log.Debug("region does not have a peer on source store, maybe stat out of date",
 				zap.Uint64("region-id", peerStat.ID()),
 				zap.Uint64("leader-store-id", storeID))
+			fields := hotPeerDebugFields(peerStat)
+			fields = append(fields, zap.String("reason", "source-store-has-no-peer"))
+			bs.logHotReadCPUDebug("region rejected for hot peer", fields...)
 			return nil
 		}
 	case transferLeader:
@@ -540,6 +783,11 @@ func (bs *balanceSolver) getRegion(peerStat *statistics.HotPeerStat, storeID uin
 			log.Debug("region leader is not on source store, maybe stat out of date",
 				zap.Uint64("region-id", peerStat.ID()),
 				zap.Uint64("leader-store-id", storeID))
+			fields := hotPeerDebugFields(peerStat)
+			fields = append(fields,
+				zap.String("reason", "leader-not-on-source-store"),
+				zap.Uint64("actual-leader-store-id", region.GetLeader().GetStoreId()))
+			bs.logHotReadCPUDebug("region rejected for hot peer", fields...)
 			return nil
 		}
 	default:
@@ -559,6 +807,10 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*statistics.StoreLoadDetai
 	switch bs.opTy {
 	case movePeer:
 		if bs.rwTy == utils.Read && bs.cur.mainPeerStat.IsLeader() { // for hot-read scheduler, only move peer
+			bs.logHotReadCPUDebug("dst stores skipped",
+				zap.String("reason", "read-move-peer-source-is-leader"),
+				zap.Uint64("region-id", bs.cur.region.GetID()),
+				zap.Uint64("src-store-id", bs.cur.mainPeerStat.StoreID))
 			return nil
 		}
 		filters = []filter.Filter{
@@ -573,6 +825,10 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*statistics.StoreLoadDetai
 
 	case transferLeader:
 		if !bs.cur.mainPeerStat.IsLeader() { // source peer must be leader whether it is move leader or transfer leader
+			bs.logHotReadCPUDebug("dst stores skipped",
+				zap.String("reason", "transfer-leader-source-is-not-leader"),
+				zap.Uint64("region-id", bs.cur.region.GetID()),
+				zap.Uint64("src-store-id", bs.cur.mainPeerStat.StoreID))
 			return nil
 		}
 		filters = []filter.Filter{
@@ -599,6 +855,12 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*statistics.StoreLoadDetai
 				// move leader
 				if filter.Target(bs.GetSchedulerConfig(), detail.StoreInfo, moveLeaderFilters) {
 					candidates = append(candidates, detail)
+				} else {
+					fields := storeLoadDebugFields("", detail)
+					fields = append(fields,
+						zap.Uint64("region-id", bs.cur.region.GetID()),
+						zap.String("reason", "move-leader-target-filter-rejected"))
+					bs.logHotReadCPUDebug("dst pre-candidate rejected", fields...)
 				}
 			}
 		} else {
@@ -615,6 +877,10 @@ func (bs *balanceSolver) filterDstStores() map[uint64]*statistics.StoreLoadDetai
 	default:
 		return nil
 	}
+	bs.logHotReadCPUDebug("dst candidate set built",
+		zap.Uint64("region-id", bs.cur.region.GetID()),
+		zap.Uint64("src-store-id", bs.cur.srcStore.GetID()),
+		zap.Int("candidate-count", len(candidates)))
 	return bs.pickDstStores(filters, candidates)
 }
 
@@ -627,9 +893,15 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 		dstToleranceRatio := confDstToleranceRatio
 		if !detail.IsTiKV() {
 			if !confEnableForTiFlash || detail.IsTiFlashCompute() {
+				fields := storeLoadDebugFields("", detail)
+				fields = append(fields, zap.String("reason", "non-tikv-disabled-or-compute"))
+				bs.logHotReadCPUDebug("dst store rejected", fields...)
 				continue
 			}
 			if bs.rwTy != utils.Write || bs.opTy != movePeer {
+				fields := storeLoadDebugFields("", detail)
+				fields = append(fields, zap.String("reason", "non-tikv-only-write-peer-supported"))
+				bs.logHotReadCPUDebug("dst store rejected", fields...)
 				continue
 			}
 			dstToleranceRatio += tiflashToleranceRatioCorrection
@@ -638,15 +910,32 @@ func (bs *balanceSolver) pickDstStores(filters []filter.Filter, candidates []*st
 			id := store.GetID()
 			if !bs.checkDstByPriorityAndTolerance(detail.LoadPred.Max(), &detail.LoadPred.Expect, dstToleranceRatio) {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+				fields := storeLoadDebugFields("", detail)
+				fields = append(fields,
+					zap.String("reason", "max-load-not-under-expect-tolerance"),
+					zap.Float64("dst-tolerance-ratio", dstToleranceRatio))
+				bs.logHotReadCPUDebug("dst store rejected", fields...)
 				continue
 			}
 			if !bs.checkDstHistoryLoadsByPriorityAndTolerance(&detail.LoadPred.Current, &detail.LoadPred.Expect, dstToleranceRatio) {
 				hotSchedulerResultCounter.WithLabelValues("dst-store-history-loads-failed-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
+				fields := storeLoadDebugFields("", detail)
+				fields = append(fields,
+					zap.String("reason", "history-load-not-under-expect-tolerance"),
+					zap.Float64("dst-tolerance-ratio", dstToleranceRatio))
+				bs.logHotReadCPUDebug("dst store rejected", fields...)
 				continue
 			}
 
 			hotSchedulerResultCounter.WithLabelValues("dst-store-succ-"+bs.resourceTy.String(), strconv.FormatUint(id, 10)).Inc()
 			ret[id] = detail
+			fields := storeLoadDebugFields("", detail)
+			fields = append(fields, zap.Float64("dst-tolerance-ratio", dstToleranceRatio))
+			bs.logHotReadCPUDebug("dst store accepted", fields...)
+		} else {
+			fields := storeLoadDebugFields("", detail)
+			fields = append(fields, zap.String("reason", "target-filter-rejected"))
+			bs.logHotReadCPUDebug("dst store rejected", fields...)
 		}
 	}
 	return ret
@@ -884,6 +1173,15 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator) {
 		}
 	}
 	if len(splitRegions) > 0 {
+		if bs.isHotReadCPUDebug() {
+			regionIDs := make([]uint64, 0, len(splitRegions))
+			for _, region := range splitRegions {
+				regionIDs = append(regionIDs, region.GetID())
+			}
+			bs.logHotReadCPUDebug("build operator chooses split by size",
+				zap.Uint64s("region-ids", regionIDs),
+				zap.Bool("enable-region-bucket", enabledBucket))
+		}
 		return bs.createSplitOperator(splitRegions, bySize)
 	}
 
@@ -895,11 +1193,23 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator) {
 
 	currentOp, typ, err := bs.createOperator(bs.cur.region, srcStoreID, dstStoreID)
 	if err == nil {
+		bs.logHotReadCPUDebug("create main operator succeeded",
+			zap.Uint64("region-id", bs.cur.region.GetID()),
+			zap.Uint64("src-store-id", srcStoreID),
+			zap.Uint64("dst-store-id", dstStoreID),
+			zap.String("operator-type", typ),
+			zap.String("dim", dim))
 		bs.decorateOperator(currentOp, false, sourceLabel, targetLabel, typ, dim)
 		ops = []*operator.Operator{currentOp}
 		if bs.cur.revertRegion != nil {
 			currentOp, typ, err = bs.createOperator(bs.cur.revertRegion, dstStoreID, srcStoreID)
 			if err == nil {
+				bs.logHotReadCPUDebug("create revert operator succeeded",
+					zap.Uint64("region-id", bs.cur.revertRegion.GetID()),
+					zap.Uint64("src-store-id", dstStoreID),
+					zap.Uint64("dst-store-id", srcStoreID),
+					zap.String("operator-type", typ),
+					zap.String("dim", dim))
 				bs.decorateOperator(currentOp, true, targetLabel, sourceLabel, typ, dim)
 				ops = append(ops, currentOp)
 			}
@@ -908,6 +1218,12 @@ func (bs *balanceSolver) buildOperators() (ops []*operator.Operator) {
 
 	if err != nil {
 		log.Debug("fail to create operator", zap.Stringer("rw-type", bs.rwTy), zap.Stringer("op-type", bs.opTy), errs.ZapError(err))
+		bs.logHotReadCPUDebug("create operator failed",
+			zap.Uint64("region-id", bs.cur.region.GetID()),
+			zap.Uint64("src-store-id", srcStoreID),
+			zap.Uint64("dst-store-id", dstStoreID),
+			zap.String("dim", dim),
+			errs.ZapError(err))
 		hotSchedulerCreateOperatorFailedCounter.Inc()
 		return nil
 	}
@@ -943,6 +1259,10 @@ func (bs *balanceSolver) splitBucketsOperator(region *core.RegionInfo, keys [][]
 	}
 	if len(splitKeys) == 0 {
 		hotSchedulerNotFoundSplitKeysCounter.Inc()
+		bs.logHotReadCPUDebug("split bucket failed",
+			zap.String("reason", "no-valid-split-key"),
+			zap.Uint64("region-id", region.GetID()),
+			zap.Int("candidate-key-count", len(keys)))
 		return nil
 	}
 	desc := splitHotReadBuckets
@@ -955,8 +1275,18 @@ func (bs *balanceSolver) splitBucketsOperator(region *core.RegionInfo, keys [][]
 		log.Debug("fail to create split operator",
 			zap.Stringer("resource-type", bs.resourceTy),
 			errs.ZapError(err))
+		bs.logHotReadCPUDebug("split bucket failed",
+			zap.String("reason", "create-split-operator-error"),
+			zap.Uint64("region-id", region.GetID()),
+			errs.ZapError(err))
 		return nil
 	}
+	bs.logHotReadCPUDebug("split bucket operator created",
+		zap.Uint64("region-id", region.GetID()),
+		zap.Int("split-key-count", len(splitKeys)),
+		zap.String("bucket-first-stat", bs.bucketFirstStat().String()),
+		zap.String("first-priority", utils.DimToString(bs.firstPriority)),
+		zap.String("second-priority", utils.DimToString(bs.secondPriority)))
 	hotSchedulerSplitSuccessCounter.Inc()
 	return op
 }
@@ -973,12 +1303,19 @@ func (bs *balanceSolver) splitBucketsByLoad(region *core.RegionInfo, bucketStats
 	}
 	if len(stats) == 0 {
 		hotSchedulerHotBucketNotValidCounter.Inc()
+		bs.logHotReadCPUDebug("split bucket failed",
+			zap.String("reason", "bucket-range-not-valid"),
+			zap.Uint64("region-id", region.GetID()),
+			zap.Int("raw-bucket-count", len(bucketStats)))
 		return nil
 	}
 
 	// if this region has only one buckets, we can't split it into two hot region, so skip it.
 	if len(stats) == 1 {
 		hotSchedulerOnlyOneBucketsHotCounter.Inc()
+		bs.logHotReadCPUDebug("split bucket failed",
+			zap.String("reason", "only-one-hot-bucket"),
+			zap.Uint64("region-id", region.GetID()))
 		return nil
 	}
 	totalLoads := uint64(0)
@@ -986,6 +1323,11 @@ func (bs *balanceSolver) splitBucketsByLoad(region *core.RegionInfo, bucketStats
 	for _, stat := range stats {
 		totalLoads += stat.Loads[dim]
 	}
+	bs.logHotReadCPUDebug("split bucket by load begin",
+		zap.Uint64("region-id", region.GetID()),
+		zap.Int("bucket-count", len(stats)),
+		zap.String("bucket-first-stat", dim.String()),
+		zap.Uint64("total-load", totalLoads))
 
 	// find the half point of the total loads.
 	acc, splitIdx := uint64(0), 0
@@ -994,6 +1336,10 @@ func (bs *balanceSolver) splitBucketsByLoad(region *core.RegionInfo, bucketStats
 	}
 	if splitIdx <= 0 {
 		hotSchedulerRegionBucketsSingleHotSpotCounter.Inc()
+		bs.logHotReadCPUDebug("split bucket failed",
+			zap.String("reason", "single-hot-spot"),
+			zap.Uint64("region-id", region.GetID()),
+			zap.Uint64("total-load", totalLoads))
 		return nil
 	}
 	splitKey := stats[splitIdx-1].EndKey
@@ -1058,6 +1404,10 @@ func (bs *balanceSolver) createSplitOperator(regions []*core.RegionInfo, strateg
 	}
 
 	for _, region := range regions {
+		bs.logHotReadCPUDebug("create split operator begin",
+			zap.Uint64("region-id", region.GetID()),
+			zap.Int("strategy", int(strategy)),
+			zap.String("bucket-first-stat", bs.bucketFirstStat().String()))
 		createFunc(region)
 	}
 	// the split bucket's priority is highest

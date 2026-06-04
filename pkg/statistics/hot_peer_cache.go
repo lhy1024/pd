@@ -23,8 +23,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/smallnest/chanx"
+	"go.uber.org/zap"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/slice"
@@ -54,6 +56,13 @@ var denoising uint32 = 1
 
 func isDenoisingEnabled() bool {
 	return atomic.LoadUint32(&denoising) == 1
+}
+
+func (f *HotPeerCache) logReadCPUDebug(msg string, fields ...zap.Field) {
+	if f.kind != utils.Read {
+		return
+	}
+	log.Info("hot-read-cpu-debug hot peer recognition "+msg, fields...)
 }
 
 // DisableDenoising disables the denoising feature.
@@ -168,6 +177,12 @@ func (f *HotPeerCache) CollectExpiredItems(region *core.RegionInfo) []*HotPeerSt
 // CheckPeerFlow will update oldItem's rollingLoads into newItem, thus we should use write lock here.
 func (f *HotPeerCache) CheckPeerFlow(region *core.RegionInfo, peers []*metapb.Peer, deltaLoads []float64, interval uint64) []*HotPeerStat {
 	if isDenoisingEnabled() && interval < HotRegionReportMinInterval { // for test or simulator purpose
+		f.logReadCPUDebug("skip short interval",
+			zap.Uint64("region-id", region.GetID()),
+			zap.Uint64("interval", interval),
+			zap.Float64("delta-read-byte", deltaLoads[utils.RegionReadBytes]),
+			zap.Float64("delta-read-query", deltaLoads[utils.RegionReadQueryNum]),
+			zap.Float64("delta-read-cpu", deltaLoads[utils.RegionReadCPU]))
 		return nil
 	}
 
@@ -197,6 +212,20 @@ func (f *HotPeerCache) CheckPeerFlow(region *core.RegionInfo, peers []*metapb.Pe
 			isHot := slice.AnyOf(regionStats, func(i int) bool {
 				return deltaLoads[regionStats[i]]/float64(interval) >= thresholds[i]
 			})
+			f.logReadCPUDebug("new peer threshold check",
+				zap.Uint64("region-id", regionID),
+				zap.Uint64("store-id", storeID),
+				zap.Uint64("interval", interval),
+				zap.Bool("is-hot", isHot),
+				zap.Float64("byte-rate", deltaLoads[utils.RegionReadBytes]/float64(interval)),
+				zap.Float64("key-rate", deltaLoads[utils.RegionReadKeys]/float64(interval)),
+				zap.Float64("query-rate", deltaLoads[utils.RegionReadQueryNum]/float64(interval)),
+				zap.Float64("cpu-rate", deltaLoads[utils.RegionReadCPU]/float64(interval)),
+				zap.Float64("byte-threshold", thresholds[utils.ByteDim]),
+				zap.Float64("key-threshold", thresholds[utils.KeyDim]),
+				zap.Float64("query-threshold", thresholds[utils.QueryDim]),
+				zap.Float64("cpu-threshold", thresholds[utils.CPUDim]),
+				zap.Stringer("source", source))
 			if !isHot {
 				continue
 			}
@@ -444,7 +473,8 @@ func (f *HotPeerCache) updateHotPeerStat(region *core.RegionInfo, newItem, oldIt
 		newItem.allowInherited = oldItem.allowInherited
 	}
 
-	if f.justTransferLeader(region, oldItem) {
+	justTransferLeader := f.justTransferLeader(region, oldItem)
+	if justTransferLeader {
 		newItem.lastTransferLeaderTime = time.Now()
 		// skip the first heartbeat flow statistic after transfer leader, because its statistics are calculated by the last leader in this store and are inaccurate
 		// maintain anticount and hotdegree to avoid store threshold and hot peer are unstable.
@@ -463,6 +493,8 @@ func (f *HotPeerCache) updateHotPeerStat(region *core.RegionInfo, newItem, oldIt
 	}
 
 	isFull := newItem.rollingLoads[0].isFull(f.interval()) // The intervals of dims are the same, so it is only necessary to determine whether any of them
+	thresholds := f.calcHotThresholds(newItem.StoreID)
+	isHot := newItem.isHot(thresholds)
 	if !isFull {
 		// not update hot degree and anti count
 		inheritItem(newItem, oldItem)
@@ -472,15 +504,14 @@ func (f *HotPeerCache) updateHotPeerStat(region *core.RegionInfo, newItem, oldIt
 		if newItem.inCold {
 			coldItem(newItem, oldItem)
 		} else {
-			thresholds := f.calcHotThresholds(newItem.StoreID)
 			if f.isOldColdPeer(oldItem, newItem.StoreID) {
-				if newItem.isHot(thresholds) {
+				if isHot {
 					initItem(newItem, f.kind.DefaultAntiCount())
 				} else {
 					newItem.actionType = utils.Remove
 				}
 			} else {
-				if newItem.isHot(thresholds) {
+				if isHot {
 					hotItem(newItem, oldItem, f.kind.DefaultAntiCount())
 				} else {
 					coldItem(newItem, oldItem)
@@ -489,6 +520,28 @@ func (f *HotPeerCache) updateHotPeerStat(region *core.RegionInfo, newItem, oldIt
 		}
 		newItem.clearLastAverage()
 	}
+	f.logReadCPUDebug("existing peer update",
+		zap.Uint64("region-id", newItem.RegionID),
+		zap.Uint64("store-id", newItem.StoreID),
+		zap.Bool("is-full-window", isFull),
+		zap.Bool("is-hot", isHot),
+		zap.Bool("in-cold", newItem.inCold),
+		zap.Bool("old-cold", f.isOldColdPeer(oldItem, newItem.StoreID)),
+		zap.Bool("just-transfer-leader", justTransferLeader),
+		zap.Int("old-hot-degree", oldItem.HotDegree),
+		zap.Int("new-hot-degree", newItem.HotDegree),
+		zap.Int("old-anti-count", oldItem.AntiCount),
+		zap.Int("new-anti-count", newItem.AntiCount),
+		zap.Stringer("action-type", newItem.actionType),
+		zap.Stringer("source", source),
+		zap.Float64("byte-rate", newItem.GetLoad(utils.ByteDim)),
+		zap.Float64("key-rate", newItem.GetLoad(utils.KeyDim)),
+		zap.Float64("query-rate", newItem.GetLoad(utils.QueryDim)),
+		zap.Float64("cpu-rate", newItem.GetLoad(utils.CPUDim)),
+		zap.Float64("byte-threshold", thresholds[utils.ByteDim]),
+		zap.Float64("key-threshold", thresholds[utils.KeyDim]),
+		zap.Float64("query-threshold", thresholds[utils.QueryDim]),
+		zap.Float64("cpu-threshold", thresholds[utils.CPUDim]))
 	return newItem
 }
 
