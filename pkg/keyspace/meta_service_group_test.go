@@ -16,13 +16,41 @@ package keyspace
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
+
+	"github.com/tikv/pd/pkg/mock/mockid"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
 )
+
+type raceWindowStore struct {
+	*endpoint.StorageEndpoint
+	pauseNextAssignmentLoad atomic.Bool
+	loadedAssignment        chan struct{}
+	resume                  chan struct{}
+}
+
+func newRaceWindowStore() *raceWindowStore {
+	return &raceWindowStore{
+		StorageEndpoint:  endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil),
+		loadedAssignment: make(chan struct{}),
+		resume:           make(chan struct{}),
+	}
+}
+
+func (s *raceWindowStore) IncrementAssignmentCount(txn kv.Txn, groupID string, delta int) error {
+	if s.pauseNextAssignmentLoad.CompareAndSwap(true, false) {
+		close(s.loadedAssignment)
+		<-s.resume
+	}
+	return s.StorageEndpoint.IncrementAssignmentCount(txn, groupID, delta)
+}
 
 type metaServiceGroupTestSuite struct {
 	suite.Suite
@@ -195,4 +223,79 @@ func (suite *metaServiceGroupTestSuite) TestUpdateEndpointsAndUpdateAssignment()
 		}
 		re.Equal(0, counts[grp], "other original groups should remain at 0")
 	}
+}
+
+func (suite *metaServiceGroupTestSuite) TestUpdateGroupsSafelyRejectsAssignedGroupRemoval() {
+	re := suite.Require()
+	_, err := suite.manager.AssignToGroup(suite.ctx, 1)
+	re.NoError(err)
+
+	counts, err := suite.manager.GetAssignmentCounts(suite.ctx)
+	re.NoError(err)
+	var assignedGroup string
+	for id, count := range counts {
+		if count > 0 {
+			assignedGroup = id
+			break
+		}
+	}
+	re.NotEmpty(assignedGroup)
+
+	newGroups := mockMetaServiceGroups()
+	delete(newGroups, assignedGroup)
+	err = suite.manager.UpdateGroupsSafely(suite.ctx, newGroups, func() error { return nil }, nil)
+	re.ErrorContains(err, "cannot delete meta-service group with assigned keyspaces")
+	re.Contains(suite.manager.GetGroups(), assignedGroup)
+}
+
+func (suite *metaServiceGroupTestSuite) TestUpdateGroupsSafelyWaitsForManualAssignment() {
+	re := suite.Require()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := newRaceWindowStore()
+	kgm := NewKeyspaceGroupManager(ctx, store, nil)
+	re.NoError(kgm.Bootstrap(ctx))
+	mgm := NewMetaServiceGroupManager(store, map[string]string{"g": "addr"})
+	manager := NewKeyspaceManager(ctx, store, nil, mockid.NewIDAllocator(), &mockConfig{}, kgm, mgm)
+	now := time.Now().Unix()
+	re.NoError(manager.saveNewKeyspace(&keyspacepb.KeyspaceMeta{
+		Id:             100,
+		Name:           "ks",
+		State:          keyspacepb.KeyspaceState_ENABLED,
+		CreatedAt:      now,
+		StateChangedAt: now,
+		Config:         map[string]string{},
+	}))
+
+	store.pauseNextAssignmentLoad.Store(true)
+	updateDone := make(chan error, 1)
+	go func() {
+		_, err := manager.UpdateKeyspaceConfig("ks", []*Mutation{{
+			Op:    OpPut,
+			Key:   MetaServiceGroupIDKey,
+			Value: "g",
+		}})
+		updateDone <- err
+	}()
+
+	<-store.loadedAssignment
+	deleteStarted := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		close(deleteStarted)
+		deleteDone <- mgm.UpdateGroupsSafely(ctx, map[string]string{}, func() error { return nil }, nil)
+	}()
+	<-deleteStarted
+
+	select {
+	case err := <-deleteDone:
+		re.Failf("group update should wait for assignment transaction", "unexpected error: %v", err)
+	default:
+	}
+
+	close(store.resume)
+	re.NoError(<-updateDone)
+	re.ErrorContains(<-deleteDone, "cannot delete meta-service group with assigned keyspaces")
+	re.Contains(mgm.GetGroups(), "g")
 }

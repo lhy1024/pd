@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1050,7 +1051,27 @@ func (s *Server) SetKeyspaceConfig(oldCfg, newCfg *config.KeyspaceConfig) error 
 	if err := newCfg.Validate(); err != nil {
 		return err
 	}
+	if s.metaServiceGroupManager != nil && !reflect.DeepEqual(oldCfg.GetMetaServiceGroups(), newCfg.GetMetaServiceGroups()) {
+		if err := s.metaServiceGroupManager.UpdateGroupsSafely(s.ctx, newCfg.GetMetaServiceGroups(), func() error {
+			return s.persistKeyspaceConfig(oldCfg, newCfg)
+		}, func() {
+			s.keyspaceManager.UpdateConfigWithoutMetaServiceGroups(newCfg)
+		}); err != nil {
+			return err
+		}
+		log.Info("keyspace config is updated", zap.Reflect("new", newCfg), zap.Reflect("old", oldCfg))
+		return nil
+	}
+	if err := s.persistKeyspaceConfig(oldCfg, newCfg); err != nil {
+		return err
+	}
+	s.keyspaceManager.UpdateConfig(newCfg)
 
+	log.Info("keyspace config is updated", zap.Reflect("new", newCfg), zap.Reflect("old", oldCfg))
+	return nil
+}
+
+func (s *Server) persistKeyspaceConfig(oldCfg, newCfg *config.KeyspaceConfig) error {
 	if !s.persistOptions.CASKeyspaceConfig(oldCfg, newCfg) {
 		return errors.New("update keyspace config failed, because the keyspace config has been changed by other process, please retry")
 	}
@@ -1062,9 +1083,6 @@ func (s *Server) SetKeyspaceConfig(oldCfg, newCfg *config.KeyspaceConfig) error 
 			errs.ZapError(err))
 		return err
 	}
-	s.keyspaceManager.UpdateConfig(newCfg)
-
-	log.Info("keyspace config is updated", zap.Reflect("new", newCfg), zap.Reflect("old", oldCfg))
 	return nil
 }
 

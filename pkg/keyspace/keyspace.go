@@ -234,8 +234,17 @@ func (manager *Manager) initReserveKeyspace(id uint32, name string) error {
 
 // UpdateConfig update keyspace manager's config.
 func (manager *Manager) UpdateConfig(cfg Config) {
+	manager.updateConfig(cfg, true)
+}
+
+// UpdateConfigWithoutMetaServiceGroups updates keyspace manager config without updating meta-service groups.
+func (manager *Manager) UpdateConfigWithoutMetaServiceGroups(cfg Config) {
+	manager.updateConfig(cfg, false)
+}
+
+func (manager *Manager) updateConfig(cfg Config, updateMetaServiceGroups bool) {
 	manager.config = cfg
-	if manager.mgm != nil {
+	if updateMetaServiceGroups && manager.mgm != nil {
 		manager.mgm.updateGroups(cfg.GetMetaServiceGroups())
 	}
 }
@@ -801,6 +810,9 @@ func applyKeyspaceConfigMutations(config map[string]string, mutations []*Mutatio
 func (manager *Manager) updateKeyspaceConfigTxn(name string, update func(meta *keyspacepb.KeyspaceMeta) error) (*keyspacepb.KeyspaceMeta, error) {
 	var meta *keyspacepb.KeyspaceMeta
 	oldConfig := make(map[string]string)
+	if manager.mgm != nil {
+		manager.mgm.RLock()
+	}
 	err := manager.store.RunInTxn(manager.ctx, func(txn kv.Txn) error {
 		// First get KeyspaceID from Name.
 		loaded, id, err := manager.store.LoadKeyspaceID(txn, name)
@@ -850,7 +862,7 @@ func (manager *Manager) updateKeyspaceConfigTxn(name string, update func(meta *k
 		oldMetaServiceGroup := oldConfig[MetaServiceGroupIDKey]
 		newMetaServiceGroup := newConfig[MetaServiceGroupIDKey]
 		if manager.mgm != nil && oldMetaServiceGroup != newMetaServiceGroup {
-			if newMetaServiceGroup != "" && manager.mgm.GetGroups()[newMetaServiceGroup] == "" {
+			if newMetaServiceGroup != "" && !manager.mgm.hasGroupLocked(newMetaServiceGroup) {
 				return errUnknownMetaServiceGroup
 			}
 			if err := manager.mgm.updateAssignmentTxn(txn, oldMetaServiceGroup, newMetaServiceGroup); err != nil {
@@ -868,6 +880,9 @@ func (manager *Manager) updateKeyspaceConfigTxn(name string, update func(meta *k
 		}
 		return nil
 	})
+	if manager.mgm != nil {
+		manager.mgm.RUnlock()
+	}
 	if err != nil {
 		log.Warn("[keyspace] failed to update keyspace config",
 			zap.Uint32("keyspace-id", meta.GetId()),

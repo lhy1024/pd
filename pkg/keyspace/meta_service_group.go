@@ -18,6 +18,8 @@ import (
 	"context"
 	"math"
 
+	"github.com/pingcap/errors"
+
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/syncutil"
@@ -147,16 +149,67 @@ func (m *MetaServiceGroupManager) AttachEndpoints(keyspaceConfig map[string]stri
 func (m *MetaServiceGroupManager) GetGroups() map[string]string {
 	m.RLock()
 	defer m.RUnlock()
-	groups := make(map[string]string, len(m.metaServiceGroups))
-	for id, endpoints := range m.metaServiceGroups {
+	return cloneMetaServiceGroups(m.metaServiceGroups)
+}
+
+func cloneMetaServiceGroups(metaServiceGroups map[string]string) map[string]string {
+	groups := make(map[string]string, len(metaServiceGroups))
+	for id, endpoints := range metaServiceGroups {
 		groups[id] = endpoints
 	}
 	return groups
+}
+
+// UpdateGroupsSafely updates currently available meta-service groups while preventing assigned groups from removal.
+func (m *MetaServiceGroupManager) UpdateGroupsSafely(
+	ctx context.Context,
+	metaServiceGroups map[string]string,
+	persist func() error,
+	afterPersist func(),
+) error {
+	m.Lock()
+	defer m.Unlock()
+
+	deletedGroups := make(map[string]string)
+	for id := range m.metaServiceGroups {
+		if _, exists := metaServiceGroups[id]; !exists {
+			deletedGroups[id] = ""
+		}
+	}
+	if len(deletedGroups) > 0 {
+		var assignmentCounts map[string]int
+		err := m.store.RunInTxn(ctx, func(txn kv.Txn) error {
+			var err error
+			assignmentCounts, err = m.store.GetAssignmentCount(txn, deletedGroups)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		for id, count := range assignmentCounts {
+			if count > 0 {
+				return errors.Errorf("cannot delete meta-service group with assigned keyspaces: %s", id)
+			}
+		}
+	}
+	if err := persist(); err != nil {
+		return err
+	}
+	m.metaServiceGroups = cloneMetaServiceGroups(metaServiceGroups)
+	if afterPersist != nil {
+		afterPersist()
+	}
+	return nil
 }
 
 // updateGroups updates currently available meta-service groups.
 func (m *MetaServiceGroupManager) updateGroups(metaServiceGroups map[string]string) {
 	m.Lock()
 	defer m.Unlock()
-	m.metaServiceGroups = metaServiceGroups
+	m.metaServiceGroups = cloneMetaServiceGroups(metaServiceGroups)
+}
+
+func (m *MetaServiceGroupManager) hasGroupLocked(groupID string) bool {
+	endpoints, exists := m.metaServiceGroups[groupID]
+	return exists && endpoints != ""
 }

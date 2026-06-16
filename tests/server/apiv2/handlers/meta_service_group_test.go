@@ -169,3 +169,31 @@ func (suite *metaServiceGroupTestSuite) TestMetaServiceGroupOperations() {
 	})
 	re.Equal(http.StatusBadRequest, code)
 }
+
+func (suite *metaServiceGroupTestSuite) TestSetKeyspaceConfigRejectsAssignedGroupRemoval() {
+	re := suite.Require()
+	keyspaces := mustMakeTestKeyspaces(re, suite.server, 10)
+	collectedGroups := collectStatus(re, keyspaces)
+	re.NotEmpty(collectedGroups)
+
+	var assignedGroup string
+	for id := range collectedGroups {
+		assignedGroup = id
+		break
+	}
+	oldCfg := suite.server.GetServer().GetPersistOptions().GetKeyspaceConfig()
+	newCfg := oldCfg.Clone()
+	delete(newCfg.MetaServiceGroups, assignedGroup)
+	err := suite.server.GetServer().SetKeyspaceConfig(oldCfg, newCfg)
+	re.ErrorContains(err, "cannot delete meta-service group with assigned keyspaces")
+
+	groups := mustLoadMetaServiceGroups(re, suite.server)
+	found := false
+	for _, group := range groups {
+		if group.ID == assignedGroup {
+			found = true
+			break
+		}
+	}
+	re.True(found)
+}
