@@ -28,6 +28,7 @@ func (m *Manager) AutoBalanceGroup(groupID string) (*BalancePlan, error) {
 	groups := groupsForTableLocked(m.groups, groupID)
 	available := availableStoreIDs(m.storeSetInformer, m.unavailableStores)
 	replicaCount := len(group.VoterStoreIDs)
+	affinityVer := group.AffinityVer
 	m.RUnlock()
 
 	if replicaCount == 0 || len(available) < replicaCount {
@@ -45,10 +46,13 @@ func (m *Manager) AutoBalanceGroup(groupID string) (*BalancePlan, error) {
 		if !plans[i].Changed {
 			continue
 		}
-		// Use the existing admin update path until the planner CAS write path
-		// is introduced. The target is still revalidated by Manager before it
-		// is persisted and AffinityChecker will execute the resulting change.
-		if _, err := m.UpdateAffinityGroupPeers(plans[i].GroupID, plans[i].LeaderStoreID, plans[i].VoterStoreIDs); err != nil {
+		if plans[i].GroupID != groupID {
+			continue
+		}
+		// Carry the version read with the snapshot into the write path. A
+		// concurrent admin update changes the version and causes this plan to
+		// be discarded instead of overwriting the newer target.
+		if _, err := m.updateAffinityGroupPeersWithBalanceVer(plans[i].GroupID, affinityVer, plans[i].LeaderStoreID, plans[i].VoterStoreIDs); err != nil {
 			return nil, err
 		}
 		return &plans[i], nil
