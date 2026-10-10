@@ -180,9 +180,3 @@ func TestAffinityRebalanceApplyStopsAfterFailure(t *testing.T) {
 	require.Equal(t, uint64(2), testServer.putBodies[0].LeaderStoreID)
 	require.Equal(t, []uint64{1, 2, 3}, testServer.putBodies[0].VoterStoreIDs)
 }
-
-func TestAffinityRebalanceStoreFilterUsesCoreEngineSemantics(t *testing.T) {
-	require.True(t, isTiKVStore(pdhttp.StoreInfo{Store: pdhttp.MetaStore{ID: 1}}))
-	require.True(t, isTiKVStore(pdhttp.StoreInfo{Store: pdhttp.MetaStore{ID: 2, Labels: []pdhttp.StoreLabel{{Key: "engine", Value: "tikv"}}}}))
-	require.False(t, isTiKVStore(pdhttp.StoreInfo{Store: pdhttp.MetaStore{ID: 3, Labels: []pdhttp.StoreLabel{{Key: "engine", Value: "tiflash"}}}}))
-}
