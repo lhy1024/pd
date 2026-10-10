@@ -19,10 +19,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/spf13/cobra"
 
 	"github.com/pingcap/errors"
 
+	pdhttp "github.com/tikv/pd/client/http"
+	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/affinity"
 )
 
@@ -111,7 +114,7 @@ func affinityRebalanceCommandFunc(cmd *cobra.Command, _ []string) {
 
 	availableStores := make([]uint64, 0, len(stores.Stores))
 	for _, store := range stores.Stores {
-		if strings.EqualFold(store.Store.StateName, "up") || strings.EqualFold(store.Store.StateName, "serving") {
+		if (strings.EqualFold(store.Store.StateName, "up") || strings.EqualFold(store.Store.StateName, "serving")) && isTiKVStore(store) {
 			availableStores = append(availableStores, uint64(store.Store.ID))
 		}
 	}
@@ -164,6 +167,14 @@ func affinityRebalanceCommandFunc(cmd *cobra.Command, _ []string) {
 		}
 	}
 	jsonPrint(cmd, result)
+}
+
+func isTiKVStore(store pdhttp.StoreInfo) bool {
+	labels := make([]*metapb.StoreLabel, 0, len(store.Store.Labels))
+	for _, label := range store.Store.Labels {
+		labels = append(labels, &metapb.StoreLabel{Key: label.Key, Value: label.Value})
+	}
+	return core.NewStoreInfo(&metapb.Store{Id: uint64(store.Store.ID), Labels: labels}).IsTiKV()
 }
 
 func isTableAffinityGroup(groupID string, tableID uint64) bool {
