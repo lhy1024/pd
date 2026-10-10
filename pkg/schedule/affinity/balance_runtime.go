@@ -89,7 +89,7 @@ func availableStoreIDs(informer core.StoreSetInformer, unavailable map[uint64]st
 	}
 	ids := make([]uint64, 0)
 	for _, store := range informer.GetStores() {
-		if store == nil || !store.IsServing() {
+		if store == nil || !store.IsUp() {
 			continue
 		}
 		if _, unavailable := unavailable[store.GetID()]; unavailable {
@@ -105,7 +105,7 @@ func (m *Manager) validBalanceTarget(_ *Group, leader uint64, voters []uint64) b
 		return false
 	}
 	for _, storeID := range voters {
-		if store := m.storeSetInformer.GetStore(storeID); store == nil || !store.IsServing() {
+		if store := m.storeSetInformer.GetStore(storeID); store == nil || !store.IsUp() {
 			return false
 		}
 	}
