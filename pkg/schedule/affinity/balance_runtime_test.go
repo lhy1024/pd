@@ -15,8 +15,6 @@
 package affinity
 
 import (
-	"context"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,24 +22,8 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 
 	"github.com/tikv/pd/pkg/core"
-	"github.com/tikv/pd/pkg/storage"
-	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 )
-
-type balanceSamplingStorage struct {
-	storage.Storage
-	after func()
-	once  sync.Once
-}
-
-func (s *balanceSamplingStorage) RunInTxn(ctx context.Context, f func(kv.Txn) error) error {
-	err := s.Storage.RunInTxn(ctx, f)
-	if err == nil && s.after != nil {
-		s.once.Do(s.after)
-	}
-	return err
-}
 
 func TestGetBalanceSnapshotScopesAndCopiesTableState(t *testing.T) {
 	manager := newMetadataTestManager(t)

@@ -34,7 +34,7 @@ func (m *Manager) SetBalanceRuleRevision(revision func() uint64) {
 // and authority conditions for a subsequent write. Placement rules are read
 // from the local RuleManager; this path deliberately does not perform a
 // remote rules/rule-groups/ordinary-label JSON reconciliation.
-func (m *Manager) PrepareBalanceCommit(ctx context.Context, snapshot *BalanceSnapshot) error {
+func (m *Manager) PrepareBalanceCommit(_ context.Context, snapshot *BalanceSnapshot) error {
 	if !m.BalanceSnapshotCurrent(snapshot) {
 		return affinityConflict()
 	}
@@ -80,7 +80,7 @@ func (m *Manager) CommitBalanceTarget(ctx context.Context, snapshot *BalanceSnap
 		// a temporary target failure as a successful no-op or stable result.
 		return false, fmt.Errorf("affinity target %s rejected: %w", group.ID, err)
 	}
-	if err := m.checkSpecialUseTargetStores(original.Group.VoterStoreIDs, group.VoterStoreIDs); err != nil {
+	if err := m.checkSpecialUseTargetStores(original.VoterStoreIDs, group.VoterStoreIDs); err != nil {
 		return false, fmt.Errorf("affinity target %s rejected: %w", group.ID, err)
 	}
 	m.refreshBalanceStores()

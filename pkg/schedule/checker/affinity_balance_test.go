@@ -563,7 +563,7 @@ func TestAffinityBalanceReusesFingerprintAfterRegionOrStoreChange(t *testing.T) 
 		ID: "changed-balance-metadata", RuleType: labeler.KeyRange,
 		Labels: []labeler.RegionLabel{{Key: "balance-test", Value: "changed"}}, Data: labeler.MakeKeyRanges("61", "62"),
 	}))
-	current, err = checker.balancer.prepareSearch("_tidb_pt_100", task)
+	_, err = checker.balancer.prepareSearch("_tidb_pt_100", task)
 	require.NoError(t, err)
 	require.Equal(t, 0, scanCluster.labelReads, "label changes do not trigger a global metadata scan")
 }
