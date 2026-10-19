@@ -18,15 +18,65 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/unrolled/render"
 
 	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/schedule/affinity"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/server"
 )
+
+func isAffinityLabelRule(rule *labeler.LabelRule) bool {
+	if rule == nil {
+		return false
+	}
+	if strings.HasPrefix(rule.ID, affinity.LabelRuleIDPrefix) {
+		return true
+	}
+	for _, label := range rule.Labels {
+		if label.Key == affinity.AffinityLabelKey {
+			return true
+		}
+	}
+	return false
+}
+
+func rejectAffinityLabelRule(rule *labeler.LabelRule) error {
+	if isAffinityLabelRule(rule) {
+		return errs.ErrAffinityLabelProtected.FastGenByArgs()
+	}
+	return nil
+}
+
+func rejectAffinityLabelID(id string, lookup func(string) *labeler.LabelRule) error {
+	if strings.HasPrefix(id, affinity.LabelRuleIDPrefix) || lookup != nil && isAffinityLabelRule(lookup(id)) {
+		return errs.ErrAffinityLabelProtected.FastGenByArgs()
+	}
+	return nil
+}
+
+func validateRegionLabelPatch(patch labeler.LabelRulePatch, lookup func(string) *labeler.LabelRule) error {
+	for _, rule := range patch.SetRules {
+		if rule != nil {
+			if err := rejectAffinityLabelRule(rule); err != nil {
+				return err
+			}
+			if err := rejectAffinityLabelID(rule.ID, lookup); err != nil {
+				return err
+			}
+		}
+	}
+	for _, id := range patch.DeleteRules {
+		if err := rejectAffinityLabelID(id, lookup); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type regionLabelHandler struct {
 	svr *server.Server
@@ -68,6 +118,10 @@ func (h *regionLabelHandler) PatchRegionLabelRules(w http.ResponseWriter, r *htt
 	cluster := getCluster(r)
 	var patch labeler.LabelRulePatch
 	if err := apiutil.ReadJSONRespondError(h.rd, w, r.Body, &patch); err != nil {
+		return
+	}
+	if err := validateRegionLabelPatch(patch, cluster.GetRegionLabeler().GetLabelRule); err != nil {
+		h.rd.JSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := cluster.GetRegionLabeler().Patch(patch); err != nil {
@@ -146,6 +200,10 @@ func (h *regionLabelHandler) DeleteRegionLabelRule(w http.ResponseWriter, r *htt
 		h.rd.JSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := rejectAffinityLabelID(id, cluster.GetRegionLabeler().GetLabelRule); err != nil {
+		h.rd.JSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	err = cluster.GetRegionLabeler().DeleteLabelRule(id)
 	if err != nil {
 		if errs.ErrRegionRuleNotFound.Equal(err) {
@@ -173,6 +231,14 @@ func (h *regionLabelHandler) SetRegionLabelRule(w http.ResponseWriter, r *http.R
 	cluster := getCluster(r)
 	var rule labeler.LabelRule
 	if err := apiutil.ReadJSONRespondError(h.rd, w, r.Body, &rule); err != nil {
+		return
+	}
+	if err := rejectAffinityLabelRule(&rule); err != nil {
+		h.rd.JSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := rejectAffinityLabelID(rule.ID, cluster.GetRegionLabeler().GetLabelRule); err != nil {
+		h.rd.JSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := cluster.GetRegionLabeler().SetLabelRule(&rule); err != nil {

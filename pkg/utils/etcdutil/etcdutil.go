@@ -443,6 +443,9 @@ type LoopWatcher struct {
 	// reconcileDeletedKeys indicates whether a full load should delete keys that
 	// existed in the previous successfully applied state but not in the snapshot.
 	reconcileDeletedKeys bool
+	// reconcileDeleteRevision preserves the consistent snapshot revision on
+	// synthetic delete callbacks. Legacy watchers keep zero as before.
+	reconcileDeleteRevision bool
 	// loadedKeys tracks successfully applied keys only when reconcileDeletedKeys is enabled.
 	loadedKeys map[string]struct{}
 }
@@ -913,7 +916,7 @@ func (lw *LoopWatcher) load(ctx context.Context) (nextRevision int64, err error)
 			// Note: if there are no keys in etcd, the resp.More is false. It also means the load is finished.
 			if !resp.More {
 				if callbackErr == nil {
-					reconciledDeletedKeys, callbackErr = lw.reconcileLoadedKeys(snapshotKeys)
+					reconciledDeletedKeys, callbackErr = lw.reconcileLoadedKeys(snapshotKeys, snapshotRevision)
 				}
 				loadCompleted = true
 				return snapshotRevision + 1, callbackErr
@@ -951,7 +954,7 @@ func (lw *LoopWatcher) load(ctx context.Context) (nextRevision int64, err error)
 	}
 }
 
-func (lw *LoopWatcher) reconcileLoadedKeys(snapshotKeys map[string]struct{}) ([]string, error) {
+func (lw *LoopWatcher) reconcileLoadedKeys(snapshotKeys map[string]struct{}, revision int64) ([]string, error) {
 	if !lw.reconcileDeletedKeys {
 		return nil, nil
 	}
@@ -962,6 +965,9 @@ func (lw *LoopWatcher) reconcileLoadedKeys(snapshotKeys map[string]struct{}) ([]
 			continue
 		}
 		kv := &mvccpb.KeyValue{Key: []byte(key)}
+		if lw.reconcileDeleteRevision {
+			kv.ModRevision = revision
+		}
 		if err := lw.deleteFn(kv); err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -1111,4 +1117,27 @@ func (lw *LoopWatcher) SetReconcileDeletedKeys() {
 	lw.reconcileDeletedKeys = true
 	lw.loadedKeys = make(map[string]struct{})
 	lw.reloadOnCompaction = true
+}
+
+// SetReconcileDeletedKeyRevision preserves the consistent snapshot revision
+// on synthetic delete callbacks produced by deletion reconciliation.
+func (lw *LoopWatcher) SetReconcileDeletedKeyRevision() {
+	lw.reconcileDeleteRevision = true
+}
+
+// SetInitialLoadedKeys seeds the deletion reconciliation state with keys that
+// were applied by another authoritative snapshot before this watcher started.
+// It must be called after SetReconcileDeletedKeys and before StartWatchLoop.
+// The keys are treated as successfully loaded, so a key missing from the
+// watcher's first consistent snapshot is reported through deleteFn.
+func (lw *LoopWatcher) SetInitialLoadedKeys(keys []string) {
+	if !lw.reconcileDeletedKeys {
+		return
+	}
+	if lw.loadedKeys == nil {
+		lw.loadedKeys = make(map[string]struct{}, len(keys))
+	}
+	for _, key := range keys {
+		lw.loadedKeys[key] = struct{}{}
+	}
 }

@@ -349,7 +349,8 @@ func setupAffinityManagerWithComponents(ctx context.Context, client *clientv3.Cl
 	}
 
 	conf := mockconfig.NewTestOptions()
-	affinityManager, err := affinity.NewManager(ctx, storage, basicCluster, conf, labelerManager)
+	authoritativeStorage := endpoint.NewStorageEndpoint(kv.NewEtcdKVBase(client), nil)
+	affinityManager, err := affinity.NewManager(ctx, authoritativeStorage, basicCluster, conf, labelerManager)
 	if err != nil {
 		return nil, nil, nil, err
 	}

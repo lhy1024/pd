@@ -18,14 +18,21 @@ import (
 	"context"
 
 	"github.com/tikv/pd/pkg/storage/kv"
+	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/keypath"
 )
+
+// MaxAffinityTxnBatchOps bounds batches that may contain one label operation
+// and one affinity-group operation per item.
+const MaxAffinityTxnBatchOps = (etcdutil.MaxEtcdTxnOps - 2) / 2
 
 // RuleStorage defines the storage operations on the rule.
 type RuleStorage interface {
 	// Load in txn is unnecessary and may cause txn too large.
 	// because scheduling server will load rules from etcd rather than watching.
 	LoadRule(ruleKey string) (string, error)
+	// LoadRegionRule loads one region label rule without scanning the prefix.
+	LoadRegionRule(ruleKey string) (string, error)
 	LoadRules(f func(k, v string)) error
 	LoadRuleGroups(f func(k, v string)) error
 	LoadRegionRules(f func(k, v string)) error
@@ -87,6 +94,11 @@ func (*StorageEndpoint) DeleteRegionRule(txn kv.Txn, ruleKey string) error {
 // LoadRule load a placement rule from storage.
 func (se *StorageEndpoint) LoadRule(ruleKey string) (string, error) {
 	return se.Load(keypath.RuleKeyPath(ruleKey))
+}
+
+// LoadRegionRule loads one region label rule from storage.
+func (se *StorageEndpoint) LoadRegionRule(ruleKey string) (string, error) {
+	return se.Load(keypath.RegionLabelKeyPath(ruleKey))
 }
 
 // LoadRules loads placement rules from storage.

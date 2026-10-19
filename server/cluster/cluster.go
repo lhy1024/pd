@@ -438,6 +438,10 @@ func (c *RaftCluster) Start(s Server, bootstrap bool) (err error) {
 	if err != nil {
 		return err
 	}
+	c.affinityManager.SetAffinityWriteGuard(func() ([]clientv3.Cmp, bool) {
+		term, ok := c.member.GetLeadership().CaptureTerm()
+		return term.Comparisons(), ok
+	})
 
 	if !c.IsServiceIndependent(constant.SchedulingServiceName) {
 		observeSlowStoreStart := time.Now()
@@ -510,6 +514,13 @@ func (c *RaftCluster) checkSchedulingService() {
 	if c.isKeyspaceGroupEnabled {
 		servers, err := discovery.Discover(c.etcdClient, constant.SchedulingServiceName)
 		if c.opt.GetMicroserviceConfig().IsSchedulingFallbackEnabled() && (err != nil || len(servers) == 0) {
+			wasIndependent := c.IsServiceIndependent(constant.SchedulingServiceName)
+			if wasIndependent && c.affinityManager != nil {
+				if reloadErr := c.affinityManager.ReloadAffinityMetadataFromStorage(); reloadErr != nil {
+					log.Error("failed to reload affinity metadata before scheduling fallback", errs.ZapError(reloadErr))
+					return
+				}
+			}
 			c.startSchedulingJobs(c, c.hbstreams)
 			c.UnsetServiceIndependent(constant.SchedulingServiceName)
 		} else {

@@ -167,7 +167,6 @@ type runtimeGroupInfo struct {
 	AffinityVer uint64
 	// AffinityRegionCount indicates how many Regions have all Voter and Leader peers in the correct stores. (AffinityVer equals).
 	AffinityRegionCount int
-
 	// Regions represents the cache of Regions.
 	Regions map[uint64]regionCache
 	// LabelRule using label's internal multiple keyrange mechanism.
@@ -282,6 +281,9 @@ func (m *Manager) AdjustGroup(g *Group) error {
 	if err := ValidateGroupID(g.ID); err != nil {
 		return err
 	}
+	if err := validateBalancePolicy(g.BalancePolicy); err != nil {
+		return err
+	}
 	// If no distribution is provided, we will use the default distribution.
 	if g.LeaderStoreID == 0 && len(g.VoterStoreIDs) == 0 {
 		return nil
@@ -306,6 +308,15 @@ func (m *Manager) AdjustGroup(g *Group) error {
 	}
 
 	return nil
+}
+
+func validateBalancePolicy(policy BalancePolicy) error {
+	switch policy {
+	case "", BalancePolicyAuto, BalancePolicyFixed:
+		return nil
+	default:
+		return errs.ErrAffinityGroupContent.FastGenByArgs(fmt.Sprintf("invalid balance policy %q", policy))
+	}
 }
 
 // GroupKeyRanges represents key ranges with group id.

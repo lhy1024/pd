@@ -73,15 +73,35 @@ func MicroserviceRedirector(rules ...serverapi.RedirectRule) gin.HandlerFunc {
 	}
 }
 
-// AffinityMicroserviceRedirector only forwards affinity GET requests to the scheduling service.
+// AffinityMicroserviceRedirector forwards every affinity read and write to the
+// scheduling primary. The scheduling service owns the same Manager/storage
+// path as the PD leader; keeping all methods under one redirect rule prevents
+// a follower or a PD-side handler from becoming a second writer.
 func AffinityMicroserviceRedirector() gin.HandlerFunc {
 	pdAffinityPath := "/pd/api/v2/affinity-groups"
 	targetAffinityPath := scheapi.APIPathPrefix + "/affinity-groups"
-	return MicroserviceRedirector(
+	redirect := MicroserviceRedirector(
 		serverapi.RedirectRule{
 			MatchPath:         pdAffinityPath,
 			TargetPath:        targetAffinityPath,
 			TargetServiceName: constant.SchedulingServiceName,
-			MatchMethods:      []string{http.MethodGet},
+			MatchMethods: []string{
+				http.MethodGet, http.MethodPost, http.MethodPatch,
+				http.MethodPut, http.MethodDelete,
+			},
 		})
+	return func(c *gin.Context) {
+		// A caller must not use the generic forbidden-forward escape hatch to
+		// write affinity metadata on PD while scheduling is independent. That
+		// would create a second writer beside the scheduling primary.
+		if c.Request.Header.Get(apiutil.XForbiddenForwardToMicroserviceHeader) == "true" &&
+			c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			svr := c.MustGet(ServerContextKey).(*server.Server)
+			if svr.IsKeyspaceGroupEnabled() && svr.IsServiceIndependent(constant.SchedulingServiceName) {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, errs.ErrRedirectToNotPrimary.Error())
+				return
+			}
+		}
+		redirect(c)
+	}
 }

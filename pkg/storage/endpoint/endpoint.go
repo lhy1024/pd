@@ -76,6 +76,11 @@ func (se *StorageEndpoint) RunInTxnWithConditions(
 	return runner.RunInTxnWithConditions(ctx, conditions, f)
 }
 
+// RunInTxn runs f in one storage transaction.
+func (se *StorageEndpoint) RunInTxn(ctx context.Context, f func(kv.Txn) error) error {
+	return se.Base.RunInTxn(ctx, f)
+}
+
 // loadJSON loads a specific key from the StorageEndpoint, and parses it as JSON into type T.
 func loadJSON[T any](se *StorageEndpoint, key string) (T, error) {
 	value, err := se.Load(key)

@@ -52,6 +52,22 @@ type Watcher struct {
 
 	groupWatcher *etcdutil.LoopWatcher
 	labelWatcher *etcdutil.LoopWatcher
+	groupPending []groupSyncEvent
+	labelPending []labelSyncEvent
+}
+
+type groupSyncEvent struct {
+	group    *affinity.Group
+	id       string
+	revision int64
+	deleted  bool
+}
+
+type labelSyncEvent struct {
+	rule     *labeler.LabelRule
+	id       string
+	revision int64
+	deleted  bool
 }
 
 // NewWatcher creates a new watcher to watch the affinity changes from PD.
@@ -82,6 +98,14 @@ func NewWatcher(
 
 // initializeGroupWatcher initializes the watcher for affinity group changes.
 func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
+	// The scheduling Manager is initialized from storage before this watcher is
+	// created. Seed deletion reconciliation with that snapshot so a group
+	// deleted in the gap between the two loads is removed from memory even
+	// though its delete event is older than the watch revision.
+	initialKeys := make([]string, 0)
+	for _, group := range w.affinityManager.GetAllAffinityGroupStates() {
+		initialKeys = append(initialKeys, keypath.AffinityGroupPath(group.ID))
+	}
 	putFn := func(kv *mvccpb.KeyValue) error {
 		log.Info("update affinity group", zap.String("key", string(kv.Key)), zap.String("value", string(kv.Value)))
 		group := &affinity.Group{}
@@ -89,7 +113,7 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 			log.Warn("failed to unmarshal affinity group", zap.String("key", string(kv.Key)), zap.Error(err))
 			return err
 		}
-		w.affinityManager.SyncGroupFromEtcd(group)
+		w.groupPending = append(w.groupPending, groupSyncEvent{group: group, revision: kv.ModRevision})
 		return nil
 	}
 
@@ -97,7 +121,23 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 		key := string(kv.Key)
 		log.Info("delete affinity group", zap.String("key", key))
 		groupID := strings.TrimPrefix(key, keypath.AffinityGroupsPrefix())
-		w.affinityManager.SyncGroupDeleteFromEtcd(groupID)
+		w.groupPending = append(w.groupPending, groupSyncEvent{id: groupID, revision: kv.ModRevision, deleted: true})
+		return nil
+	}
+	applyPending := func() error {
+		pending := w.groupPending
+		w.groupPending = nil
+		for _, event := range pending {
+			if event.deleted {
+				if err := w.affinityManager.SyncGroupDeleteFromEtcdAtRevision(event.id, event.revision); err != nil {
+					return err
+				}
+			} else {
+				if err := w.affinityManager.SyncGroupFromEtcdAtRevision(event.group, event.revision); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	}
 
@@ -106,11 +146,16 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 		w.etcdClient,
 		"scheduling-affinity-group-watcher",
 		strings.TrimSuffix(keypath.AffinityGroupsPrefix(), "/"),
-		func([]*clientv3.Event) error { return nil },
+		func([]*clientv3.Event) error { w.groupPending = nil; return nil },
 		putFn, deleteFn,
-		func([]*clientv3.Event) error { return nil },
+		func([]*clientv3.Event) error { return applyPending() },
 		true, /* withPrefix */
 	)
+	w.groupWatcher.SetReconcileDeletedKeys()
+	w.groupWatcher.SetReconcileDeletedKeyRevision()
+	w.groupWatcher.SetInitialLoadedKeys(initialKeys)
+	w.groupWatcher.SetConsistentLoad()
+	w.groupWatcher.SetAtomicLoadCallbacks()
 	w.groupWatcher.StartWatchLoop()
 	return w.groupWatcher.WaitLoad()
 }
@@ -120,6 +165,13 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
 	// Note: labelWatcher does not need preEventsFn/postEventsFn locking
 	// because the sync methods will handle locking internally
+	initialKeys := make([]string, 0)
+	w.affinityManager.GetRegionLabeler().IterateLabelRules(func(rule *labeler.LabelRule) bool {
+		if strings.HasPrefix(rule.ID, affinity.LabelRuleIDPrefix) {
+			initialKeys = append(initialKeys, keypath.RegionLabelKeyPath(rule.ID))
+		}
+		return true
+	})
 
 	putFn := func(kv *mvccpb.KeyValue) error {
 		key := string(kv.Key)
@@ -129,14 +181,31 @@ func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
 			log.Warn("failed to unmarshal affinity label rule", zap.String("key", key), zap.Error(err))
 			return err
 		}
-		return w.affinityManager.SyncKeyRangesFromEtcd(rule)
+		w.labelPending = append(w.labelPending, labelSyncEvent{rule: rule, revision: kv.ModRevision})
+		return nil
 	}
 
 	deleteFn := func(kv *mvccpb.KeyValue) error {
 		key := string(kv.Key)
 		log.Info("delete affinity label rule", zap.String("key", key))
 		ruleID := strings.TrimPrefix(key, keypath.RegionLabelPathPrefix())
-		w.affinityManager.SyncKeyRangesDeleteFromEtcd(ruleID)
+		w.labelPending = append(w.labelPending, labelSyncEvent{id: ruleID, revision: kv.ModRevision, deleted: true})
+		return nil
+	}
+	applyPending := func() error {
+		pending := w.labelPending
+		w.labelPending = nil
+		for _, event := range pending {
+			if event.deleted {
+				if err := w.affinityManager.SyncKeyRangesDeleteFromEtcdAtRevision(event.id, event.revision); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := w.affinityManager.SyncKeyRangesFromEtcdAtRevision(event.rule, event.revision); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -145,11 +214,16 @@ func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
 		w.etcdClient,
 		"scheduling-affinity-label-watcher",
 		strings.TrimSuffix(keypath.RegionLabelKeyPath(affinity.LabelRuleIDPrefix), "/"), // Filter: only process affinity group label rules
-		func([]*clientv3.Event) error { return nil },
+		func([]*clientv3.Event) error { w.labelPending = nil; return nil },
 		putFn, deleteFn,
-		func([]*clientv3.Event) error { return nil },
+		func([]*clientv3.Event) error { return applyPending() },
 		true, /* withPrefix */
 	)
+	w.labelWatcher.SetConsistentLoad()
+	w.labelWatcher.SetAtomicLoadCallbacks()
+	w.labelWatcher.SetReconcileDeletedKeys()
+	w.labelWatcher.SetReconcileDeletedKeyRevision()
+	w.labelWatcher.SetInitialLoadedKeys(initialKeys)
 	w.labelWatcher.StartWatchLoop()
 	return w.labelWatcher.WaitLoad()
 }

@@ -15,6 +15,7 @@
 package apis
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,7 @@ import (
 	"github.com/tikv/pd/pkg/storage"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/apiutil/multiservicesapi"
+	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 )
@@ -276,8 +278,13 @@ func (s *Service) RegisterAffinityRouter() {
 	redirector := multiservicesapi.ServiceRedirector()
 	router := s.root.Group("affinity-groups")
 	router.Use(redirector)
+	router.POST("", postAffinityGroups)
+	router.PATCH("", batchModifyAffinityGroups)
 	router.GET("", getAllAffinityGroups)
 	router.GET("/:group_id", getAffinityGroup)
+	router.PATCH("/:group_id/policy", updateAffinityGroupPolicy)
+	router.PUT("/:group_id", updateAffinityGroupPeers)
+	router.DELETE("/:group_id", deleteAffinityGroup)
 }
 
 // getHealth returns the health status of the TSO service.
@@ -1761,4 +1768,327 @@ func getAffinityGroup(c *gin.Context) {
 		return
 	}
 	c.IndentedJSON(http.StatusOK, groupState)
+}
+
+type updateAffinityGroupPolicyRequest struct {
+	BalancePolicy affinity.BalancePolicy `json:"balance_policy"`
+}
+
+type affinityKeyRangeRequest struct {
+	StartKey []byte `json:"start_key"`
+	EndKey   []byte `json:"end_key"`
+}
+
+type createAffinityGroupInput struct {
+	Ranges []affinityKeyRangeRequest `json:"ranges"`
+}
+
+type createAffinityGroupsRequest struct {
+	AffinityGroups map[string]createAffinityGroupInput `json:"affinity_groups"`
+}
+
+type batchDeleteAffinityGroupsRequest struct {
+	IDs   []string `json:"ids"`
+	Force bool     `json:"force,omitempty"`
+}
+
+type affinityGroupRangesModification struct {
+	ID     string                    `json:"id"`
+	Ranges []affinityKeyRangeRequest `json:"ranges"`
+}
+
+type batchModifyAffinityGroupsRequest struct {
+	Add    []affinityGroupRangesModification `json:"add,omitempty"`
+	Remove []affinityGroupRangesModification `json:"remove,omitempty"`
+}
+
+type updateAffinityGroupPeersRequest struct {
+	LeaderStoreID uint64   `json:"leader_store_id"`
+	VoterStoreIDs []uint64 `json:"voter_store_ids"`
+}
+
+func handleAffinityManagerError(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errs.ErrAffinityGroupNotFound.Equal(err):
+		c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+	case errs.ErrAffinityGroupContent.Equal(err), errs.ErrInvalidGroupID.Equal(err),
+		errs.ErrEmptyRequest.Equal(err), errs.ErrAffinityGroupConflict.Equal(err), errs.ErrInvalidKeyFormat.Equal(err):
+		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+	case errs.ErrAffinityGroupExist.Equal(err), errs.ErrEtcdTxnConflict.Equal(err):
+		c.AbortWithStatusJSON(http.StatusConflict, err.Error())
+	case errs.ErrExceedMaxEtcdTxnOps.Equal(err):
+		c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, err.Error())
+	default:
+		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+	}
+	return true
+}
+
+func validateAffinityKeyRange(startKey, endKey []byte) error {
+	if len(startKey) == 0 && len(endKey) == 0 {
+		return nil
+	}
+	if len(startKey) == 0 || len(endKey) == 0 || bytes.Compare(startKey, endKey) >= 0 {
+		return errs.ErrAffinityGroupContent.FastGenByArgs("key range must have both keys and start_key must be less than end_key")
+	}
+	return nil
+}
+
+func convertAffinityRangeOps(ops []affinityGroupRangesModification, manager *affinity.Manager, affected map[string]bool) ([]affinity.GroupKeyRanges, error) {
+	grouped := make(map[string][]keyutil.KeyRange)
+	for _, op := range ops {
+		if err := affinity.ValidateGroupID(op.ID); err != nil {
+			return nil, err
+		}
+		if !manager.IsGroupExist(op.ID) {
+			return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(op.ID)
+		}
+		if len(op.Ranges) == 0 {
+			return nil, errs.ErrAffinityGroupContent.FastGenByArgs("no key ranges provided")
+		}
+		affected[op.ID] = true
+		for _, kr := range op.Ranges {
+			if err := validateAffinityKeyRange(kr.StartKey, kr.EndKey); err != nil {
+				return nil, err
+			}
+			grouped[op.ID] = append(grouped[op.ID], keyutil.KeyRange{StartKey: kr.StartKey, EndKey: kr.EndKey})
+		}
+	}
+	result := make([]affinity.GroupKeyRanges, 0, len(grouped))
+	for id, ranges := range grouped {
+		result = append(result, affinity.GroupKeyRanges{GroupID: id, KeyRanges: ranges})
+	}
+	return result, nil
+}
+
+func postAffinityGroups(c *gin.Context) {
+	if _, ok := c.GetQuery("delete"); ok {
+		var req batchDeleteAffinityGroupsRequest
+		if err := c.BindJSON(&req); err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause().Error())
+			return
+		}
+		if len(req.IDs) == 0 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrEmptyRequest.FastGenByArgs("no group ids provided").Error())
+			return
+		}
+		manager, ok := getAffinityManager(c)
+		if !ok {
+			return
+		}
+		for _, id := range req.IDs {
+			if err := affinity.ValidateGroupID(id); err != nil {
+				c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		if handleAffinityManagerError(c, manager.DeleteAffinityGroups(req.IDs, req.Force)) {
+			return
+		}
+		c.IndentedJSON(http.StatusOK, map[string]any{"deleted": req.IDs})
+		return
+	}
+	manager, ok := getAffinityManager(c)
+	if !ok {
+		return
+	}
+	var req createAffinityGroupsRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause().Error())
+		return
+	}
+	if len(req.AffinityGroups) == 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupContent.FastGenByArgs("no affinity groups provided").Error())
+		return
+	}
+	skip := false
+	if raw, exists := c.GetQuery("skip_exist_check"); exists {
+		var err error
+		skip, err = strconv.ParseBool(raw)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrInvalidArgument.GenWithStackByArgs("skip_exist_check", err).Error())
+			return
+		}
+	}
+	groups := make([]affinity.GroupKeyRanges, 0, len(req.AffinityGroups))
+	for id, input := range req.AffinityGroups {
+		if err := affinity.ValidateGroupID(id); err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+			return
+		}
+		if manager.IsGroupExist(id) {
+			if skip {
+				// Keep the PD and scheduling-service handlers' idempotent
+				// skip_exist_check semantics identical: an existing group is
+				// ignored before validating its request body.
+				continue
+			}
+			c.AbortWithStatusJSON(http.StatusConflict, errs.ErrAffinityGroupExist.GenWithStackByArgs(id).Error())
+			return
+		}
+		if len(input.Ranges) == 0 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupContent.FastGenByArgs("no key ranges provided for group "+id).Error())
+			return
+		}
+		ranges := make([]keyutil.KeyRange, 0, len(input.Ranges))
+		for _, kr := range input.Ranges {
+			if err := validateAffinityKeyRange(kr.StartKey, kr.EndKey); err != nil {
+				c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+				return
+			}
+			ranges = append(ranges, keyutil.KeyRange{StartKey: kr.StartKey, EndKey: kr.EndKey})
+		}
+		groups = append(groups, affinity.GroupKeyRanges{GroupID: id, KeyRanges: ranges})
+	}
+	var err error
+	if skip {
+		err = manager.CreateAffinityGroupsIfNotExists(groups)
+	} else {
+		err = manager.CreateAffinityGroups(groups)
+	}
+	if handleAffinityManagerError(c, err) {
+		return
+	}
+	resp := AffinityGroupsResponse{AffinityGroups: make(map[string]*affinity.GroupState, len(req.AffinityGroups))}
+	for id := range req.AffinityGroups {
+		resp.AffinityGroups[id] = manager.GetAffinityGroupState(id)
+	}
+	c.IndentedJSON(http.StatusOK, resp)
+}
+
+func batchModifyAffinityGroups(c *gin.Context) {
+	manager, ok := getAffinityManager(c)
+	if !ok {
+		return
+	}
+	var req batchModifyAffinityGroupsRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause().Error())
+		return
+	}
+	if len(req.Add) == 0 && len(req.Remove) == 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrEmptyRequest.FastGenByArgs("no add or remove operations provided").Error())
+		return
+	}
+	addIDs := make(map[string]struct{}, len(req.Add))
+	for _, op := range req.Add {
+		addIDs[op.ID] = struct{}{}
+	}
+	for _, op := range req.Remove {
+		if _, exists := addIDs[op.ID]; exists {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupConflict.GenWithStackByArgs(op.ID).Error())
+			return
+		}
+	}
+	affected := make(map[string]bool)
+	addOps, err := convertAffinityRangeOps(req.Add, manager, affected)
+	if handleAffinityManagerError(c, err) {
+		return
+	}
+	removeOps, err := convertAffinityRangeOps(req.Remove, manager, affected)
+	if handleAffinityManagerError(c, err) {
+		return
+	}
+	if handleAffinityManagerError(c, manager.UpdateAffinityGroupKeyRanges(addOps, removeOps)) {
+		return
+	}
+	resp := AffinityGroupsResponse{AffinityGroups: make(map[string]*affinity.GroupState, len(affected))}
+	for id := range affected {
+		resp.AffinityGroups[id] = manager.GetAffinityGroupState(id)
+	}
+	c.IndentedJSON(http.StatusOK, resp)
+}
+
+func updateAffinityGroupPeers(c *gin.Context) {
+	manager, ok := getAffinityManager(c)
+	if !ok {
+		return
+	}
+	id := c.Param("group_id")
+	if err := affinity.ValidateGroupID(id); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+		return
+	}
+	var req updateAffinityGroupPeersRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause().Error())
+		return
+	}
+	if req.LeaderStoreID == 0 || len(req.VoterStoreIDs) == 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupContent.FastGenByArgs("leader_store_id and voter_store_ids are required").Error())
+		return
+	}
+	state, err := manager.UpdateAffinityGroupPeers(id, req.LeaderStoreID, req.VoterStoreIDs)
+	if handleAffinityManagerError(c, err) {
+		return
+	}
+	c.IndentedJSON(http.StatusOK, state)
+}
+
+func deleteAffinityGroup(c *gin.Context) {
+	manager, ok := getAffinityManager(c)
+	if !ok {
+		return
+	}
+	id := c.Param("group_id")
+	if err := affinity.ValidateGroupID(id); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+		return
+	}
+	var query struct {
+		Force bool `form:"force"`
+	}
+	if err := c.ShouldBindQuery(&query); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause().Error())
+		return
+	}
+	if !manager.IsGroupExist(id) && !query.Force {
+		c.AbortWithStatusJSON(http.StatusNotFound, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(id).Error())
+		return
+	}
+	if handleAffinityManagerError(c, manager.DeleteAffinityGroups([]string{id}, query.Force)) {
+		return
+	}
+	c.JSON(http.StatusOK, "Affinity group deleted successfully.")
+}
+
+// @Tags     affinity-groups
+// @Summary  Update the balance policy of an affinity group.
+// @Param    group_id  path  string  true  "The group id of the affinity group"
+// @Param    body      body  updateAffinityGroupPolicyRequest  true  "New balance policy: auto or fixed"
+// @Produce  json
+// @Success  200  {object}  *affinity.GroupState
+// @Failure  400  {string}  string  "The input is invalid."
+// @Failure  404  {string}  string  "Affinity group not found."
+// @Failure  409  {string}  string  "Affinity group changed during the update."
+// @Failure  500  {string}  string  "Scheduling service failed to proceed the request."
+// @Router   /affinity-groups/{group_id}/policy [patch]
+func updateAffinityGroupPolicy(c *gin.Context) {
+	manager, ok := getAffinityManager(c)
+	if !ok {
+		return
+	}
+	var req updateAffinityGroupPolicyRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause().Error())
+		return
+	}
+	state, err := manager.UpdateAffinityGroupPolicy(c.Param("group_id"), req.BalancePolicy)
+	if err != nil {
+		switch {
+		case errs.ErrInvalidGroupID.Equal(err), errs.ErrAffinityGroupContent.Equal(err):
+			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+		case errs.ErrAffinityGroupNotFound.Equal(err):
+			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+		case errs.ErrEtcdTxnConflict.Equal(err):
+			c.AbortWithStatusJSON(http.StatusConflict, err.Error())
+		default:
+			c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	c.IndentedJSON(http.StatusOK, state)
 }

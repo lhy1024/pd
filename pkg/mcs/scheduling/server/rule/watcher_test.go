@@ -63,6 +63,28 @@ func TestLoadLargeRules(t *testing.T) {
 	runWatcherLoadLabelRule(ctx, re, client)
 }
 
+func TestSharedWatcherLeavesAffinityLabelsToManager(t *testing.T) {
+	ctx, client, clean := prepare(t, false)
+	defer clean()
+	key := keypath.RegionLabelKeyPath("affinity_group/g")
+	// Deliberately invalid payload: the shared watcher must skip it before
+	// parsing and leave the Manager's already published label untouched.
+	_, err := client.Put(ctx, key, "old")
+	require.NoError(t, err)
+	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
+	l, err := labeler.NewRegionLabeler(ctx, store, time.Hour)
+	require.NoError(t, err)
+	rule := &labeler.LabelRule{ID: "affinity_group/g", Labels: []labeler.RegionLabel{{Key: "affinity_group", Value: "g"}},
+		RuleType: labeler.KeyRange, Data: labeler.MakeKeyRanges("00", "01")}
+	require.NoError(t, l.SetLabelRule(rule))
+	watchCtx, cancel := context.WithCancel(ctx)
+	rw := &Watcher{ctx: watchCtx, cancel: cancel, etcdClient: client,
+		regionLabelPathPrefix: keypath.RegionLabelPathPrefix(), regionLabeler: l}
+	defer rw.Close()
+	require.NoError(t, rw.initializeRegionLabelWatcher())
+	require.Equal(t, rule, l.GetLabelRule(rule.ID))
+}
+
 func BenchmarkLoadLargeRules(b *testing.B) {
 	re := require.New(b)
 	ctx, client, clean := prepare(b, true)
