@@ -29,35 +29,18 @@ import (
 	"github.com/tikv/pd/pkg/utils/keypath"
 )
 
-// affinityMutationTxn preserves native revision comparisons and caches reads,
-// so the shared fence and business checks use the same observation.
+// affinityMutationTxn counts transaction operations and uses native revision
+// comparisons for reads. Each business callback reads its affected keys once.
 type affinityMutationTxn struct {
 	kv.Txn
-	values map[string]string
-	ops    int
+	reads int
+	ops   int
 }
 
-// Load reads a value through the transaction's revision-aware cache.
+// Load reads a value with a native revision comparison.
 func (txn *affinityMutationTxn) Load(key string) (string, error) {
-	return txn.LoadWithRevision(key)
-}
-
-// LoadWithRevision reads and caches a value with its native transaction revision.
-func (txn *affinityMutationTxn) LoadWithRevision(key string) (string, error) {
-	if value, ok := txn.values[key]; ok {
-		return value, nil
-	}
-	var value string
-	var err error
-	if revisionTxn, ok := txn.Txn.(kv.RevisionTxn); ok {
-		value, err = revisionTxn.LoadWithRevision(key)
-	} else {
-		value, err = txn.Txn.Load(key)
-	}
-	if err == nil {
-		txn.values[key] = value
-	}
-	return value, err
+	txn.reads++
+	return loadAffinityValue(txn.Txn, key)
 }
 
 // Save records a value write in the transaction operation count.
@@ -73,13 +56,7 @@ func (txn *affinityMutationTxn) Remove(key string) error {
 }
 
 func loadAffinityWriteSequence(txn kv.Txn) (uint64, error) {
-	var value string
-	var err error
-	if revisionTxn, ok := txn.(kv.RevisionTxn); ok {
-		value, err = revisionTxn.LoadWithRevision(keypath.AffinityWriteSequencePath())
-	} else {
-		value, err = txn.Load(keypath.AffinityWriteSequencePath())
-	}
+	value, err := loadAffinityValue(txn, keypath.AffinityWriteSequencePath())
 	if err != nil || value == "" {
 		return 0, err
 	}
@@ -96,22 +73,17 @@ func advanceAffinityWriteSequence(txn kv.Txn, sequence uint64) error {
 // runAffinityMutationLocked is the single transaction boundary for all writers.
 // Callers recover before reading business state and hold metaMutex through
 // publication. The cached sequence binds that state to the shared write fence.
-func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []clientv3.Cmp, ids []string, f func(kv.Txn) error) error {
+func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
 	sequence := m.writeSequence
 	attempted := false
 	err := m.runAffinityTxn(ctx, conditions, func(inner kv.Txn) error {
-		txn := &affinityMutationTxn{Txn: inner, values: make(map[string]string)}
+		txn := &affinityMutationTxn{Txn: inner}
 		current, err := loadAffinityWriteSequence(txn)
 		if err != nil {
 			return err
 		}
 		if current != sequence {
 			return affinityConflict()
-		}
-		for _, id := range ids {
-			if _, err := txn.LoadWithRevision(keypath.AffinityGroupPath(id)); err != nil {
-				return err
-			}
 		}
 		if err := f(txn); err != nil {
 			return err
@@ -121,7 +93,7 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 				return err
 			}
 		}
-		if len(txn.values)+txn.ops+len(conditions) > etcdutil.MaxEtcdTxnOps {
+		if txn.reads+txn.ops+len(conditions) > etcdutil.MaxEtcdTxnOps {
 			return errs.ErrExceedMaxEtcdTxnOps.GenWithStackByArgs()
 		}
 		attempted = txn.ops > 0
@@ -169,11 +141,11 @@ func (m *Manager) recoverWritesLocked(ctx context.Context) error {
 	if m.pendingSequence == nil {
 		return nil
 	}
-	runner, err := m.captureAffinityTxnRunner()
+	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return err
 	}
-	err = m.runAffinityTxn(ctx, runner.conditions, func(txn kv.Txn) error {
+	err = m.runAffinityTxn(ctx, conditions, func(txn kv.Txn) error {
 		sequence, err := loadAffinityWriteSequence(txn)
 		if err != nil {
 			return err
@@ -189,7 +161,7 @@ func (m *Manager) recoverWritesLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := m.reloadAffinityMetadataWithConditions(ctx, runner.conditions); err != nil {
+	if err := m.reloadAffinityMetadataWithConditions(ctx, conditions); err != nil {
 		return err
 	}
 	m.pendingSequence = nil

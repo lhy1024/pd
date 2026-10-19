@@ -97,7 +97,7 @@ func (m *Manager) commitGroupTarget(ctx context.Context, original, target Group,
 	if !current() {
 		return false, affinityConflict()
 	}
-	err := m.runAffinityMutationLocked(ctx, conditions, []string{target.ID}, func(txn kv.Txn) error {
+	err := m.runAffinityMutationLocked(ctx, conditions, func(txn kv.Txn) error {
 		if !current() {
 			return affinityConflict()
 		}
