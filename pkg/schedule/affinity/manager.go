@@ -17,6 +17,7 @@ package affinity
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 
@@ -93,6 +94,9 @@ type Manager struct {
 	// newer event. A zero revision means an in-process compatibility caller.
 	lastGroupRevision map[string]int64
 	lastLabelRevision map[string]int64
+	// Completed watch batches replace per-key history with a stream watermark.
+	groupWatchRevision int64
+	labelWatchRevision int64
 	// All writers compare the sequence loaded with this metadata. A failed
 	// submission pauses admission until its original sequence is fenced/reloaded.
 	writeSequence   uint64
@@ -510,6 +514,23 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 	}
 }
 
+// AdvanceWatchRevisions records fully applied batches from the group and label
+// watches. Callers must finish every event in a batch (or a full snapshot) before
+// advancing either stream. Zero leaves that stream unchanged. Watermarks reject
+// old echoes after the corresponding per-key revision history is reclaimed.
+func (m *Manager) AdvanceWatchRevisions(groupRevision, labelRevision int64) {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	if groupRevision > m.groupWatchRevision {
+		m.groupWatchRevision = groupRevision
+		maps.DeleteFunc(m.lastGroupRevision, func(_ string, revision int64) bool { return revision <= groupRevision })
+	}
+	if labelRevision > m.labelWatchRevision {
+		m.labelWatchRevision = labelRevision
+		maps.DeleteFunc(m.lastLabelRevision, func(_ string, revision int64) bool { return revision <= labelRevision })
+	}
+}
+
 // SyncGroupFromEtcdAtRevision applies an ordered watcher event.
 func (m *Manager) SyncGroupFromEtcdAtRevision(group *Group, revision int64) error {
 	return m.applyGroupFromEtcd(group, revision)
@@ -525,7 +546,7 @@ func (m *Manager) syncGroupFromEtcdLocked(group *Group, revision int64) error {
 	if group == nil {
 		return nil
 	}
-	if revision > 0 && revision <= m.lastGroupRevision[group.ID] {
+	if revision > 0 && (revision <= m.groupWatchRevision || revision <= m.lastGroupRevision[group.ID]) {
 		return nil
 	}
 	if err := validateBalancePolicy(group.BalancePolicy); err != nil {
@@ -773,7 +794,7 @@ func (m *Manager) applyGroupDeleteFromEtcd(groupID string, revision int64) error
 }
 
 func (m *Manager) syncGroupDeleteFromEtcdLocked(groupID string, revision int64) error {
-	if revision > 0 && revision <= m.lastGroupRevision[groupID] {
+	if revision > 0 && (revision <= m.groupWatchRevision || revision <= m.lastGroupRevision[groupID]) {
 		return nil
 	}
 	if revision > 0 {
@@ -826,7 +847,7 @@ func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule, revi
 	if !isAffinity {
 		return nil
 	}
-	if revision > 0 && revision <= m.lastLabelRevision[labelRule.ID] {
+	if revision > 0 && (revision <= m.labelWatchRevision || revision <= m.lastLabelRevision[labelRule.ID]) {
 		return nil
 	}
 
@@ -915,7 +936,7 @@ func (m *Manager) syncKeyRangesDeleteFromEtcdLocked(ruleID string, revision int6
 	if groupID == "" || groupID == ruleID {
 		return nil
 	}
-	if revision > 0 && revision <= m.lastLabelRevision[ruleID] {
+	if revision > 0 && (revision <= m.labelWatchRevision || revision <= m.lastLabelRevision[ruleID]) {
 		return nil
 	}
 	if revision > 0 {

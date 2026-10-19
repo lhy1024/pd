@@ -127,6 +127,7 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 	applyPending := func() error {
 		pending := w.groupPending
 		w.groupPending = nil
+		var revision int64
 		for _, event := range pending {
 			if event.deleted {
 				if err := w.affinityManager.SyncGroupDeleteFromEtcdAtRevision(event.id, event.revision); err != nil {
@@ -137,7 +138,9 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 					return err
 				}
 			}
+			revision = max(revision, event.revision)
 		}
+		w.affinityManager.AdvanceWatchRevisions(revision, 0)
 		return nil
 	}
 
@@ -195,17 +198,18 @@ func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
 	applyPending := func() error {
 		pending := w.labelPending
 		w.labelPending = nil
+		var revision int64
 		for _, event := range pending {
 			if event.deleted {
 				if err := w.affinityManager.SyncKeyRangesDeleteFromEtcdAtRevision(event.id, event.revision); err != nil {
 					return err
 				}
-				continue
-			}
-			if err := w.affinityManager.SyncKeyRangesFromEtcdAtRevision(event.rule, event.revision); err != nil {
+			} else if err := w.affinityManager.SyncKeyRangesFromEtcdAtRevision(event.rule, event.revision); err != nil {
 				return err
 			}
+			revision = max(revision, event.revision)
 		}
+		w.affinityManager.AdvanceWatchRevisions(0, revision)
 		return nil
 	}
 

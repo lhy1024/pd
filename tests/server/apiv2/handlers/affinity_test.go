@@ -671,7 +671,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityGroupDuplicateErrorMessage() 
 
 // TestAffinityGroupCreateSkipExistCheck verifies skip_exist_check ignores existing groups.
 func (suite *affinityHandlerTestSuite) TestAffinityGroupCreateSkipExistCheck() {
-	suite.env.RunTest(func(cluster *tests.TestCluster) {
+	test := func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
 		serverAddr := leader.GetAddr()
@@ -701,7 +701,26 @@ func (suite *affinityHandlerTestSuite) TestAffinityGroupCreateSkipExistCheck() {
 		re.Contains(result.AffinityGroups, "new")
 
 		waitForAffinityGroups(re, getAffinityGroupURL(serverAddr), "existing", "new")
-	})
+
+		// Skip validation only for groups that the Manager confirms still exist.
+		for _, ranges := range [][]handlers.AffinityKeyRange{
+			nil,
+			{{StartKey: []byte{0x10}, EndKey: []byte{0x01}}},
+			{{StartKey: []byte{0x01}}},
+		} {
+			createReq.AffinityGroups = map[string]handlers.CreateAffinityGroupInput{"existing": {Ranges: ranges}}
+			data, err = json.Marshal(createReq)
+			re.NoError(err)
+			re.NoError(testutil.CheckPostJSON(tests.TestDialClient, getAffinityGroupURL(serverAddr)+"?skip_exist_check=true", data, testutil.StatusOK(re)))
+			createReq.AffinityGroups = map[string]handlers.CreateAffinityGroupInput{"absent": {Ranges: ranges}}
+			data, err = json.Marshal(createReq)
+			re.NoError(err)
+			re.NoError(testutil.CheckPostJSON(tests.TestDialClient, getAffinityGroupURL(serverAddr)+"?skip_exist_check=true", data, testutil.Status(re, http.StatusBadRequest)))
+		}
+		mustBatchDeleteAffinityGroups(re, serverAddr, &handlers.BatchDeleteAffinityGroupsRequest{IDs: []string{"existing", "new"}, Force: true})
+	}
+	suite.env.RunTestInNonMicroserviceEnv(test)
+	suite.env.RunTestInMicroserviceEnv(test)
 }
 
 // TestAffinityGroupCreateSkipExistCheckInvalidBool verifies invalid bool value is rejected.

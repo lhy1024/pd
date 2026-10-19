@@ -327,6 +327,103 @@ func TestUnknownCreateRecoversWithoutTermChange(t *testing.T) {
 	}
 }
 
+func TestSkipCreateAfterUnknownDelete(t *testing.T) {
+	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
+	defer cleanup()
+	base := storage.NewStorageWithEtcdBackend(client)
+	for _, tc := range []struct {
+		name   string
+		ranges []keyutil.KeyRange
+		valid  bool
+	}{
+		{name: "empty"},
+		{name: "reversed", ranges: []keyutil.KeyRange{{StartKey: []byte{2}, EndKey: []byte{1}}}},
+		{name: "missing-end", ranges: []keyutil.KeyRange{{StartKey: []byte{1}}}},
+		{name: "valid", ranges: []keyutil.KeyRange{{StartKey: []byte{1}, EndKey: []byte{2}}}, valid: true},
+		{name: "whole-keyspace", ranges: []keyutil.KeyRange{{}}, valid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMetadataTestManager(t)
+			m.storage = base
+			require.NoError(t, m.ReloadAffinityMetadataFromStorage())
+			id := "skip-after-delete"
+			require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}))
+			// An existing group ignores even invalid ranges, after recovery.
+			require.NoError(t, m.CreateAffinityGroupsIfNotExists([]GroupKeyRanges{{GroupID: id, KeyRanges: tc.ranges}}))
+			s := &delayedCommitStorage{Storage: base, delay: true, failRecovery: true,
+				release: make(chan struct{}), done: make(chan error, 1)}
+			m.storage = s
+			require.ErrorContains(t, m.DeleteAffinityGroups([]string{id}, true), "recovery unavailable")
+			close(s.release)
+			require.NoError(t, <-s.done)
+			require.True(t, m.IsGroupExist(id), "the lost delete response leaves stale memory")
+			persisted, err := base.LoadAffinityGroup(id)
+			require.NoError(t, err)
+			require.Empty(t, persisted)
+			s.failRecovery = false
+			err = m.CreateAffinityGroupsIfNotExists([]GroupKeyRanges{{GroupID: id, KeyRanges: tc.ranges}})
+			if !tc.valid {
+				require.True(t, errs.ErrAffinityGroupContent.Equal(err))
+				require.False(t, m.IsGroupExist(id))
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, loadStoredGroup(t, m, id))
+				require.Equal(t, 1, m.GetAffinityGroupState(id).RangeCount)
+				require.NoError(t, m.DeleteAffinityGroups([]string{id}, true))
+			}
+		})
+	}
+}
+
+func TestWatchWatermarksReclaimRevisionHistory(t *testing.T) {
+	m := newMetadataTestManager(t)
+	// Unique deleted IDs must not remain proportional to historical churn.
+	for i := range 100 {
+		id := fmt.Sprintf("deleted-%d", i)
+		require.NoError(t, m.SyncGroupDeleteFromEtcdAtRevision(id, 10))
+		require.NoError(t, m.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID(id), 10))
+	}
+	require.Len(t, m.lastGroupRevision, 100)
+	require.Len(t, m.lastLabelRevision, 100)
+	m.AdvanceWatchRevisions(10, 0)
+	require.Empty(t, m.lastGroupRevision)
+	require.Len(t, m.lastLabelRevision, 100, "the two watch streams advance independently")
+	m.AdvanceWatchRevisions(0, 10)
+	require.Empty(t, m.lastLabelRevision)
+
+	// Both keys in one etcd transaction share a revision. Apply the entire
+	// batch before advancing, so the second key is never skipped.
+	for i := range 2 {
+		id := fmt.Sprintf("deleted-%d", i)
+		change := GroupKeyRanges{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{byte(i + 1)}, EndKey: []byte{byte(i + 2)}}}}
+		require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{change}))
+		group := m.GetAffinityGroupState(id).Group
+		rule := m.GetRegionLabeler().GetLabelRule(GetLabelRuleID(id))
+		require.NotNil(t, rule)
+		// Even if the authoritative value now matches an old echo after a
+		// recreate, that echo must not repopulate the reclaimed history.
+		require.NoError(t, m.SyncGroupFromEtcdAtRevision(&group, 10))
+		require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 10))
+		require.NotContains(t, m.lastGroupRevision, id)
+		require.NotContains(t, m.lastLabelRevision, rule.ID)
+		require.NoError(t, m.SyncGroupFromEtcdAtRevision(&group, 11))
+		require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 11))
+	}
+	require.Len(t, m.lastGroupRevision, 2)
+	require.Len(t, m.lastLabelRevision, 2)
+	m.AdvanceWatchRevisions(9, 9)
+	require.Equal(t, int64(10), m.groupWatchRevision)
+	require.Equal(t, int64(10), m.labelWatchRevision)
+	require.Len(t, m.lastGroupRevision, 2)
+	m.AdvanceWatchRevisions(11, 11)
+	require.Empty(t, m.lastGroupRevision)
+	require.Empty(t, m.lastLabelRevision)
+	// Recovery reload must not lower the stream's completed revision.
+	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
+	require.Equal(t, int64(11), m.groupWatchRevision)
+	require.Equal(t, int64(11), m.labelWatchRevision)
+}
+
 func TestAffinitySequenceAndElectionFenceAuthorityTransitions(t *testing.T) {
 	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
 	defer cleanup()
