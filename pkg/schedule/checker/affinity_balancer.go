@@ -49,12 +49,9 @@ type affinityBalancer struct {
 }
 
 type affinityBalanceTask struct {
-	// Queue admission and completed results are protected by balancer.mu.
-	queued     bool
-	stable     bool
-	version    affinity.BalanceVersion
-	retryAfter time.Time
-	retryDelay time.Duration
+	// Queue admission is protected by balancer.mu. Completed searches are
+	// retried by the periodic ticker; no permanent stable cache is retained.
+	queued bool
 	// Only the worker reads or writes unfinished search progress.
 	search *balanceSearch
 }
@@ -94,7 +91,7 @@ func newAffinityBalancer(ctx context.Context, checker *AffinityChecker) *affinit
 }
 
 func (b *affinityBalancer) enqueue(groupID string) {
-	version, exists := b.checker.affinityManager.GetBalanceVersion(groupID)
+	_, exists := b.checker.affinityManager.GetBalanceVersion(groupID)
 	if !exists {
 		return
 	}
@@ -106,8 +103,7 @@ func (b *affinityBalancer) enqueue(groupID string) {
 		task = &affinityBalanceTask{}
 		b.tables[tableID] = task
 	}
-	if task.queued || task.stable && task.version == version ||
-		task.version == version && time.Now().Before(task.retryAfter) {
+	if task.queued {
 		return
 	}
 	select {
@@ -143,9 +139,7 @@ func (b *affinityBalancer) run(ctx context.Context) {
 					delete(b.tables, id)
 					continue
 				}
-				current, exists := b.checker.affinityManager.GetBalanceVersion(id)
-				versionChanged := exists && task.version != (affinity.BalanceVersion{}) && current != task.version
-				if !task.queued && (versionChanged || !task.stable) && !time.Now().Before(task.retryAfter) {
+				if !task.queued {
 					select {
 					case b.queue <- id:
 						task.queued = true
@@ -162,29 +156,22 @@ func (b *affinityBalancer) run(ctx context.Context) {
 			if task == nil {
 				continue
 			}
-			stable, resume, err := b.step(ctx, id, task)
+			_, resume, err := b.step(ctx, id, task)
 			if err != nil && !errs.ErrEtcdTxnConflict.Equal(err) && ctx.Err() == nil {
 				log.Warn("failed to balance affinity table", zap.String("table-id", id), zap.Error(err))
 			}
 			b.mu.Lock()
-			task.queued, task.stable = false, stable && err == nil
-			if task.search != nil {
-				task.version = task.search.snapshot.Version
-			}
+			task.queued = false
 			if !resume {
 				task.search = nil
 			}
 			if resume && err == nil {
-				task.retryDelay = 0
 				select {
 				case b.queue <- id:
 					task.queued = true
 				default:
-					task.retryAfter = time.Now()
+					// The ticker will retry this table on the next round.
 				}
-			} else {
-				task.retryDelay = min(max(time.Second, task.retryDelay*2), 30*time.Second)
-				task.retryAfter = time.Now().Add(task.retryDelay)
 			}
 			b.mu.Unlock()
 		}

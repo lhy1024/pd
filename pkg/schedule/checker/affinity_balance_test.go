@@ -456,20 +456,20 @@ func TestAffinityBalanceRecoveredDestinationInvalidatesStable(t *testing.T) {
 		createBalanceGroup(t, manager, id, keys[i], keys[i+1], leader, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
 		addBalanceRegion(t, tc, manager, leader, keys[i], keys[i+1], leader, 1, 2, 3)
 	}
+	beforeVersion, exists := manager.GetBalanceVersion(ids[0])
+	require.True(t, exists)
 
 	task := &affinityBalanceTask{}
 	require.True(t, runAffinityBalanceTask(t, t.Context(), checker, task))
-	task.version, task.stable = task.search.snapshot.Version, true
-	task.search = nil
 	balancer := &affinityBalancer{checker: checker, tables: map[string]*affinityBalanceTask{"_tidb_pt_100": task}, queue: make(chan string, 1)}
 	balancer.enqueue(ids[0])
-	require.Empty(t, balancer.queue, "an unchanged stable table should remain cached")
+	require.Len(t, balancer.queue, 1, "periodic retry should revisit a completed table")
 
 	tc.SetStoreUp(4)
 	// Snapshot creation samples the same store fingerprint as the availability loop.
 	recovered := manager.GetBalanceSnapshot(ids[0])
-	require.Greater(t, recovered.Version.Stores, task.version.Stores)
-	require.Equal(t, task.version.Table, recovered.Version.Table, "recovery of an unused destination does not change the table's Regions")
+	require.Greater(t, recovered.Version.Stores, beforeVersion.Stores)
+	require.Equal(t, beforeVersion.Table, recovered.Version.Table, "recovery of an unused destination does not change the table's Regions")
 	balancer.enqueue(ids[0])
 	require.Len(t, balancer.queue, 1, "destination recovery must wake the stable table")
 	<-balancer.queue
@@ -528,7 +528,6 @@ func TestAffinityBalanceStableResultUsesCachedVersion(t *testing.T) {
 	require.NotNil(t, task.search)
 	require.Empty(t, scanCluster.starts, "fixed groups need no Region candidate scan")
 
-	task.version, task.stable = task.search.snapshot.Version, true
 	task.search = nil // the worker discards a completed search
 	require.NoError(t, tc.GetRegionLabeler().SetLabelRule(&labeler.LabelRule{
 		ID: "unrelated-stable-input", Index: 2,
