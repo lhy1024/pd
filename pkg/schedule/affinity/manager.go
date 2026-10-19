@@ -46,10 +46,12 @@ const (
 )
 
 type regionCache struct {
-	region      *core.RegionInfo
-	groupInfo   *runtimeGroupInfo
-	affinityVer uint64
-	isAffinity  bool
+	region                *core.RegionInfo
+	balanceRegion         *core.RegionInfo
+	groupInfo             *runtimeGroupInfo
+	affinityVer           uint64
+	isAffinity            bool
+	balanceScheduleDenied bool
 }
 
 // Manager is the manager of all affinity information.
@@ -71,13 +73,18 @@ type Manager struct {
 	regionLabeler    *labeler.RegionLabeler // region labeler for syncing key ranges
 
 	// The following members are protected by RWMutex.
-	affinityRegionCount int
-	groups              map[string]*runtimeGroupInfo   // {group_id} -> runtimeGroupInfo
-	regions             map[uint64]regionCache         // {region_id} -> regionCache
-	unavailableStores   map[uint64]storeCondition      // {store_id} -> storeCondition
-	metadataTables      map[string]*metadataTableState // {table_id} -> metadata generations
-	metadataGeneration  uint64
-	affinityWriteTerm   func() ([]clientv3.Cmp, bool)
+	affinityRegionCount     int
+	groups                  map[string]*runtimeGroupInfo   // {group_id} -> runtimeGroupInfo
+	regions                 map[uint64]regionCache         // {region_id} -> regionCache
+	unavailableStores       map[uint64]storeCondition      // {store_id} -> storeCondition
+	metadataTables          map[string]*metadataTableState // {table_id} -> metadata generations
+	metadataGeneration      uint64
+	balanceRuleRevision     func() uint64
+	affinityWriteTerm       func() ([]clientv3.Cmp, bool)
+	balanceLeaderCounts     map[uint64]int
+	balanceVoterCounts      map[uint64]int
+	balanceStoreRevision    uint64
+	balanceStoreFingerprint uint64
 
 	// The following members are protected by metaMutex only, not protected by RWMutex.
 	// keyRanges cached in memory to reduce labeler lock contention
@@ -111,6 +118,8 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 		regions:             make(map[uint64]regionCache),
 		unavailableStores:   make(map[uint64]storeCondition),
 		metadataTables:      make(map[string]*metadataTableState),
+		balanceLeaderCounts: make(map[uint64]int),
+		balanceVoterCounts:  make(map[uint64]int),
 		keyRanges:           make(map[string]GroupKeyRanges),
 		labelRuleBuffer:     make(map[string]*labeler.LabelRule),
 		lastGroupRevision:   make(map[string]int64),
@@ -169,6 +178,7 @@ func (m *Manager) initGroupLocked(group *Group) {
 		LabelRule:           nil,
 		RangeCount:          0,
 	}
+	m.addBalanceCountsLocked(&m.groups[group.ID].Group)
 	m.invalidateMetadataLocked(group.ID)
 }
 
@@ -219,6 +229,11 @@ func (m *Manager) updateGroupTarget(group Group) (*GroupState, error) {
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(group.ID)
 	}
 
+	oldGroup := groupInfo.Group
+	if oldGroup.LeaderStoreID != group.LeaderStoreID || !slices.Equal(oldGroup.VoterStoreIDs, group.VoterStoreIDs) {
+		m.removeBalanceCountsLocked(&oldGroup)
+		m.addBalanceCountsLocked(&group)
+	}
 	groupInfo.SetAvailability(groupAvailable)
 	groupInfo.Group = group
 	groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
@@ -309,6 +324,9 @@ func (m *Manager) clearGroupCacheLocked(groupID string) {
 }
 
 func (m *Manager) deleteGroupLocked(groupID string) {
+	if groupInfo, ok := m.groups[groupID]; ok {
+		m.removeBalanceCountsLocked(&groupInfo.Group)
+	}
 	m.clearGroupCacheLocked(groupID)
 	delete(m.groups, groupID)
 	if state := m.metadataTables[TableGroupPrefix(groupID)]; state != nil {
@@ -342,11 +360,17 @@ func (m *Manager) deleteCacheLocked(regionID uint64) {
 
 func (m *Manager) saveCache(cache *regionCache) {
 	regionID := cache.region.GetID()
+	cache.balanceScheduleDenied = m.regionLabeler.ScheduleDisabled(cache.region)
 	m.Lock()
 	defer m.Unlock()
 	// If the Group has changed, update it but do not save it afterward.
 	groupInfo, ok := m.groups[cache.groupInfo.ID]
 	if ok && groupInfo == cache.groupInfo && groupInfo.AffinityVer == cache.affinityVer {
+		old, exists := m.regions[regionID]
+		if !exists || balanceRegionChanged(old.balanceInput(), cache.region) {
+			m.invalidateMetadataLocked(groupInfo.ID)
+		}
+		cache.balanceRegion = cache.region
 		m.deleteCacheLocked(regionID)
 		m.regions[regionID] = *cache
 		groupInfo.Regions[regionID] = *cache
@@ -369,6 +393,9 @@ func (m *Manager) InvalidCache(regionID uint64) {
 
 	m.Lock()
 	defer m.Unlock()
+	if cached, ok := m.regions[regionID]; ok {
+		m.invalidateMetadataLocked(cached.groupInfo.ID)
+	}
 	m.deleteCacheLocked(regionID)
 }
 
@@ -591,6 +618,13 @@ func (m *Manager) syncGroupFromEtcdLocked(group *Group, revision int64) error {
 		delete(m.labelRuleBuffer, group.ID)
 	} else {
 		changed := false
+		targetChanged := groupInfo.LeaderStoreID != group.LeaderStoreID ||
+			!slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs)
+		if targetChanged {
+			oldGroup := groupInfo.Group
+			m.removeBalanceCountsLocked(&oldGroup)
+			m.addBalanceCountsLocked(group)
+		}
 		if groupInfo.LeaderStoreID != group.LeaderStoreID {
 			groupInfo.LeaderStoreID = group.LeaderStoreID
 			changed = true
@@ -686,6 +720,8 @@ func (m *Manager) reloadAffinityMetadataLocked(ctx context.Context) error {
 	m.groups = make(map[string]*runtimeGroupInfo, len(loaded))
 	m.regions = make(map[uint64]regionCache)
 	m.metadataTables = make(map[string]*metadataTableState)
+	m.balanceLeaderCounts = make(map[uint64]int)
+	m.balanceVoterCounts = make(map[uint64]int)
 	m.affinityRegionCount = 0
 	m.keyRanges = make(map[string]GroupKeyRanges)
 	m.labelRuleBuffer = make(map[string]*labeler.LabelRule)

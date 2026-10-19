@@ -169,6 +169,7 @@ func (m *Manager) checkGroupsAvailability() {
 	if !m.IsAvailable() {
 		return
 	}
+	m.refreshBalanceStores()
 	unavailableStores := m.collectUnavailableStores()
 	isUnavailableStoresChanged, groupAvailabilityChanges := m.getGroupAvailabilityChanges(unavailableStores)
 	if isUnavailableStoresChanged {

@@ -152,6 +152,7 @@ func NewCluster(
 		cancel()
 		return nil, err
 	}
+	affinityManager.SetBalanceRuleRevision(ruleManager.GetRevision)
 	c := &Cluster{
 		ctx:               ctx,
 		cancel:            cancel,
