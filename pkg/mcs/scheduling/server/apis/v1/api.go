@@ -1726,8 +1726,6 @@ func getAffinityGroup(c *gin.Context) {
 	affinityHandler.GetAffinityGroup(c)
 }
 
-type updateAffinityGroupPolicyRequest = handler.UpdateAffinityGroupPolicyRequest
-
 var affinityHandler = handler.AffinityHandler{GetManager: getAffinityManager}
 
 func postAffinityGroups(c *gin.Context) {
