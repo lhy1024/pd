@@ -128,9 +128,14 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 		}
 		return nil
 	}
+	// A failed compare is a definitive rejection: the transaction did not
+	// commit, so no recovery fence or metadata reload is needed.
+	if errs.ErrEtcdTxnConflict.Equal(err) {
+		return err
+	}
 	// Callback failures cannot have committed. All submission errors and CAS
 	// conflicts share one recovery path; none replay the business operation.
-	if !attempted && !errs.ErrEtcdTxnConflict.Equal(err) {
+	if !attempted {
 		return err
 	}
 	m.pendingSequence = &sequence
