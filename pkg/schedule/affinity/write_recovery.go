@@ -129,8 +129,14 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 		return nil
 	}
 	// A failed compare is a definitive rejection: the transaction did not
-	// commit, so no recovery fence or metadata reload is needed.
+	// commit. Refresh the local view once before returning the conflict. This
+	// path deliberately omits the caller's primary condition because a stale
+	// cache is exactly what a deterministic CAS conflict reports; the read is
+	// not an authorization to write.
 	if errs.ErrEtcdTxnConflict.Equal(err) {
+		if reloadErr := m.reloadAffinityMetadataUnconditionallyLocked(ctx); reloadErr != nil {
+			return fmt.Errorf("%w (authoritative reload failed: %v)", err, reloadErr)
+		}
 		return err
 	}
 	// Callback failures cannot have committed. All submission errors and CAS
@@ -178,7 +184,7 @@ func (m *Manager) recoverWritesLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := m.reloadAffinityMetadataLocked(ctx); err != nil {
+	if err := m.reloadAffinityMetadataWithConditions(ctx, runner.conditions); err != nil {
 		return err
 	}
 	m.pendingSequence = nil

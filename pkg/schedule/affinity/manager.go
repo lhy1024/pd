@@ -670,6 +670,23 @@ func (m *Manager) reloadAffinityMetadataLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return m.reloadAffinityMetadataWithConditions(ctx, runner.conditions)
+}
+
+// reloadAffinityMetadataUnconditionallyLocked refreshes the local metadata
+// after a deterministic CAS conflict. The failed write has not committed, so
+// this read does not authorize a write and must not be rejected merely because
+// the caller's primary term is stale. The reload still uses the native read
+// revisions collected by the transaction to publish one coherent snapshot.
+func (m *Manager) reloadAffinityMetadataUnconditionallyLocked(ctx context.Context) error {
+	return m.reloadAffinityMetadataWithConditions(ctx, nil)
+}
+
+// reloadAffinityMetadataWithConditions stages and publishes one authoritative
+// affinity snapshot under the supplied authority conditions. Recovery passes
+// the conditions that fenced the failed write; ordinary initialization captures
+// the current primary conditions through reloadAffinityMetadataLocked.
+func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, conditions []clientv3.Cmp) error {
 	loaded := make([]Group, 0)
 	plan := m.regionLabeler.NewPlan()
 	for _, rule := range m.regionLabeler.GetAllLabelRules() {
@@ -680,7 +697,7 @@ func (m *Manager) reloadAffinityMetadataLocked(ctx context.Context) error {
 		}
 	}
 	var sequence uint64
-	err = m.runAffinityTxn(ctx, runner.conditions, func(txn kv.Txn) error {
+	err := m.runAffinityTxn(ctx, conditions, func(txn kv.Txn) error {
 		var err error
 		sequence, err = loadAffinityWriteSequence(txn)
 		if err != nil {
