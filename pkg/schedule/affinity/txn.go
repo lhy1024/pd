@@ -198,6 +198,7 @@ func (m *Manager) CreateAffinityGroups(changes []GroupKeyRanges) error {
 }
 
 // CreateAffinityGroupsIfNotExists adds multiple affinity groups, skipping those that already exist.
+// Only groups still absent after write recovery require valid, nonempty ranges.
 func (m *Manager) CreateAffinityGroupsIfNotExists(changes []GroupKeyRanges) error {
 	return m.createGroupsWithSkipExisting(changes, true)
 }
@@ -245,6 +246,21 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 		m.RUnlock()
 		if len(filteredGroups) == 0 {
 			return nil
+		}
+		// The API must preserve each request until recovery decides whether it
+		// still exists. Validate only the groups that will actually be created.
+		for _, change := range filteredChanges {
+			if len(change.KeyRanges) == 0 {
+				return errs.ErrAffinityGroupContent.FastGenByArgs("no key ranges provided for group " + change.GroupID)
+			}
+			for _, kr := range change.KeyRanges {
+				if (len(kr.StartKey) == 0) != (len(kr.EndKey) == 0) {
+					return errs.ErrAffinityGroupContent.FastGenByArgs("key range must have both start_key and end_key, or both empty for entire key space")
+				}
+				if len(kr.StartKey) > 0 && bytes.Compare(kr.StartKey, kr.EndKey) >= 0 {
+					return errs.ErrAffinityGroupContent.FastGenByArgs("start_key must be less than end_key")
+				}
+			}
 		}
 	} else {
 		// Step 1: Check whether the Group exists.

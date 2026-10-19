@@ -1919,25 +1919,21 @@ func postAffinityGroups(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
 			return
 		}
-		if manager.IsGroupExist(id) {
-			if skip {
-				// Keep the PD and scheduling-service handlers' idempotent
-				// skip_exist_check semantics identical: an existing group is
-				// ignored before validating its request body.
-				continue
-			}
+		if !skip && manager.IsGroupExist(id) {
 			c.AbortWithStatusJSON(http.StatusConflict, errs.ErrAffinityGroupExist.GenWithStackByArgs(id).Error())
 			return
 		}
-		if len(input.Ranges) == 0 {
+		if !skip && len(input.Ranges) == 0 {
 			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupContent.FastGenByArgs("no key ranges provided for group "+id).Error())
 			return
 		}
 		ranges := make([]keyutil.KeyRange, 0, len(input.Ranges))
 		for _, kr := range input.Ranges {
-			if err := validateAffinityKeyRange(kr.StartKey, kr.EndKey); err != nil {
-				c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-				return
+			if !skip {
+				if err := validateAffinityKeyRange(kr.StartKey, kr.EndKey); err != nil {
+					c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+					return
+				}
 			}
 			ranges = append(ranges, keyutil.KeyRange{StartKey: kr.StartKey, EndKey: kr.EndKey})
 		}

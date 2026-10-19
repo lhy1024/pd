@@ -163,14 +163,11 @@ func createAffinityGroups(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
 			return
 		}
-		if manager.IsGroupExist(groupID) {
-			if skipExistCheck {
-				continue
-			}
+		if !skipExistCheck && manager.IsGroupExist(groupID) {
 			c.AbortWithStatusJSON(http.StatusConflict, errs.ErrAffinityGroupExist.GenWithStackByArgs(groupID).Error())
 			return
 		}
-		if len(input.Ranges) == 0 {
+		if !skipExistCheck && len(input.Ranges) == 0 {
 			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupContent.GenWithStackByArgs("no key ranges provided for group "+groupID).Error())
 			return
 		}
@@ -179,9 +176,11 @@ func createAffinityGroups(c *gin.Context) {
 		var keyRanges []keyutil.KeyRange
 		for _, kr := range input.Ranges {
 			// Validate key range
-			if err := validateKeyRange(kr.StartKey, kr.EndKey); err != nil {
-				c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-				return
+			if !skipExistCheck {
+				if err := validateKeyRange(kr.StartKey, kr.EndKey); err != nil {
+					c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+					return
+				}
 			}
 			keyRanges = append(keyRanges, kr.toKeyutilKeyRange())
 		}
