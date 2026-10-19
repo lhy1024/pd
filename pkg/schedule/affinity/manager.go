@@ -478,15 +478,17 @@ func (m *Manager) GetAllAffinityGroupStates() []*GroupState {
 
 // SyncGroupFromEtcd synchronizes a group from etcd to the in-memory state.
 func (m *Manager) SyncGroupFromEtcd(group *Group) {
-	m.syncGroupFromEtcd(group, 0)
+	if err := m.applyGroupFromEtcd(group, 0); err != nil {
+		log.Error("failed to sync affinity group from etcd", zap.Error(err))
+	}
 }
 
 // SyncGroupFromEtcdAtRevision applies an ordered watcher event.
 func (m *Manager) SyncGroupFromEtcdAtRevision(group *Group, revision int64) error {
-	return m.syncGroupFromEtcd(group, revision)
+	return m.applyGroupFromEtcd(group, revision)
 }
 
-func (m *Manager) syncGroupFromEtcd(group *Group, revision int64) error {
+func (m *Manager) applyGroupFromEtcd(group *Group, revision int64) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	return m.syncGroupFromEtcdLocked(group, revision)
@@ -717,15 +719,18 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 
 // SyncGroupDeleteFromEtcd synchronizes a group deletion from etcd.
 func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) {
-	m.syncGroupDeleteFromEtcd(groupID, 0)
+	if err := m.applyGroupDeleteFromEtcd(groupID, 0); err != nil {
+		log.Error("failed to sync affinity group deletion from etcd",
+			zap.String("group-id", groupID), zap.Error(err))
+	}
 }
 
 // SyncGroupDeleteFromEtcdAtRevision applies an ordered watcher deletion.
 func (m *Manager) SyncGroupDeleteFromEtcdAtRevision(groupID string, revision int64) error {
-	return m.syncGroupDeleteFromEtcd(groupID, revision)
+	return m.applyGroupDeleteFromEtcd(groupID, revision)
 }
 
-func (m *Manager) syncGroupDeleteFromEtcd(groupID string, revision int64) error {
+func (m *Manager) applyGroupDeleteFromEtcd(groupID string, revision int64) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	return m.syncGroupDeleteFromEtcdLocked(groupID, revision)
@@ -766,15 +771,15 @@ func (m *Manager) syncGroupDeleteFromEtcdLocked(groupID string, revision int64) 
 
 // SyncKeyRangesFromEtcd synchronizes key ranges from a label rule.
 func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
-	return m.syncKeyRangesFromEtcd(labelRule, 0)
+	return m.applyKeyRangesFromEtcd(labelRule, 0)
 }
 
 // SyncKeyRangesFromEtcdAtRevision applies an ordered watcher event.
 func (m *Manager) SyncKeyRangesFromEtcdAtRevision(labelRule *labeler.LabelRule, revision int64) error {
-	return m.syncKeyRangesFromEtcd(labelRule, revision)
+	return m.applyKeyRangesFromEtcd(labelRule, revision)
 }
 
-func (m *Manager) syncKeyRangesFromEtcd(labelRule *labeler.LabelRule, revision int64) error {
+func (m *Manager) applyKeyRangesFromEtcd(labelRule *labeler.LabelRule, revision int64) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	return m.syncKeyRangesFromEtcdLocked(labelRule, revision)
@@ -852,15 +857,18 @@ func affinityLabelEqual(a, b *labeler.LabelRule) bool {
 
 // SyncKeyRangesDeleteFromEtcd synchronizes key ranges deletion.
 func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) {
-	m.syncKeyRangesDeleteFromEtcd(ruleID, 0)
+	if err := m.applyKeyRangesDeleteFromEtcd(ruleID, 0); err != nil {
+		log.Error("failed to sync affinity key range deletion from etcd",
+			zap.String("rule-id", ruleID), zap.Error(err))
+	}
 }
 
 // SyncKeyRangesDeleteFromEtcdAtRevision applies an ordered watcher deletion.
 func (m *Manager) SyncKeyRangesDeleteFromEtcdAtRevision(ruleID string, revision int64) error {
-	return m.syncKeyRangesDeleteFromEtcd(ruleID, revision)
+	return m.applyKeyRangesDeleteFromEtcd(ruleID, revision)
 }
 
-func (m *Manager) syncKeyRangesDeleteFromEtcd(ruleID string, revision int64) error {
+func (m *Manager) applyKeyRangesDeleteFromEtcd(ruleID string, revision int64) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	return m.syncKeyRangesDeleteFromEtcdLocked(ruleID, revision)

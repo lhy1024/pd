@@ -255,7 +255,7 @@ func TestAffinityWatcherRevisionRejectsStaleRangeEcho(t *testing.T) {
 	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "revision"}}))
 
 	state := manager.GetAffinityGroupState("revision")
-	manager.SyncGroupFromEtcdAtRevision(&state.Group, 1)
+	re.NoError(manager.SyncGroupFromEtcdAtRevision(&state.Group, 1))
 	makeRule := func(count int) *labeler.LabelRule {
 		ranges := make([]keyutil.KeyRange, count)
 		for i := range ranges {
@@ -275,9 +275,9 @@ func TestAffinityWatcherRevisionRejectsStaleRangeEcho(t *testing.T) {
 	re.NoError(manager.SyncKeyRangesFromEtcdAtRevision(rule, 11))
 	re.Equal(3, manager.GetAffinityGroupState("revision").RangeCount)
 	re.NoError(regionLabeler.DeleteLabelRule(GetLabelRuleID("revision")))
-	manager.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID("revision"), 11)
+	re.NoError(manager.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID("revision"), 11))
 	re.Equal(3, manager.GetAffinityGroupState("revision").RangeCount)
-	manager.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID("revision"), 13)
+	re.NoError(manager.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID("revision"), 13))
 	re.Equal(0, manager.GetAffinityGroupState("revision").RangeCount)
 }
 

@@ -16,6 +16,7 @@ package affinity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -36,10 +37,12 @@ type affinityMutationTxn struct {
 	ops    int
 }
 
+// Load reads a value through the transaction's revision-aware cache.
 func (txn *affinityMutationTxn) Load(key string) (string, error) {
 	return txn.LoadWithRevision(key)
 }
 
+// LoadWithRevision reads and caches a value with its native transaction revision.
 func (txn *affinityMutationTxn) LoadWithRevision(key string) (string, error) {
 	if value, ok := txn.values[key]; ok {
 		return value, nil
@@ -57,11 +60,13 @@ func (txn *affinityMutationTxn) LoadWithRevision(key string) (string, error) {
 	return value, err
 }
 
+// Save records a value write in the transaction operation count.
 func (txn *affinityMutationTxn) Save(key, value string) error {
 	txn.ops++
 	return txn.Txn.Save(key, value)
 }
 
+// Remove records a value deletion in the transaction operation count.
 func (txn *affinityMutationTxn) Remove(key string) error {
 	txn.ops++
 	return txn.Txn.Remove(key)
@@ -83,7 +88,7 @@ func loadAffinityWriteSequence(txn kv.Txn) (uint64, error) {
 
 func advanceAffinityWriteSequence(txn kv.Txn, sequence uint64) error {
 	if sequence == math.MaxUint64 {
-		return fmt.Errorf("affinity write sequence exhausted")
+		return errors.New("affinity write sequence exhausted")
 	}
 	return txn.Save(keypath.AffinityWriteSequencePath(), strconv.FormatUint(sequence+1, 10))
 }
@@ -174,7 +179,7 @@ func (m *Manager) recoverWritesLocked(ctx context.Context) error {
 			return err
 		}
 		if sequence < *m.pendingSequence {
-			return fmt.Errorf("affinity write sequence regressed")
+			return errors.New("affinity write sequence regressed")
 		}
 		if sequence == *m.pendingSequence {
 			return advanceAffinityWriteSequence(txn, sequence)
