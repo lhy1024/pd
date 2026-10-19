@@ -78,7 +78,6 @@ type balanceSearch struct {
 	move       affinity.BalanceMove
 	target     *affinity.Group
 	blocked    bool
-	moveBytes  uint64
 	checked    map[uint64]balanceCheckedRegion
 }
 
@@ -329,7 +328,6 @@ func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBa
 					target.VoterStoreIDs[slices.Index(target.VoterStoreIDs, move.FromStoreID)] = move.ToStoreID
 				}
 				search.target = &target
-				search.moveBytes = 0
 				scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
 				search.scan = &scan
 			}
@@ -359,8 +357,6 @@ func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBa
 			if status != balanceAllowed {
 				search.blocked = search.blocked || status == balanceTemporarilyBlocked
 				search.target, search.scan = nil, nil
-			} else if search.move.FromStoreID != 0 {
-				search.moveBytes += approximateBalanceRegionBytes(region)
 			}
 		case balanceVerifyFinal:
 			if !b.verifyFinalRegions(ctx, search) {
@@ -372,7 +368,7 @@ func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBa
 			}
 			committed, err := manager.CommitBalanceTarget(ctx, snapshot, search.target)
 			if committed {
-				log.Debug("balanced affinity partition", zap.String("group-id", search.target.ID), zap.Uint64("move-bytes", search.moveBytes))
+				log.Debug("balanced affinity partition", zap.String("group-id", search.target.ID))
 			}
 			return false, false, err
 		}

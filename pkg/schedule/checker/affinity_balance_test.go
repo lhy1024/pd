@@ -43,6 +43,15 @@ type affinityBalanceScanCluster struct {
 	labelReads int
 }
 
+func (c *AffinityChecker) validateBalanceRegion(actual *affinity.GroupState, target *affinity.Group,
+	region *core.RegionInfo, waiting map[uint64]struct{}) balanceStatus {
+	fit, status := c.validateBalanceCurrentRegion(actual, region, waiting)
+	if status != balanceAllowed || target == nil {
+		return status
+	}
+	return c.validateBalanceTarget(target, region, fit)
+}
+
 func (c *affinityBalanceScanCluster) GetRegionLabeler() *labeler.RegionLabeler {
 	c.labelReads++
 	return c.CheckerCluster.GetRegionLabeler()

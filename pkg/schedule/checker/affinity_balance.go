@@ -151,18 +151,6 @@ func (c *AffinityChecker) validateBalanceTarget(target *affinity.Group, region *
 	}
 }
 
-// validateBalanceRegion is retained as the small test and checker adapter;
-// planner searches call the two-stage form above so current placement is
-// checked once and reused for every candidate.
-func (c *AffinityChecker) validateBalanceRegion(actual *affinity.GroupState, target *affinity.Group,
-	region *core.RegionInfo, waiting map[uint64]struct{}) balanceStatus {
-	fit, status := c.validateBalanceCurrentRegion(actual, region, waiting)
-	if status != balanceAllowed || target == nil {
-		return status
-	}
-	return c.validateBalanceTarget(target, region, fit)
-}
-
 func (c *AffinityChecker) balanceTargetExecutionStatus(actual, target *affinity.Group) balanceStatus {
 	type storeAction struct {
 		id             uint64
@@ -233,13 +221,6 @@ func (c *AffinityChecker) balanceTargetSubmissionAllowed() bool {
 func (c *AffinityChecker) balanceSchedulingAllowed() bool {
 	return c.balanceTargetSubmissionAllowed() &&
 		(c.opController == nil || c.opController.OperatorCount(operator.OpAffinity) < c.conf.GetAffinityScheduleLimit())
-}
-
-func approximateBalanceRegionBytes(region *core.RegionInfo) uint64 {
-	if size := region.GetApproximateSize(); size > 0 {
-		return uint64(size) * 1024 * 1024
-	}
-	return 0
 }
 
 func placementNotWorse(oldFit, newFit *placement.RegionFit) bool {
