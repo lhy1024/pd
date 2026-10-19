@@ -52,30 +52,20 @@ func checkAffinityTxnCapacity(operationCount int) error {
 	return nil
 }
 
-// affinityTxnRunner keeps the same authority conditions across every batch
-// of one operation. A new primary term must not authorize an old observation.
-type affinityTxnRunner struct {
-	manager    *Manager
-	conditions []clientv3.Cmp
-}
-
-// RunInTxn writes with the authority conditions captured for this operation.
-func (runner affinityTxnRunner) RunInTxn(ctx context.Context, ids []string, f func(kv.Txn) error) error {
-	return runner.manager.runAffinityMutationLocked(ctx, runner.conditions, ids, f)
-}
-
-func (m *Manager) captureAffinityTxnRunner() (affinityTxnRunner, error) {
+// captureAffinityWriteConditions pins the authority before validation. A new
+// primary term must not authorize an old observation.
+func (m *Manager) captureAffinityWriteConditions() ([]clientv3.Cmp, error) {
 	m.RLock()
 	term := m.affinityWriteTerm
 	m.RUnlock()
 	if term == nil {
-		return affinityTxnRunner{manager: m}, nil
+		return nil, nil
 	}
 	conditions, ok := term()
 	if !ok {
-		return affinityTxnRunner{}, affinityConflict()
+		return nil, affinityConflict()
 	}
-	return affinityTxnRunner{manager: m, conditions: slices.Clone(conditions)}, nil
+	return slices.Clone(conditions), nil
 }
 
 // runAffinityTxn also serves recovery; it deliberately bypasses mutation
@@ -91,15 +81,15 @@ func (m *Manager) runAffinityTxn(ctx context.Context, conditions []clientv3.Cmp,
 	return runner.RunInTxnWithConditions(ctx, conditions, f)
 }
 
-func loadAffinityGroupInTxn(txn kv.Txn, groupID string) (*Group, error) {
-	key := keypath.AffinityGroupPath(groupID)
-	var value string
-	var err error
+func loadAffinityValue(txn kv.Txn, key string) (string, error) {
 	if revisionTxn, ok := txn.(kv.RevisionTxn); ok {
-		value, err = revisionTxn.LoadWithRevision(key)
-	} else {
-		value, err = txn.Load(key)
+		return revisionTxn.LoadWithRevision(key)
 	}
+	return txn.Load(key)
+}
+
+func loadAffinityGroupInTxn(txn kv.Txn, groupID string) (*Group, error) {
+	value, err := loadAffinityValue(txn, keypath.AffinityGroupPath(groupID))
 	if err != nil || value == "" {
 		return nil, err
 	}
@@ -114,14 +104,7 @@ func loadAffinityGroupInTxn(txn kv.Txn, groupID string) (*Group, error) {
 // transaction that rewrites the range rule. This prevents a stale local range
 // read from overwriting a newer range update made by another primary.
 func guardAffinityLabelRevision(txn kv.Txn, expected GroupKeyRanges) error {
-	key := keypath.RegionLabelKeyPath(GetLabelRuleID(expected.GroupID))
-	var value string
-	var err error
-	if revisionTxn, ok := txn.(kv.RevisionTxn); ok {
-		value, err = revisionTxn.LoadWithRevision(key)
-	} else {
-		value, err = txn.Load(key)
-	}
+	value, err := loadAffinityValue(txn, keypath.RegionLabelKeyPath(GetLabelRuleID(expected.GroupID)))
 	if err != nil {
 		return err
 	}
@@ -204,7 +187,7 @@ func (m *Manager) CreateAffinityGroupsIfNotExists(changes []GroupKeyRanges) erro
 }
 
 func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExisting bool) error {
-	runner, err := m.captureAffinityTxnRunner()
+	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return err
 	}
@@ -303,11 +286,7 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 		return err
 	}
 
-	ids := make([]string, 0, len(filteredGroups))
-	for _, group := range filteredGroups {
-		ids = append(ids, group.ID)
-	}
-	err = runner.RunInTxn(m.ctx, ids, func(txn kv.Txn) error {
+	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
 		for _, group := range filteredGroups {
 			persisted, err := loadAffinityGroupInTxn(txn, group.ID)
 			if err != nil {
@@ -367,7 +346,7 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 	if len(groupIDs) == 0 {
 		return errs.ErrAffinityGroupContent.FastGenByArgs("no group ids provided")
 	}
-	runner, err := m.captureAffinityTxnRunner()
+	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return err
 	}
@@ -431,8 +410,11 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 
 	// Pin existing group/label revisions so an old delete cannot remove a
 	// recreated group. Capacity was checked before this single transaction.
-	err = runner.RunInTxn(m.ctx, toDelete, func(txn kv.Txn) error {
+	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
 		for _, id := range toDelete {
+			if _, err := loadAffinityValue(txn, keypath.AffinityGroupPath(id)); err != nil {
+				return err
+			}
 			if err := guardAffinityLabelRevision(txn, m.keyRangesOrEmpty(id)); err != nil {
 				return err
 			}
@@ -479,7 +461,7 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 	if err := validateBalancePolicy(policy); err != nil {
 		return nil, err
 	}
-	runner, err := m.captureAffinityTxnRunner()
+	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +479,7 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 	original := group.Group
 	updated := original
 	updated.BalancePolicy = policy
-	err = runner.RunInTxn(m.ctx, []string{groupID}, func(txn kv.Txn) error {
+	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
 		if err := checkOriginalGroup(txn, &original); err != nil {
 			return err
 		}
@@ -529,7 +511,7 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 //   - Its equality will be checked.
 //   - Group must not change voterStoreIDs while it is not in the expired status.
 func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affinityVer uint64, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
-	runner, err := m.captureAffinityTxnRunner()
+	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return nil, err
 	}
@@ -580,7 +562,7 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	var updated Group
 	// Balance submissions use CommitBalanceTarget. Safety repair only compares
 	// this group's persisted target and never holds checker locks across IO.
-	err = runner.RunInTxn(m.ctx, []string{groupID}, func(txn kv.Txn) error {
+	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
 		persisted, loadErr := loadAffinityGroupInTxn(txn, groupID)
 		if loadErr != nil {
 			return loadErr
@@ -628,7 +610,7 @@ func (m *Manager) keyRangesOrEmpty(groupID string) GroupKeyRanges {
 // Currently migration (removing a range from group A and adding the same range to group B in one request)
 // is not supported because add validation checks overlaps against existing ranges before removals are applied.
 func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRanges) error {
-	runner, err := m.captureAffinityTxnRunner()
+	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return err
 	}
@@ -759,12 +741,13 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 		affectedIDs = append(affectedIDs, groupID)
 	}
 	slices.Sort(affectedIDs)
+	affectedIDs = slices.Compact(affectedIDs)
 	// Each range write reads both the group and label before saving/deleting
 	// its label. Include these comparisons in the single-transaction budget.
 	if len(labelOps)+2*len(affectedIDs) > 2*endpoint.MaxAffinityTxnBatchOps {
 		return errs.ErrExceedMaxEtcdTxnOps.GenWithStackByArgs()
 	}
-	err = runner.RunInTxn(m.ctx, affectedIDs, func(txn kv.Txn) error {
+	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
 		for _, groupID := range affectedIDs {
 			// Existing group revision also fences range transactions which
 			// delete their label, leaving no label key to rewrite in recovery.

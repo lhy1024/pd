@@ -689,11 +689,11 @@ func (m *Manager) ReloadAffinityMetadataFromStorage() error {
 // reloadAffinityMetadataLocked publishes only after a sequence/authority check
 // proves that all group/range reads belong to one unchanged affinity view.
 func (m *Manager) reloadAffinityMetadataLocked(ctx context.Context) error {
-	runner, err := m.captureAffinityTxnRunner()
+	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return err
 	}
-	return m.reloadAffinityMetadataWithConditions(ctx, runner.conditions)
+	return m.reloadAffinityMetadataWithConditions(ctx, conditions)
 }
 
 // reloadAffinityMetadataUnconditionallyLocked refreshes the local metadata
