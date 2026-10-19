@@ -118,21 +118,21 @@ func (c *AffinityChecker) balanceRegionReady(group *affinity.GroupState, region 
 	return true
 }
 
-// validateBalanceRegion completes all checks for this Region synchronously.
-// Current-layout failures stop the table until RuleChecker or operators repair
-// it; a rejected candidate only advances the search to another target.
-func (c *AffinityChecker) validateBalanceRegion(actual *affinity.GroupState, target *affinity.Group,
-	region *core.RegionInfo, waiting map[uint64]struct{}) balanceStatus {
+// validateBalanceCurrentRegion checks convergence and current placement once
+// per search. The fit is reused only while Region, store and rule inputs match.
+func (c *AffinityChecker) validateBalanceCurrentRegion(actual *affinity.GroupState,
+	region *core.RegionInfo, waiting map[uint64]struct{}) (*placement.RegionFit, balanceStatus) {
 	if !c.balanceRegionReady(actual, region, waiting) {
-		return balanceUnready
+		return nil, balanceUnready
 	}
 	currentFit := c.ruleManager.FitRegion(c.cluster, region)
 	if c.regionPlacementBestLocation(region, currentFit) != bestLocationSatisfied {
-		return balanceUnready
+		return nil, balanceUnready
 	}
-	if target == nil {
-		return balanceAllowed
-	}
+	return currentFit, balanceAllowed
+}
+
+func (c *AffinityChecker) validateBalanceTarget(target *affinity.Group, region *core.RegionInfo, currentFit *placement.RegionFit) balanceStatus {
 	virtual := cloneRegionWithReplacePeerStores(region, target.LeaderStoreID, target.VoterStoreIDs...)
 	if virtual == nil {
 		return balanceRejected
@@ -149,6 +149,18 @@ func (c *AffinityChecker) validateBalanceRegion(actual *affinity.GroupState, tar
 	default:
 		return balanceAllowed
 	}
+}
+
+// validateBalanceRegion is retained as the small test and checker adapter;
+// planner searches call the two-stage form above so current placement is
+// checked once and reused for every candidate.
+func (c *AffinityChecker) validateBalanceRegion(actual *affinity.GroupState, target *affinity.Group,
+	region *core.RegionInfo, waiting map[uint64]struct{}) balanceStatus {
+	fit, status := c.validateBalanceCurrentRegion(actual, region, waiting)
+	if status != balanceAllowed || target == nil {
+		return status
+	}
+	return c.validateBalanceTarget(target, region, fit)
 }
 
 func (c *AffinityChecker) balanceTargetExecutionStatus(actual, target *affinity.Group) balanceStatus {

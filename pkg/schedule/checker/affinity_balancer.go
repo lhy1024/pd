@@ -30,6 +30,8 @@ import (
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/schedule/affinity"
+	"github.com/tikv/pd/pkg/schedule/placement"
+	"github.com/tikv/pd/pkg/utils/keyutil"
 )
 
 // A worker yields between complete Region checks or raw candidates. A single
@@ -63,28 +65,27 @@ const (
 	balanceScanCurrent balanceSearchPhase = iota
 	balanceFindLeader
 	balanceFindVoter
-	balanceScanFinal
 	balanceVerifyFinal
 )
 
 type balanceSearch struct {
-	snapshot    *affinity.BalanceSnapshot
-	scorer      *affinity.BalanceScorer
-	phase       balanceSearchPhase
-	groupIndex  int
-	scan        *balanceRegionScan
-	candidates  balanceCandidates
-	move        affinity.BalanceMove
-	target      *affinity.Group
-	blocked     bool
-	moveBytes   uint64
-	verified    []balanceCheckedRegion
-	verifyIndex int
+	snapshot   *affinity.BalanceSnapshot
+	scorer     *affinity.BalanceScorer
+	phase      balanceSearchPhase
+	groupIndex int
+	scan       *balanceRegionScan
+	candidates balanceCandidates
+	move       affinity.BalanceMove
+	target     *affinity.Group
+	blocked    bool
+	moveBytes  uint64
+	checked    map[uint64]balanceCheckedRegion
 }
 
 type balanceCheckedRegion struct {
 	group  *affinity.GroupState
 	region *core.RegionInfo
+	fit    *placement.RegionFit
 }
 
 func newAffinityBalancer(ctx context.Context, checker *AffinityChecker) *affinityBalancer {
@@ -232,7 +233,7 @@ func (b *affinityBalancer) prepareSearch(id string, task *affinityBalanceTask) (
 	if !manager.BalanceSnapshotCurrent(snapshot) {
 		return nil, errs.ErrEtcdTxnConflict.FastGenByArgs()
 	}
-	search = &balanceSearch{snapshot: snapshot, scorer: scorer}
+	search = &balanceSearch{snapshot: snapshot, scorer: scorer, checked: make(map[uint64]balanceCheckedRegion)}
 	search.candidates = newBalanceCandidates(snapshot, scorer, false)
 	task.search = search
 	return search, nil
@@ -271,13 +272,9 @@ func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBa
 			return false, true, nil
 		}
 		switch search.phase {
-		case balanceScanCurrent, balanceScanFinal:
+		case balanceScanCurrent:
 			if search.groupIndex >= len(snapshot.Groups) {
-				if search.phase == balanceScanCurrent {
-					search.phase = balanceFindLeader
-				} else {
-					search.phase = balanceVerifyFinal
-				}
+				search.phase = balanceFindLeader
 				continue
 			}
 			group := snapshot.Groups[search.groupIndex]
@@ -302,30 +299,11 @@ func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBa
 				search.scan = nil
 				continue
 			}
-			var target *affinity.Group
-			if search.phase == balanceScanFinal && group.ID == search.target.ID {
-				target = search.target
-			}
-			status := c.validateBalanceRegion(group, target, region, waiting)
-			if status == balanceUnready {
+			fit, status := c.validateBalanceCurrentRegion(group, region, waiting)
+			if status != balanceAllowed {
 				return false, false, nil
 			}
-			if status != balanceAllowed {
-				search.blocked = search.blocked || status == balanceTemporarilyBlocked
-				search.phase = balanceFindLeader
-				if search.candidates.replace {
-					search.phase = balanceFindVoter
-				}
-				search.target, search.scan = nil, nil
-				search.verified = nil
-				continue
-			}
-			if search.phase == balanceScanFinal {
-				search.verified = append(search.verified, balanceCheckedRegion{group, region})
-				if target != nil && search.move.FromStoreID != 0 {
-					search.moveBytes += approximateBalanceRegionBytes(region)
-				}
-			}
+			search.checked[region.GetID()] = balanceCheckedRegion{group, region, fit}
 		case balanceFindLeader, balanceFindVoter:
 			if search.target == nil {
 				move, found := search.candidates.next()
@@ -351,6 +329,7 @@ func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBa
 					target.VoterStoreIDs[slices.Index(target.VoterStoreIDs, move.FromStoreID)] = move.ToStoreID
 				}
 				search.target = &target
+				search.moveBytes = 0
 				scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
 				search.scan = &scan
 			}
@@ -369,30 +348,23 @@ func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBa
 				if err := manager.PrepareBalanceCommit(ctx, snapshot); err != nil {
 					return false, false, err
 				}
-				search.phase, search.groupIndex, search.scan = balanceScanFinal, 0, nil
-				search.verified, search.verifyIndex, search.moveBytes = nil, 0, 0
+				search.phase, search.scan = balanceVerifyFinal, nil
 				continue
 			}
-			status = c.validateBalanceRegion(group, search.target, region, waiting)
-			if status == balanceUnready {
+			checked, ok := search.checked[region.GetID()]
+			if !ok || !sameBalanceRegionInput(checked.region, region) || !c.balanceRegionReady(group, region, waiting) {
 				return false, false, nil
 			}
+			status = c.validateBalanceTarget(search.target, region, checked.fit)
 			if status != balanceAllowed {
 				search.blocked = search.blocked || status == balanceTemporarilyBlocked
 				search.target, search.scan = nil, nil
+			} else if search.move.FromStoreID != 0 {
+				search.moveBytes += approximateBalanceRegionBytes(region)
 			}
 		case balanceVerifyFinal:
-			if search.verifyIndex < len(search.verified) {
-				checked := search.verified[search.verifyIndex]
-				current := c.cluster.GetRegion(checked.region.GetID())
-				if current == nil || current.GetRegionEpoch().GetVersion() != checked.region.GetRegionEpoch().GetVersion() ||
-					current.GetRegionEpoch().GetConfVer() != checked.region.GetRegionEpoch().GetConfVer() ||
-					!bytes.Equal(current.GetStartKey(), checked.region.GetStartKey()) || !bytes.Equal(current.GetEndKey(), checked.region.GetEndKey()) ||
-					!c.balanceRegionReady(checked.group, current, waiting) {
-					return false, false, nil
-				}
-				search.verifyIndex++
-				continue
+			if !b.verifyFinalRegions(ctx, search) {
+				return false, false, ctx.Err()
 			}
 			group := snapshot.Groups[search.candidates.group]
 			if !c.balanceSchedulingAllowed() || c.balanceTargetExecutionStatus(&group.Group, search.target) != balanceAllowed {
@@ -406,6 +378,40 @@ func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBa
 		}
 	}
 	return false, false, ctx.Err()
+}
+
+func sameBalanceRegionInput(a, b *core.RegionInfo) bool {
+	return b != nil && a.GetRegionEpoch().GetVersion() == b.GetRegionEpoch().GetVersion() &&
+		a.GetRegionEpoch().GetConfVer() == b.GetRegionEpoch().GetConfVer() &&
+		bytes.Equal(a.GetStartKey(), b.GetStartKey()) && bytes.Equal(a.GetEndKey(), b.GetEndKey()) &&
+		a.GetLeader().GetStoreId() == b.GetLeader().GetStoreId() && core.SortedPeersEqual(a.GetPeers(), b.GetPeers())
+}
+
+// verifyFinalRegions takes one complete RegionTree range view. It never saves
+// partial success across turns: cancellation aborts the check, and a later
+// attempt must collect the whole view again. This lightweight pass may exceed
+// the turn duration; placement and etcd IO run outside the RegionTree lock.
+func (b *affinityBalancer) verifyFinalRegions(ctx context.Context, search *balanceSearch) bool {
+	var ranges []keyutil.KeyRange
+	for _, group := range search.snapshot.Groups {
+		if group.BalancePolicy != affinity.BalancePolicyFixed {
+			ranges = append(ranges, search.snapshot.Ranges[group.ID].KeyRanges...)
+		}
+	}
+	slices.SortFunc(ranges, func(a, b keyutil.KeyRange) int { return bytes.Compare(a.StartKey, b.StartKey) })
+	regions, err := b.checker.cluster.BatchScanRegions(keyutil.NewKeyRanges(ranges), core.WithOutputMustContainAllKeyRange())
+	if err != nil || len(regions) != len(search.checked) {
+		return false
+	}
+	waiting := b.checker.waitingAffinityRegions()
+	for _, region := range regions {
+		checked, ok := search.checked[region.GetID()]
+		if ctx.Err() != nil || !ok || !sameBalanceRegionInput(checked.region, region) ||
+			!b.checker.balanceRegionReady(checked.group, region, waiting) {
+			return false
+		}
+	}
+	return true
 }
 
 // A concrete cursor enumerates raw single moves without retaining actions.
