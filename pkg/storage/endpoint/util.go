@@ -22,8 +22,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/pingcap/errors"
-
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
@@ -88,16 +86,8 @@ type TxnStorage interface {
 // RunBatchOpInTxn runs a batch of operations in transaction.
 // The batch is split into multiple transactions if it exceeds the maximum number of operations per transaction.
 func RunBatchOpInTxn(ctx context.Context, storage TxnStorage, batch []func(kv.Txn) error) error {
-	return RunBatchOpInTxnWithLimit(ctx, storage, batch, etcdutil.MaxEtcdTxnOps)
-}
-
-// RunBatchOpInTxnWithLimit limits the number of operations in each transaction.
-func RunBatchOpInTxnWithLimit(ctx context.Context, storage TxnStorage, batch []func(kv.Txn) error, limit int) error {
-	if limit <= 0 || limit > etcdutil.MaxEtcdTxnOps {
-		return errors.New("invalid transaction batch limit")
-	}
-	for start := 0; start < len(batch); start += limit {
-		end := start + limit
+	for start := 0; start < len(batch); start += etcdutil.MaxEtcdTxnOps {
+		end := start + etcdutil.MaxEtcdTxnOps
 		if end > len(batch) {
 			end = len(batch)
 		}

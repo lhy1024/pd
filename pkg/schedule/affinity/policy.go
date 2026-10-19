@@ -157,6 +157,15 @@ func (m *Manager) startAvailabilityCheckLoop() {
 
 // checkGroupsAvailability checks the condition of stores and invalidates groups with unavailable stores.
 func (m *Manager) checkGroupsAvailability() {
+	// Recover even when the very first create never reached etcd. The existing
+	// loop supplies bounded retry cadence without another recovery worker.
+	m.metaMutex.Lock()
+	err := m.recoverWritesLocked(m.ctx)
+	m.metaMutex.Unlock()
+	if err != nil {
+		log.Warn("failed to recover affinity metadata", zap.Error(err))
+		return
+	}
 	if !m.IsAvailable() {
 		return
 	}

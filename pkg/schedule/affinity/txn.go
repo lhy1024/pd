@@ -42,7 +42,7 @@ import (
 const (
 	// LabelRuleIDPrefix is the prefix for affinity group label rules.
 	// This is exposed publicly to allow other packages (like watcher) to use it.
-	LabelRuleIDPrefix = "affinity_group/"
+	LabelRuleIDPrefix = keypath.AffinityLabelPrefix
 )
 
 func checkAffinityTxnCapacity(operationCount int) error {
@@ -482,19 +482,10 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 	updated := original
 	updated.BalancePolicy = policy
 	err = runner.RunInTxn(m.ctx, []string{groupID}, func(txn kv.Txn) error {
-		persisted, loadErr := loadAffinityGroupInTxn(txn, groupID)
-		if loadErr != nil {
-			return loadErr
+		if err := checkOriginalGroup(txn, &original); err != nil {
+			return err
 		}
-		if persisted == nil {
-			return errs.ErrEtcdTxnConflict.FastGenByArgs()
-		}
-		if persisted.ID != original.ID || persisted.CreateTimestamp != original.CreateTimestamp ||
-			persisted.BalancePolicy != original.BalancePolicy || persisted.LeaderStoreID != original.LeaderStoreID ||
-			!slices.Equal(normalizeVoters(persisted.VoterStoreIDs), original.VoterStoreIDs) {
-			return errs.ErrEtcdTxnConflict.FastGenByArgs()
-		}
-		if persisted.BalancePolicy == policy {
+		if original.BalancePolicy == policy {
 			return nil
 		}
 		return m.storage.SaveAffinityGroup(txn, groupID, &updated)

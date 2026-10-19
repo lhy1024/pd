@@ -17,31 +17,22 @@ package affinity
 import (
 	"context"
 	"fmt"
-	"slices"
+	"math"
+	"strconv"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/tikv/pd/pkg/errs"
-	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/keypath"
 )
-
-// pendingAffinityMutation is shared by every Manager writer.
-type pendingAffinityMutation struct {
-	ids        []string
-	creates    map[string]bool
-	conditions []clientv3.Cmp
-	uncertain  bool
-}
 
 // affinityMutationTxn preserves native revision comparisons and caches reads,
 // so the shared fence and business checks use the same observation.
 type affinityMutationTxn struct {
 	kv.Txn
 	values map[string]string
-	saved  map[string]bool
 	ops    int
 }
 
@@ -67,7 +58,6 @@ func (txn *affinityMutationTxn) LoadWithRevision(key string) (string, error) {
 }
 
 func (txn *affinityMutationTxn) Save(key, value string) error {
-	txn.saved[key] = true
 	txn.ops++
 	return txn.Txn.Save(key, value)
 }
@@ -77,16 +67,42 @@ func (txn *affinityMutationTxn) Remove(key string) error {
 	return txn.Txn.Remove(key)
 }
 
-// runAffinityMutationLocked is the single transaction/recovery boundary for
-// management and planner writes. The caller holds metaMutex through publication.
-func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []clientv3.Cmp, ids []string, f func(kv.Txn) error) error {
-	if err := m.recoverWritesLocked(ctx); err != nil {
-		return err
+func loadAffinityWriteSequence(txn kv.Txn) (uint64, error) {
+	var value string
+	var err error
+	if revisionTxn, ok := txn.(kv.RevisionTxn); ok {
+		value, err = revisionTxn.LoadWithRevision(keypath.AffinityWriteSequencePath())
+	} else {
+		value, err = txn.Load(keypath.AffinityWriteSequencePath())
 	}
-	pending := &pendingAffinityMutation{ids: slices.Clone(ids), conditions: slices.Clone(conditions), creates: make(map[string]bool)}
+	if err != nil || value == "" {
+		return 0, err
+	}
+	return strconv.ParseUint(value, 10, 64)
+}
+
+func advanceAffinityWriteSequence(txn kv.Txn, sequence uint64) error {
+	if sequence == math.MaxUint64 {
+		return fmt.Errorf("affinity write sequence exhausted")
+	}
+	return txn.Save(keypath.AffinityWriteSequencePath(), strconv.FormatUint(sequence+1, 10))
+}
+
+// runAffinityMutationLocked is the single transaction boundary for all writers.
+// Callers recover before reading business state and hold metaMutex through
+// publication. The cached sequence binds that state to the shared write fence.
+func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []clientv3.Cmp, ids []string, f func(kv.Txn) error) error {
+	sequence := m.writeSequence
 	attempted := false
 	err := m.runAffinityTxn(ctx, conditions, func(inner kv.Txn) error {
-		txn := &affinityMutationTxn{Txn: inner, values: make(map[string]string), saved: make(map[string]bool)}
+		txn := &affinityMutationTxn{Txn: inner, values: make(map[string]string)}
+		current, err := loadAffinityWriteSequence(txn)
+		if err != nil {
+			return err
+		}
+		if current != sequence {
+			return affinityConflict()
+		}
 		for _, id := range ids {
 			if _, err := txn.LoadWithRevision(keypath.AffinityGroupPath(id)); err != nil {
 				return err
@@ -95,24 +111,33 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 		if err := f(txn); err != nil {
 			return err
 		}
+		if txn.ops > 0 {
+			if err := advanceAffinityWriteSequence(txn, sequence); err != nil {
+				return err
+			}
+		}
 		if len(txn.values)+txn.ops+len(conditions) > etcdutil.MaxEtcdTxnOps {
 			return errs.ErrExceedMaxEtcdTxnOps.GenWithStackByArgs()
-		}
-		for _, id := range ids {
-			key := keypath.AffinityGroupPath(id)
-			pending.creates[id] = txn.saved[key] && txn.values[key] == ""
 		}
 		attempted = txn.ops > 0
 		return nil
 	})
-	if err == nil || (!attempted && !errs.ErrEtcdTxnConflict.Equal(err)) {
+	if err == nil {
+		if attempted {
+			m.writeSequence = sequence + 1
+		}
+		return nil
+	}
+	// Callback failures cannot have committed. All submission errors and CAS
+	// conflicts share one recovery path; none replay the business operation.
+	if !attempted && !errs.ErrEtcdTxnConflict.Equal(err) {
 		return err
 	}
-	pending.uncertain = !errs.ErrEtcdTxnConflict.Equal(err)
-	m.pendingMutation = pending
+	m.pendingSequence = &sequence
 	m.Lock()
-	for _, id := range ids {
-		m.invalidateMetadataLocked(id)
+	for _, state := range m.metadataTables {
+		m.metadataGeneration++
+		state.version = m.metadataGeneration
 	}
 	m.Unlock()
 	if reloadErr := m.recoverWritesLocked(m.ctx); reloadErr != nil {
@@ -121,82 +146,36 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 	return err
 }
 
-// recoverWritesLocked never replays the original operation. Existing groups
-// are rewritten unchanged to advance native ModRevision and fence late commits.
-// A missing create has no revision to advance: keep the Manager blocked until
-// its sole attempt is visible or its original primary term is fenced.
+// recoverWritesLocked fences the original sequence before loading actual
+// metadata. The original transaction and the fence can never both succeed.
+// If the fence also times out, retry the same sequence, never a new one.
 func (m *Manager) recoverWritesLocked(ctx context.Context) error {
-	pending := m.pendingMutation
-	if pending == nil {
+	if m.pendingSequence == nil {
 		return nil
 	}
-	if pending.uncertain && len(pending.conditions) > 0 {
-		err := m.runAffinityTxn(ctx, pending.conditions, func(kv.Txn) error { return nil })
-		if errs.ErrEtcdTxnConflict.Equal(err) {
-			pending.uncertain = false
-		} else if err != nil {
-			return err
-		}
+	runner, err := m.captureAffinityTxnRunner()
+	if err != nil {
+		return err
 	}
-	for _, id := range pending.ids {
-		var group *Group
-		var rule *labeler.LabelRule
-		var conditions []clientv3.Cmp
-		if pending.uncertain {
-			conditions = pending.conditions
-		}
-		err := m.runAffinityTxn(ctx, conditions, func(txn kv.Txn) error {
-			var err error
-			group, err = loadAffinityGroupInTxn(txn, id)
-			if err != nil {
-				return err
-			}
-			key := keypath.RegionLabelKeyPath(GetLabelRuleID(id))
-			var value string
-			if revisionTxn, ok := txn.(kv.RevisionTxn); ok {
-				value, err = revisionTxn.LoadWithRevision(key)
-			} else {
-				value, err = txn.Load(key)
-			}
-			if err != nil {
-				return err
-			}
-			if value != "" {
-				rule, err = labeler.NewLabelRuleFromJSON([]byte(value))
-				if err != nil {
-					return err
-				}
-			}
-			if pending.uncertain {
-				if group == nil && pending.creates[id] {
-					return fmt.Errorf("affinity mutation outcome is unresolved: %w", affinityConflict())
-				}
-				if group != nil {
-					return m.storage.SaveAffinityGroup(txn, id, group)
-				}
-			}
-			return nil
-		})
+	err = m.runAffinityTxn(ctx, runner.conditions, func(txn kv.Txn) error {
+		sequence, err := loadAffinityWriteSequence(txn)
 		if err != nil {
 			return err
 		}
-		if group == nil {
-			err = m.syncGroupDeleteFromEtcdLocked(id, 0)
-		} else {
-			err = m.syncGroupFromEtcdLocked(group, 0)
+		if sequence < *m.pendingSequence {
+			return fmt.Errorf("affinity write sequence regressed")
 		}
-		if err != nil {
-			return err
+		if sequence == *m.pendingSequence {
+			return advanceAffinityWriteSequence(txn, sequence)
 		}
-		if rule == nil {
-			err = m.syncKeyRangesDeleteFromEtcdLocked(GetLabelRuleID(id), 0)
-		} else {
-			err = m.syncKeyRangesFromEtcdLocked(rule, 0)
-		}
-		if err != nil {
-			return err
-		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	m.pendingMutation = nil
+	if err := m.reloadAffinityMetadataLocked(ctx); err != nil {
+		return err
+	}
+	m.pendingSequence = nil
 	return nil
 }

@@ -141,31 +141,6 @@ func (l *RegionLabeler) loadRules() error {
 	return nil
 }
 
-// ReloadFromStorage replaces the in-memory rule index with an authoritative
-// storage snapshot. It is used when a scheduling primary is taking over after
-// another writer may have changed rules while this process was detached.
-func (l *RegionLabeler) ReloadFromStorage(source endpoint.RuleStorage) error {
-	if source == nil {
-		source = l.storage
-	}
-	loaded := make(map[string]*LabelRule)
-	if err := source.LoadRegionRules(func(_, v string) {
-		rule, err := NewLabelRuleFromJSON([]byte(v))
-		if err != nil {
-			// Match initial loading's effective view without issuing cleanup
-			// writes from a takeover/readback path (expired rules may remain).
-			return
-		}
-		loaded[rule.ID] = rule
-	}); err != nil {
-		return err
-	}
-	l.Lock()
-	l.ruleIndex = newLabelRuleIndex(loaded)
-	l.Unlock()
-	return nil
-}
-
 // LoadRegionRuleFromStorage reads one region label rule from the authoritative
 // backend. It is used by affinity watchers to reject a delayed event after a
 // local write has already published a newer value.

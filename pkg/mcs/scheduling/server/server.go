@@ -597,6 +597,11 @@ func (s *Server) startCluster(ctx context.Context) error {
 		term, ok := s.participant.GetLeadership().CaptureTerm()
 		return term.Comparisons(), ok
 	})
+	// Campaign has installed the scheduling election key, fencing PD fallback.
+	// Settle old affinity attempts and load under this term before serving writes.
+	if err := am.ReloadAffinityMetadataFromStorage(); err != nil {
+		return err
+	}
 	configWatcher.SetSchedulersController(cluster.GetCoordinator().GetSchedulersController())
 	ruleWatcher, err = rule.NewWatcher(ctx, s.GetClient(), cluster.GetStorage(),
 		cluster.GetCoordinator().GetCheckerController(), cluster.GetRuleManager(), cluster.GetRegionLabeler())
