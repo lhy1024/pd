@@ -34,8 +34,8 @@ import (
 )
 
 // committedErrorStorage models a lost response after etcd has committed. The
-// Manager must block same-term writes instead of guessing whether the commit
-// happened and reopening an ABA window.
+// Manager follows PD's metadata contract: reload the authoritative object and
+// return the ambiguous error; the next request may retry explicitly.
 type committedErrorStorage struct {
 	storage.Storage
 	err error
@@ -60,7 +60,7 @@ func (s *committedErrorStorage) RunInTxnWithConditions(ctx context.Context, cond
 	return err
 }
 
-func TestUnknownWriteBlocksUntilNewTerm(t *testing.T) {
+func TestUnknownWriteReloadsAndAllowsExplicitRetry(t *testing.T) {
 	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
 	defer cleanup()
 	base := storage.NewStorageWithEtcdBackend(client)
@@ -79,19 +79,9 @@ func TestUnknownWriteBlocksUntilNewTerm(t *testing.T) {
 	m.storage = &committedErrorStorage{Storage: base, err: responseErr}
 	_, err = m.UpdateAffinityGroupPeers(id, 2, []uint64{1, 2, 3})
 	require.ErrorIs(t, err, responseErr)
-	require.True(t, m.writeBlocked)
+	require.Equal(t, uint64(2), m.GetAffinityGroupState(id).LeaderStoreID)
 
 	m.storage = base
-	_, err = m.UpdateAffinityGroupPeers(id, 3, []uint64{1, 2, 3})
-	require.ErrorIs(t, err, errAffinityWriteBlocked)
-	require.ErrorIs(t, m.ReloadAffinityMetadataFromStorage(), errAffinityWriteBlocked,
-		"same-term reload must not reopen writes")
-
-	termValue = "new"
-	_, err = client.Put(t.Context(), termKey, termValue)
-	require.NoError(t, err)
-	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
-	require.False(t, m.writeBlocked)
 	_, err = m.UpdateAffinityGroupPeers(id, 3, []uint64{1, 2, 3})
 	require.NoError(t, err)
 }

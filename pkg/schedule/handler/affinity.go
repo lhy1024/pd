@@ -451,8 +451,6 @@ func handleAffinityError(c *gin.Context, err error) bool {
 		c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, err.Error())
 	case errs.ErrEtcdTxnConflict.Equal(err):
 		c.AbortWithStatusJSON(http.StatusConflict, err.Error())
-	case affinity.IsAffinityWriteBlocked(err):
-		c.AbortWithStatusJSON(http.StatusServiceUnavailable, err.Error())
 	default:
 		// such as ErrAffinityInternal
 		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())

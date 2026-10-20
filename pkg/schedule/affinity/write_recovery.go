@@ -17,7 +17,6 @@ package affinity
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -53,8 +52,11 @@ func (txn *affinityMutationTxn) Remove(key string) error {
 }
 
 // runAffinityMutationLocked is the single transaction boundary for all writers.
-// An ambiguous committed write blocks this Manager until a new primary term
-// reloads metadata. That is the deliberate low-frequency affinity contract.
+// It follows PD's existing metadata contract: native revision/CAS and primary
+// term fence the transaction; an ambiguous result is reconciled by an
+// authoritative reload, without replaying the business operation or adding a
+// durable write sequence. A late same-term ABA remains the documented PD-level
+// tradeoff for this low-frequency metadata path.
 func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
 	attempted := false
 	err := m.runAffinityTxn(ctx, conditions, func(inner kv.Txn) error {
@@ -83,19 +85,13 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 		return err
 	}
 	// Callback failures cannot have committed. A submission error after writes
-	// were queued is ambiguous, so freeze this Manager until a new term reloads
-	// it instead of replaying the business operation.
+	// were queued is ambiguous. Reconcile the local cache once like other PD
+	// metadata writers, then return the original error; callers retry explicitly.
 	if !attempted {
 		return err
 	}
-	m.writeBlocked = true
-	m.blockedConditions = slices.Clone(conditions)
-	return err
-}
-
-func (m *Manager) ensureAffinityWritesReadyLocked() error {
-	if m.writeBlocked {
-		return errAffinityWriteBlocked
+	if reloadErr := m.reloadAffinityMetadataUnconditionallyLocked(ctx); reloadErr != nil {
+		return fmt.Errorf("%w (authoritative reload failed: %v)", err, reloadErr)
 	}
-	return nil
+	return err
 }

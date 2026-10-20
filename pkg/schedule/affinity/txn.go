@@ -210,9 +210,6 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
-	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
-		return err
-	}
 	filteredGroups := groups
 	filteredChanges := changes
 	if skipExisting {
@@ -357,9 +354,6 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
-	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
-		return err
-	}
 	// Step 1: Check if group has key ranges when force is false
 	for _, groupID := range groupIDs {
 		if _, exists := seen[groupID]; exists {
@@ -469,9 +463,6 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
-	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
-		return nil, err
-	}
 	group := m.GetAffinityGroupState(groupID)
 	if group == nil {
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
@@ -533,9 +524,6 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	// Step 1: Check whether the Group exists and validate.
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
-		return nil, err
-	}
 	group := m.GetAffinityGroupState(groupID)
 	if group == nil {
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
@@ -647,9 +635,6 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
-	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
-		return err
-	}
 	// Step 1: Validate the added KeyRanges.
 	originalRanges := make(map[string]GroupKeyRanges, len(addOps)+len(removeOps))
 	for _, op := range addOps {
