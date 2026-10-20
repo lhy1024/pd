@@ -40,52 +40,6 @@ func loadStoredGroup(t *testing.T, manager *Manager, groupID string) Group {
 	return group
 }
 
-// metadataTargetSnapshot is a test fixture for the foundation's narrow target
-// submission boundary. It has no store/rule inputs or planner state.
-type metadataTargetSnapshot struct {
-	original Group
-	ranges   GroupKeyRanges
-	version  uint64
-}
-
-func getMetadataTarget(m *Manager, id string) *metadataTargetSnapshot {
-	m.metaMutex.Lock()
-	defer m.metaMutex.Unlock()
-	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
-		return nil
-	}
-	group := m.GetAffinityGroupState(id)
-	if group == nil {
-		return nil
-	}
-	m.RLock()
-	version := m.metadataTables[TableGroupPrefix(id)].version
-	m.RUnlock()
-	return &metadataTargetSnapshot{original: group.Group, ranges: m.keyRanges[id], version: version}
-}
-
-func prepareMetadataTarget(t *testing.T, m *Manager, id string) *metadataTargetSnapshot {
-	t.Helper()
-	snapshot := getMetadataTarget(m, id)
-	require.NotNil(t, snapshot)
-	return snapshot
-}
-
-func metadataTarget(snapshot *metadataTargetSnapshot, id string, leader uint64) *Group {
-	target := snapshot.original
-	target.ID, target.LeaderStoreID = id, leader
-	return &target
-}
-
-func commitMetadataTarget(m *Manager, snapshot *metadataTargetSnapshot, target *Group) (bool, error) {
-	return m.commitGroupTarget(m.ctx, snapshot.original, *target, snapshot.ranges, nil, func() bool {
-		m.RLock()
-		defer m.RUnlock()
-		state := m.metadataTables[TableGroupPrefix(target.ID)]
-		return state != nil && state.version == snapshot.version
-	})
-}
-
 func newMetadataTestManager(t *testing.T) *Manager {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())

@@ -701,7 +701,7 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 			}
 		}
 	}
-	err := m.runAffinityTxn(ctx, conditions, func(txn kv.Txn) error {
+	err := m.runAffinityTxn(ctx, conditions, func(_ kv.Txn) error {
 		if err := m.storage.LoadAllAffinityGroups(func(_, value string) {
 			var group Group
 			if json.Unmarshal([]byte(value), &group) == nil && validateBalancePolicy(group.BalancePolicy) == nil {
