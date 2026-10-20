@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -91,12 +90,6 @@ type Manager struct {
 	// Completed watch batches replace per-key history with a stream watermark.
 	groupWatchRevision int64
 	labelWatchRevision int64
-	// An ambiguous write blocks this Manager until a new primary term reloads
-	// authoritative metadata. Affinity writes are deliberately low frequency;
-	// this keeps the write contract small without allowing a late transaction
-	// from the same term to race a later mutation.
-	writeBlocked      bool
-	blockedConditions []clientv3.Cmp
 	// labelRuleBuffer is a buffer used during etcd synchronization.
 	// When synchronizing via etcd, LabelRule information may arrive earlier than group information.
 	labelRuleBuffer map[string]*labeler.LabelRule // {group_id} -> labelRule
@@ -652,20 +645,7 @@ func (m *Manager) ReloadAffinityMetadataFromStorage() error {
 	if err != nil {
 		return err
 	}
-	if err := m.reloadAffinityMetadataWithConditions(m.ctx, conditions); err != nil {
-		return err
-	}
-	if m.writeBlocked {
-		if !slices.EqualFunc(conditions, m.blockedConditions, func(a, b clientv3.Cmp) bool {
-			return reflect.DeepEqual(a, b)
-		}) {
-			m.writeBlocked = false
-			m.blockedConditions = nil
-		} else {
-			return errAffinityWriteBlocked
-		}
-	}
-	return nil
+	return m.reloadAffinityMetadataWithConditions(m.ctx, conditions)
 }
 
 // reloadAffinityMetadataLocked publishes only after an authority check proves
