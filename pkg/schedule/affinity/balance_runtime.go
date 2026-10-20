@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"hash/fnv"
-	"maps"
 	"slices"
 	"strings"
 
@@ -88,11 +87,21 @@ func (m *Manager) GetBalanceSnapshot(groupID string) *BalanceSnapshot {
 		m.metaMutex.Unlock()
 		return nil
 	}
+	leaderCounts := make(map[uint64]int)
+	voterCounts := make(map[uint64]int)
+	for _, group := range m.groups {
+		if group.LeaderStoreID != 0 {
+			leaderCounts[group.LeaderStoreID]++
+		}
+		for _, storeID := range group.VoterStoreIDs {
+			voterCounts[storeID]++
+		}
+	}
 	result := &BalanceSnapshot{
 		TableID: TableGroupPrefix(groupID), Version: m.balanceVersionLocked(state),
 		Groups: make([]*GroupState, 0, len(state.groups)), Ranges: make(map[string]GroupKeyRanges, len(state.groups)),
 		Stores:             balanceCandidateStores(stores),
-		GlobalLeaderCounts: maps.Clone(m.balanceLeaderCounts), GlobalVoterCounts: maps.Clone(m.balanceVoterCounts),
+		GlobalLeaderCounts: leaderCounts, GlobalVoterCounts: voterCounts,
 	}
 	for id := range state.groups {
 		if group := m.groups[id]; group != nil {
@@ -231,36 +240,4 @@ func balanceCandidateStores(stores []*core.StoreInfo) []uint64 {
 		ids = append(ids, store.GetID())
 	}
 	return ids
-}
-
-func (m *Manager) addBalanceCountsLocked(group *Group) {
-	if group == nil {
-		return
-	}
-	if group.LeaderStoreID != 0 {
-		m.balanceLeaderCounts[group.LeaderStoreID]++
-	}
-	for _, storeID := range group.VoterStoreIDs {
-		m.balanceVoterCounts[storeID]++
-	}
-}
-
-func (m *Manager) removeBalanceCountsLocked(group *Group) {
-	if group == nil {
-		return
-	}
-	if group.LeaderStoreID != 0 {
-		if count := m.balanceLeaderCounts[group.LeaderStoreID] - 1; count > 0 {
-			m.balanceLeaderCounts[group.LeaderStoreID] = count
-		} else {
-			delete(m.balanceLeaderCounts, group.LeaderStoreID)
-		}
-	}
-	for _, storeID := range group.VoterStoreIDs {
-		if count := m.balanceVoterCounts[storeID] - 1; count > 0 {
-			m.balanceVoterCounts[storeID] = count
-		} else {
-			delete(m.balanceVoterCounts, storeID)
-		}
-	}
 }

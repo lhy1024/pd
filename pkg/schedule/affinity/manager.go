@@ -82,8 +82,6 @@ type Manager struct {
 	metadataGeneration      uint64
 	balanceRuleRevision     func() uint64
 	affinityWriteTerm       func() ([]clientv3.Cmp, bool)
-	balanceLeaderCounts     map[uint64]int
-	balanceVoterCounts      map[uint64]int
 	balanceStoreRevision    uint64
 	balanceStoreFingerprint uint64
 
@@ -122,8 +120,6 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 		regions:             make(map[uint64]regionCache),
 		unavailableStores:   make(map[uint64]storeCondition),
 		metadataTables:      make(map[string]*metadataTableState),
-		balanceLeaderCounts: make(map[uint64]int),
-		balanceVoterCounts:  make(map[uint64]int),
 		keyRanges:           make(map[string]GroupKeyRanges),
 		labelRuleBuffer:     make(map[string]*labeler.LabelRule),
 		lastGroupRevision:   make(map[string]int64),
@@ -182,7 +178,6 @@ func (m *Manager) initGroupLocked(group *Group) {
 		LabelRule:           nil,
 		RangeCount:          0,
 	}
-	m.addBalanceCountsLocked(&m.groups[group.ID].Group)
 	m.invalidateMetadataLocked(group.ID)
 }
 
@@ -233,11 +228,6 @@ func (m *Manager) updateGroupTarget(group Group) (*GroupState, error) {
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(group.ID)
 	}
 
-	oldGroup := groupInfo.Group
-	if oldGroup.LeaderStoreID != group.LeaderStoreID || !slices.Equal(oldGroup.VoterStoreIDs, group.VoterStoreIDs) {
-		m.removeBalanceCountsLocked(&oldGroup)
-		m.addBalanceCountsLocked(&group)
-	}
 	groupInfo.SetAvailability(groupAvailable)
 	groupInfo.Group = group
 	groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
@@ -328,9 +318,6 @@ func (m *Manager) clearGroupCacheLocked(groupID string) {
 }
 
 func (m *Manager) deleteGroupLocked(groupID string) {
-	if groupInfo, ok := m.groups[groupID]; ok {
-		m.removeBalanceCountsLocked(&groupInfo.Group)
-	}
 	m.clearGroupCacheLocked(groupID)
 	delete(m.groups, groupID)
 	if state := m.metadataTables[TableGroupPrefix(groupID)]; state != nil {
@@ -641,13 +628,6 @@ func (m *Manager) syncGroupFromEtcdLocked(group *Group, revision int64) error {
 		delete(m.labelRuleBuffer, group.ID)
 	} else {
 		changed := false
-		targetChanged := groupInfo.LeaderStoreID != group.LeaderStoreID ||
-			!slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs)
-		if targetChanged {
-			oldGroup := groupInfo.Group
-			m.removeBalanceCountsLocked(&oldGroup)
-			m.addBalanceCountsLocked(group)
-		}
 		if groupInfo.LeaderStoreID != group.LeaderStoreID {
 			groupInfo.LeaderStoreID = group.LeaderStoreID
 			changed = true
@@ -760,8 +740,6 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 	m.groups = make(map[string]*runtimeGroupInfo, len(loaded))
 	m.regions = make(map[uint64]regionCache)
 	m.metadataTables = make(map[string]*metadataTableState)
-	m.balanceLeaderCounts = make(map[uint64]int)
-	m.balanceVoterCounts = make(map[uint64]int)
 	m.affinityRegionCount = 0
 	m.keyRanges = make(map[string]GroupKeyRanges)
 	m.labelRuleBuffer = make(map[string]*labeler.LabelRule)
