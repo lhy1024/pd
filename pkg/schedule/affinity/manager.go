@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -93,10 +94,12 @@ type Manager struct {
 	// Completed watch batches replace per-key history with a stream watermark.
 	groupWatchRevision int64
 	labelWatchRevision int64
-	// All writers compare the sequence loaded with this metadata. A failed
-	// submission pauses admission until its original sequence is fenced/reloaded.
-	writeSequence   uint64
-	pendingSequence *uint64
+	// An ambiguous write blocks this Manager until a new primary term reloads
+	// authoritative metadata. Affinity writes are deliberately low frequency;
+	// this keeps the write contract small without allowing a late transaction
+	// from the same term to race a later mutation.
+	writeBlocked      bool
+	blockedConditions []clientv3.Cmp
 	// labelRuleBuffer is a buffer used during etcd synchronization.
 	// When synchronizing via etcd, LabelRule information may arrive earlier than group information.
 	labelRuleBuffer map[string]*labeler.LabelRule // {group_id} -> labelRule
@@ -655,15 +658,28 @@ func (m *Manager) syncGroupFromEtcdLocked(group *Group, revision int64) error {
 func (m *Manager) ReloadAffinityMetadataFromStorage() error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	if m.pendingSequence == nil {
-		sequence := m.writeSequence
-		m.pendingSequence = &sequence
+	conditions, err := m.captureAffinityWriteConditions()
+	if err != nil {
+		return err
 	}
-	return m.recoverWritesLocked(m.ctx)
+	if err := m.reloadAffinityMetadataWithConditions(m.ctx, conditions); err != nil {
+		return err
+	}
+	if m.writeBlocked {
+		if !slices.EqualFunc(conditions, m.blockedConditions, func(a, b clientv3.Cmp) bool {
+			return reflect.DeepEqual(a, b)
+		}) {
+			m.writeBlocked = false
+			m.blockedConditions = nil
+		} else {
+			return errAffinityWriteBlocked
+		}
+	}
+	return nil
 }
 
-// reloadAffinityMetadataLocked publishes only after a sequence/authority check
-// proves that all group/range reads belong to one unchanged affinity view.
+// reloadAffinityMetadataLocked publishes only after an authority check proves
+// that all group/range reads belong to one unchanged affinity view.
 func (m *Manager) reloadAffinityMetadataLocked(ctx context.Context) error {
 	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
@@ -682,9 +698,9 @@ func (m *Manager) reloadAffinityMetadataUnconditionallyLocked(ctx context.Contex
 }
 
 // reloadAffinityMetadataWithConditions stages and publishes one authoritative
-// affinity snapshot under the supplied authority conditions. Recovery passes
-// the conditions that fenced the failed write; ordinary initialization captures
-// the current primary conditions through reloadAffinityMetadataLocked.
+// affinity snapshot under the supplied authority conditions. Takeover passes
+// the new primary conditions; ordinary initialization captures the current
+// primary conditions through reloadAffinityMetadataLocked.
 func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, conditions []clientv3.Cmp) error {
 	loaded := make([]Group, 0)
 	plan := m.regionLabeler.NewPlan()
@@ -695,13 +711,7 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 			}
 		}
 	}
-	var sequence uint64
 	err := m.runAffinityTxn(ctx, conditions, func(txn kv.Txn) error {
-		var err error
-		sequence, err = loadAffinityWriteSequence(txn)
-		if err != nil {
-			return err
-		}
 		if err := m.storage.LoadAllAffinityGroups(func(_, value string) {
 			var group Group
 			if json.Unmarshal([]byte(value), &group) == nil && validateBalancePolicy(group.BalancePolicy) == nil {
@@ -741,7 +751,6 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 	m.labelRuleBuffer = make(map[string]*labeler.LabelRule)
 	m.lastGroupRevision = make(map[string]int64)
 	m.lastLabelRevision = make(map[string]int64)
-	m.writeSequence = sequence
 	for i := range loaded {
 		m.initGroupLocked(&loaded[i])
 	}

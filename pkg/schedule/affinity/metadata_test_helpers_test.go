@@ -51,7 +51,7 @@ type metadataTargetSnapshot struct {
 func getMetadataTarget(m *Manager, id string) *metadataTargetSnapshot {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	if err := m.recoverWritesLocked(m.ctx); err != nil {
+	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
 		return nil
 	}
 	group := m.GetAffinityGroupState(id)

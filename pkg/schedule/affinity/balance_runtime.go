@@ -75,7 +75,7 @@ func (m *Manager) GetBalanceVersion(groupID string) (BalanceVersion, bool) {
 func (m *Manager) GetBalanceSnapshot(groupID string) *BalanceSnapshot {
 	stores, fingerprint := m.loadBalanceStoreSnapshot()
 	m.metaMutex.Lock()
-	if err := m.recoverWritesLocked(m.ctx); err != nil {
+	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
 		m.metaMutex.Unlock()
 		return nil
 	}

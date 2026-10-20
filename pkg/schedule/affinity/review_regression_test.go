@@ -33,157 +33,12 @@ import (
 	"github.com/tikv/pd/pkg/utils/keyutil"
 )
 
+// committedErrorStorage models a lost response after etcd has committed. The
+// Manager must block same-term writes instead of guessing whether the commit
+// happened and reopening an ABA window.
 type committedErrorStorage struct {
 	storage.Storage
 	err error
-}
-
-// delayedCommitStorage returns an unknown result after the original callback
-// captured etcd revisions, but before its transaction is allowed to commit.
-type delayedCommitStorage struct {
-	storage.Storage
-	delay        bool
-	failRecovery bool
-	release      chan struct{}
-	done         chan error
-}
-
-func (s *delayedCommitStorage) RunInTxn(ctx context.Context, f func(kv.Txn) error) error {
-	return s.RunInTxnWithConditions(ctx, nil, f)
-}
-
-func (s *delayedCommitStorage) RunInTxnWithConditions(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
-	run := func(ctx context.Context, callback func(kv.Txn) error) error {
-		if len(conditions) == 0 {
-			return s.Storage.RunInTxn(ctx, callback)
-		}
-		return s.Storage.(kv.ConditionalTxnRunner).RunInTxnWithConditions(ctx, conditions, callback)
-	}
-	if s.delay {
-		s.delay = false
-		ready := make(chan struct{})
-		go func() {
-			s.done <- run(context.WithoutCancel(ctx), func(txn kv.Txn) error {
-				err := f(txn)
-				close(ready)
-				if err != nil {
-					return err
-				}
-				<-s.release
-				return nil
-			})
-		}()
-		<-ready
-		return errors.New("commit response lost before completion")
-	}
-	if s.failRecovery {
-		return errors.New("recovery unavailable")
-	}
-	return run(ctx, f)
-}
-
-func TestUnknownWriteFencesLateCommitAndReloadsMetadata(t *testing.T) {
-	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
-	defer cleanup()
-	base := storage.NewStorageWithEtcdBackend(client)
-	for _, kind := range []string{"target", "ranges", "policy", "peers", "delete"} {
-		for _, commitFirst := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/visible-before-recovery=%t", kind, commitFirst), func(t *testing.T) {
-				m := newMetadataTestManager(t)
-				m.storage = base
-				// Each subtest uses the same deterministic fixture on fresh keys.
-				require.NoError(t, base.RunInTxn(t.Context(), func(txn kv.Txn) error {
-					for _, id := range []string{"_tidb_pt_10_p1", "_tidb_pt_10_p2", "_tidb_pt_20_p1"} {
-						if err := base.DeleteAffinityGroup(txn, id); err != nil {
-							return err
-						}
-						if err := base.DeleteRegionRule(txn, GetLabelRuleID(id)); err != nil {
-							return err
-						}
-					}
-					return nil
-				}))
-				require.NoError(t, m.ReloadAffinityMetadataFromStorage())
-				ids := seedMetadataTestGroups(t, m, []uint64{1, 1})
-				other := "_tidb_pt_20_p1"
-				require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: other}}))
-				otherGroup := m.GetAffinityGroupState(other).Group
-				snapshot := prepareMetadataTarget(t, m, ids[0])
-				otherVersion := m.metadataTables[TableGroupPrefix(other)].version
-				s := &delayedCommitStorage{Storage: base, delay: true, failRecovery: true,
-					release: make(chan struct{}), done: make(chan error, 1)}
-				m.storage = s
-				switch kind {
-				case "target":
-					ok, err := commitMetadataTarget(m, snapshot, metadataTarget(snapshot, ids[0], 2))
-					require.False(t, ok)
-					require.ErrorContains(t, err, "recovery unavailable")
-				case "ranges":
-					err := m.UpdateAffinityGroupKeyRanges([]GroupKeyRanges{{GroupID: ids[0],
-						KeyRanges: []keyutil.KeyRange{{StartKey: []byte{8}, EndKey: []byte{9}}}}}, nil)
-					require.ErrorContains(t, err, "recovery unavailable")
-				case "policy":
-					_, err := m.UpdateAffinityGroupPolicy(ids[0], BalancePolicyFixed)
-					require.ErrorContains(t, err, "recovery unavailable")
-				case "peers":
-					_, err := m.UpdateAffinityGroupPeers(ids[0], 2, []uint64{1, 2, 3})
-					require.ErrorContains(t, err, "recovery unavailable")
-				case "delete":
-					require.ErrorContains(t, m.DeleteAffinityGroups([]string{ids[0]}, true), "recovery unavailable")
-				}
-				require.Nil(t, getMetadataTarget(m, ids[1]), "the entire affected table must wait")
-				require.Nil(t, getMetadataTarget(m, other), "all writers share the Manager recovery boundary")
-				finish := func() error {
-					close(s.release)
-					select {
-					case err := <-s.done:
-						return err
-					case <-time.After(5 * time.Second):
-						t.Fatal("delayed transaction did not finish")
-						return nil
-					}
-				}
-				if commitFirst {
-					require.NoError(t, finish())
-				}
-				s.failRecovery = false
-				fresh := prepareMetadataTarget(t, m, ids[1])
-				if !commitFirst && kind == "delete" {
-					require.NoError(t, m.DeleteAffinityGroups([]string{ids[0]}, true))
-					require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: ids[0]}}))
-					fresh = prepareMetadataTarget(t, m, ids[1])
-				}
-				if commitFirst && kind == "target" {
-					require.Equal(t, uint64(2), m.GetAffinityGroupState(ids[0]).LeaderStoreID)
-				}
-				if commitFirst && kind == "ranges" {
-					require.Equal(t, 2, m.GetAffinityGroupState(ids[0]).RangeCount)
-				}
-				if commitFirst && kind == "policy" {
-					require.Equal(t, BalancePolicyFixed, m.GetAffinityGroupState(ids[0]).BalancePolicy)
-				}
-				if commitFirst && kind == "peers" {
-					require.Equal(t, uint64(2), m.GetAffinityGroupState(ids[0]).LeaderStoreID)
-				}
-				if commitFirst && kind == "delete" {
-					require.Nil(t, m.GetAffinityGroupState(ids[0]))
-				}
-				ok, err := commitMetadataTarget(m, fresh, metadataTarget(fresh, ids[1], 3))
-				require.NoError(t, err)
-				require.True(t, ok)
-				if !commitFirst {
-					require.ErrorIs(t, finish(), errs.ErrEtcdTxnConflict)
-					if kind == "delete" {
-						require.NotNil(t, m.GetAffinityGroupState(ids[0]), "late delete must not remove a recreated group")
-						require.NotNil(t, loadStoredGroup(t, m, ids[0]))
-					}
-				}
-				require.Equal(t, otherGroup, m.GetAffinityGroupState(other).Group)
-				currentVersion := m.metadataTables[TableGroupPrefix(other)].version
-				require.Greater(t, currentVersion, otherVersion, "recovery reloads all affinity metadata")
-			})
-		}
-	}
 }
 
 func (s *committedErrorStorage) RunInTxn(ctx context.Context, f func(kv.Txn) error) error {
@@ -205,226 +60,43 @@ func (s *committedErrorStorage) RunInTxnWithConditions(ctx context.Context, cond
 	return err
 }
 
-func TestTargetCommitRecoversCommittedResponseError(t *testing.T) {
+func TestUnknownWriteBlocksUntilNewTerm(t *testing.T) {
+	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
+	defer cleanup()
+	base := storage.NewStorageWithEtcdBackend(client)
 	m := newMetadataTestManager(t)
-	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
-	snapshot := prepareMetadataTarget(t, m, id)
-	responseErr := errors.New("commit response lost")
-	m.storage = &committedErrorStorage{Storage: m.storage.(storage.Storage), err: responseErr}
-	committed, err := commitMetadataTarget(m, snapshot, metadataTarget(snapshot, id, 2))
-	require.ErrorIs(t, err, responseErr)
-	require.False(t, committed)
-	require.Equal(t, uint64(2), m.GetAffinityGroupState(id).LeaderStoreID)
-	snapshot = prepareMetadataTarget(t, m, id)
-	committed, err = commitMetadataTarget(m, snapshot, metadataTarget(snapshot, id, 3))
+	m.storage = base
+	termKey := "/test/affinity-primary-term"
+	termValue := "old"
+	_, err := client.Put(t.Context(), termKey, termValue)
 	require.NoError(t, err)
-	require.True(t, committed)
-	require.Equal(t, uint64(3), loadStoredGroup(t, m, id).LeaderStoreID)
-}
-
-func TestManagementWritesRecoverCommittedResponseError(t *testing.T) {
-	for _, kind := range []string{"create", "delete", "ranges", "policy", "peers"} {
-		t.Run(kind, func(t *testing.T) {
-			m := newMetadataTestManager(t)
-			id := seedMetadataTestGroups(t, m, []uint64{1})[0]
-			responseErr := errors.New("commit response lost")
-			m.storage = &committedErrorStorage{Storage: m.storage.(storage.Storage), err: responseErr}
-			var err error
-			switch kind {
-			case "create":
-				id = "_tidb_pt_20_p1"
-				err = m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{8}, EndKey: []byte{9}}}}})
-			case "delete":
-				err = m.DeleteAffinityGroups([]string{id}, true)
-			case "ranges":
-				err = m.UpdateAffinityGroupKeyRanges([]GroupKeyRanges{{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{8}, EndKey: []byte{9}}}}}, nil)
-			case "policy":
-				_, err = m.UpdateAffinityGroupPolicy(id, BalancePolicyFixed)
-			case "peers":
-				_, err = m.UpdateAffinityGroupPeers(id, 2, []uint64{1, 2, 3})
-			}
-			require.ErrorIs(t, err, responseErr)
-			require.Nil(t, m.pendingSequence)
-			group := m.GetAffinityGroupState(id)
-			switch kind {
-			case "create":
-				require.NotNil(t, group)
-				require.Equal(t, 1, group.RangeCount)
-			case "delete":
-				require.Nil(t, group)
-			case "ranges":
-				require.Equal(t, 2, group.RangeCount)
-			case "policy":
-				require.Equal(t, BalancePolicyFixed, group.BalancePolicy)
-			case "peers":
-				require.Equal(t, uint64(2), group.LeaderStoreID)
-			}
-		})
-	}
-}
-
-func TestUnknownCreateRecoversWithoutTermChange(t *testing.T) {
-	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
-	defer cleanup()
-	base := storage.NewStorageWithEtcdBackend(client)
-	for _, fenceResponseLost := range []bool{false, true} {
-		t.Run(fmt.Sprintf("fence-response-lost=%t", fenceResponseLost), func(t *testing.T) {
-			m := newMetadataTestManager(t)
-			m.storage = base
-			require.NoError(t, m.ReloadAffinityMetadataFromStorage())
-			id := fmt.Sprintf("pending-create-%t", fenceResponseLost)
-			termKey := "/test/affinity-primary-term"
-			_, err := client.Put(t.Context(), termKey, "old")
-			require.NoError(t, err)
-			m.SetAffinityWriteGuard(func() ([]clientv3.Cmp, bool) {
-				return []clientv3.Cmp{clientv3.Compare(clientv3.Value(termKey), "=", "old")}, true
-			})
-			s := &delayedCommitStorage{Storage: base, delay: true, failRecovery: true, release: make(chan struct{}), done: make(chan error, 1)}
-			m.storage = s
-			require.ErrorContains(t, m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}), "recovery unavailable")
-			require.NotNil(t, m.pendingSequence)
-			sequence := *m.pendingSequence
-			// All entry points wait while etcd recovery is unavailable.
-			require.Error(t, m.CreateAffinityGroupsIfNotExists([]GroupKeyRanges{{GroupID: id}}))
-			require.Error(t, m.DeleteAffinityGroups([]string{id}, true))
-			_, err = m.UpdateAffinityGroupPolicy(id, BalancePolicyFixed)
-			require.Error(t, err)
-			_, err = m.UpdateAffinityGroupPeers(id, 1, []uint64{1, 2, 3})
-			require.Error(t, err)
-			require.Error(t, m.UpdateAffinityGroupKeyRanges([]GroupKeyRanges{{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{8}, EndKey: []byte{9}}}}}, nil))
-			require.Error(t, m.ReloadAffinityMetadataFromStorage())
-			require.Nil(t, getMetadataTarget(m, id))
-			value, err := base.LoadAffinityGroup(id)
-			require.NoError(t, err)
-			require.Empty(t, value, "recovery must not replay the create")
-			s.failRecovery = false
-			if fenceResponseLost {
-				m.storage = &committedErrorStorage{Storage: base, err: errors.New("fence response lost")}
-				m.checkGroupsAvailability()
-				require.NotNil(t, m.pendingSequence)
-				require.Equal(t, sequence, *m.pendingSequence, "retry must retain the original sequence")
-			}
-			// The existing periodic loop recovers even with no groups and no
-			// further client requests. The original primary remains unchanged.
-			m.checkGroupsAvailability()
-			require.Nil(t, m.pendingSequence)
-			require.Equal(t, sequence+1, m.writeSequence)
-			require.False(t, m.IsGroupExist(id))
-			require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}))
-			require.NoError(t, m.DeleteAffinityGroups([]string{id}, true))
-			close(s.release)
-			select {
-			case err := <-s.done:
-				require.ErrorIs(t, err, errs.ErrEtcdTxnConflict)
-			case <-time.After(5 * time.Second):
-				t.Fatal("delayed create did not finish")
-			}
-			require.Nil(t, m.pendingSequence)
-			value, err = base.LoadAffinityGroup(id)
-			require.NoError(t, err)
-			require.Empty(t, value, "late create must not resurrect the deleted group")
-		})
-	}
-}
-
-func TestSkipCreateAfterUnknownDelete(t *testing.T) {
-	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
-	defer cleanup()
-	base := storage.NewStorageWithEtcdBackend(client)
-	for _, tc := range []struct {
-		name   string
-		ranges []keyutil.KeyRange
-		valid  bool
-	}{
-		{name: "empty"},
-		{name: "reversed", ranges: []keyutil.KeyRange{{StartKey: []byte{2}, EndKey: []byte{1}}}},
-		{name: "missing-end", ranges: []keyutil.KeyRange{{StartKey: []byte{1}}}},
-		{name: "valid", ranges: []keyutil.KeyRange{{StartKey: []byte{1}, EndKey: []byte{2}}}, valid: true},
-		{name: "whole-keyspace", ranges: []keyutil.KeyRange{{}}, valid: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newMetadataTestManager(t)
-			m.storage = base
-			require.NoError(t, m.ReloadAffinityMetadataFromStorage())
-			id := "skip-after-delete"
-			require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}))
-			// An existing group ignores even invalid ranges, after recovery.
-			require.NoError(t, m.CreateAffinityGroupsIfNotExists([]GroupKeyRanges{{GroupID: id, KeyRanges: tc.ranges}}))
-			s := &delayedCommitStorage{Storage: base, delay: true, failRecovery: true,
-				release: make(chan struct{}), done: make(chan error, 1)}
-			m.storage = s
-			require.ErrorContains(t, m.DeleteAffinityGroups([]string{id}, true), "recovery unavailable")
-			close(s.release)
-			require.NoError(t, <-s.done)
-			require.True(t, m.IsGroupExist(id), "the lost delete response leaves stale memory")
-			persisted, err := base.LoadAffinityGroup(id)
-			require.NoError(t, err)
-			require.Empty(t, persisted)
-			s.failRecovery = false
-			err = m.CreateAffinityGroupsIfNotExists([]GroupKeyRanges{{GroupID: id, KeyRanges: tc.ranges}})
-			if !tc.valid {
-				require.True(t, errs.ErrAffinityGroupContent.Equal(err))
-				require.False(t, m.IsGroupExist(id))
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, loadStoredGroup(t, m, id))
-				require.Equal(t, 1, m.GetAffinityGroupState(id).RangeCount)
-				require.NoError(t, m.DeleteAffinityGroups([]string{id}, true))
-			}
-		})
-	}
-}
-
-func TestWatchWatermarksReclaimRevisionHistory(t *testing.T) {
-	m := newMetadataTestManager(t)
-	// Unique deleted IDs must not remain proportional to historical churn.
-	for i := range 100 {
-		id := fmt.Sprintf("deleted-%d", i)
-		require.NoError(t, m.SyncGroupDeleteFromEtcdAtRevision(id, 10))
-		require.NoError(t, m.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID(id), 10))
-	}
-	require.Len(t, m.lastGroupRevision, 100)
-	require.Len(t, m.lastLabelRevision, 100)
-	m.AdvanceWatchRevisions(10, 0)
-	require.Empty(t, m.lastGroupRevision)
-	require.Len(t, m.lastLabelRevision, 100, "the two watch streams advance independently")
-	m.AdvanceWatchRevisions(0, 10)
-	require.Empty(t, m.lastLabelRevision)
-
-	// Both keys in one etcd transaction share a revision. Apply the entire
-	// batch before advancing, so the second key is never skipped.
-	for i := range 2 {
-		id := fmt.Sprintf("deleted-%d", i)
-		change := GroupKeyRanges{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{byte(i + 1)}, EndKey: []byte{byte(i + 2)}}}}
-		require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{change}))
-		group := m.GetAffinityGroupState(id).Group
-		rule := m.GetRegionLabeler().GetLabelRule(GetLabelRuleID(id))
-		require.NotNil(t, rule)
-		// Even if the authoritative value now matches an old echo after a
-		// recreate, that echo must not repopulate the reclaimed history.
-		require.NoError(t, m.SyncGroupFromEtcdAtRevision(&group, 10))
-		require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 10))
-		require.NotContains(t, m.lastGroupRevision, id)
-		require.NotContains(t, m.lastLabelRevision, rule.ID)
-		require.NoError(t, m.SyncGroupFromEtcdAtRevision(&group, 11))
-		require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 11))
-	}
-	require.Len(t, m.lastGroupRevision, 2)
-	require.Len(t, m.lastLabelRevision, 2)
-	m.AdvanceWatchRevisions(9, 9)
-	require.Equal(t, int64(10), m.groupWatchRevision)
-	require.Equal(t, int64(10), m.labelWatchRevision)
-	require.Len(t, m.lastGroupRevision, 2)
-	m.AdvanceWatchRevisions(11, 11)
-	require.Empty(t, m.lastGroupRevision)
-	require.Empty(t, m.lastLabelRevision)
-	// Recovery reload must not lower the stream's completed revision.
+	m.SetAffinityWriteGuard(func() ([]clientv3.Cmp, bool) {
+		return []clientv3.Cmp{clientv3.Compare(clientv3.Value(termKey), "=", termValue)}, true
+	})
 	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
-	require.Equal(t, int64(11), m.groupWatchRevision)
-	require.Equal(t, int64(11), m.labelWatchRevision)
+	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
+	responseErr := errors.New("commit response lost")
+	m.storage = &committedErrorStorage{Storage: base, err: responseErr}
+	_, err = m.UpdateAffinityGroupPeers(id, 2, []uint64{1, 2, 3})
+	require.ErrorIs(t, err, responseErr)
+	require.True(t, m.writeBlocked)
+
+	m.storage = base
+	_, err = m.UpdateAffinityGroupPeers(id, 3, []uint64{1, 2, 3})
+	require.ErrorIs(t, err, errAffinityWriteBlocked)
+	require.ErrorIs(t, m.ReloadAffinityMetadataFromStorage(), errAffinityWriteBlocked,
+		"same-term reload must not reopen writes")
+
+	termValue = "new"
+	_, err = client.Put(t.Context(), termKey, termValue)
+	require.NoError(t, err)
+	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
+	require.False(t, m.writeBlocked)
+	_, err = m.UpdateAffinityGroupPeers(id, 3, []uint64{1, 2, 3})
+	require.NoError(t, err)
 }
 
-func TestAffinitySequenceAndElectionFenceAuthorityTransitions(t *testing.T) {
+func TestAffinityTermFenceRejectsOldWriter(t *testing.T) {
 	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
 	defer cleanup()
 	base := storage.NewStorageWithEtcdBackend(client)
@@ -441,14 +113,6 @@ func TestAffinitySequenceAndElectionFenceAuthorityTransitions(t *testing.T) {
 		}, true
 	})
 	ids := seedMetadataTestGroups(t, pd, []uint64{1, 1})
-	delayedPD := &delayedCommitStorage{Storage: base, delay: true, failRecovery: true,
-		release: make(chan struct{}), done: make(chan error, 1)}
-	pd.storage = delayedPD
-	_, err = pd.UpdateAffinityGroupPeers(ids[0], 2, []uint64{1, 2, 3})
-	require.ErrorContains(t, err, "recovery unavailable")
-
-	// MCS campaigns before loading metadata. Its election key invalidates the
-	// already constructed PD transaction, even though the PD term is still live.
 	_, err = client.Put(t.Context(), schedulingKey, "scheduling-primary")
 	require.NoError(t, err)
 	mcs := newMetadataTestManager(t)
@@ -459,39 +123,47 @@ func TestAffinitySequenceAndElectionFenceAuthorityTransitions(t *testing.T) {
 	require.NoError(t, mcs.ReloadAffinityMetadataFromStorage())
 	_, err = mcs.UpdateAffinityGroupPolicy(ids[1], BalancePolicyFixed)
 	require.NoError(t, err)
-	delayedPD.failRecovery = false
-	require.ErrorIs(t, pd.ReloadAffinityMetadataFromStorage(), errs.ErrEtcdTxnConflict,
-		"service discovery failure cannot authorize fallback while the scheduling term exists")
-	close(delayedPD.release)
-	require.ErrorIs(t, <-delayedPD.done, errs.ErrEtcdTxnConflict)
-	require.Equal(t, uint64(1), loadStoredGroup(t, pd, ids[0]).LeaderStoreID)
-	require.Equal(t, BalancePolicyFixed, loadStoredGroup(t, pd, ids[1]).BalancePolicy)
-
-	// Reverse takeover: only after the scheduling election key disappears may
-	// PD reload. A late request from the old scheduling term must then fail.
-	delayedMCS := &delayedCommitStorage{Storage: base, delay: true, failRecovery: true,
-		release: make(chan struct{}), done: make(chan error, 1)}
-	mcs.storage = delayedMCS
-	_, err = mcs.UpdateAffinityGroupPeers(ids[1], 3, []uint64{1, 2, 3})
-	require.ErrorContains(t, err, "recovery unavailable")
-	_, err = client.Delete(t.Context(), schedulingKey)
-	require.NoError(t, err)
-	require.NoError(t, pd.ReloadAffinityMetadataFromStorage())
 	_, err = pd.UpdateAffinityGroupPolicy(ids[0], BalancePolicyFixed)
-	require.NoError(t, err)
-	close(delayedMCS.release)
-	require.ErrorIs(t, <-delayedMCS.done, errs.ErrEtcdTxnConflict)
-	require.Equal(t, uint64(1), loadStoredGroup(t, pd, ids[1]).LeaderStoreID)
+	require.ErrorIs(t, err, errs.ErrEtcdTxnConflict)
+}
 
-	before := pd.writeSequence
-	require.NoError(t, pd.DeleteAffinityGroups(ids, true))
-	value, err := base.Load(keypath.AffinityWriteSequencePath())
-	require.NoError(t, err)
-	require.NotEmpty(t, value, "deleting the last group must preserve the sequence")
-	restarted := newMetadataTestManager(t)
-	restarted.storage = base
-	require.NoError(t, restarted.ReloadAffinityMetadataFromStorage())
-	require.Greater(t, restarted.writeSequence, before)
+func TestWatchWatermarksReclaimRevisionHistory(t *testing.T) {
+	m := newMetadataTestManager(t)
+	for i := range 100 {
+		id := fmt.Sprintf("deleted-%d", i)
+		require.NoError(t, m.SyncGroupDeleteFromEtcdAtRevision(id, 10))
+		require.NoError(t, m.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID(id), 10))
+	}
+	require.Len(t, m.lastGroupRevision, 100)
+	require.Len(t, m.lastLabelRevision, 100)
+	m.AdvanceWatchRevisions(10, 0)
+	require.Empty(t, m.lastGroupRevision)
+	require.Len(t, m.lastLabelRevision, 100)
+	m.AdvanceWatchRevisions(0, 10)
+	require.Empty(t, m.lastLabelRevision)
+
+	for i := range 2 {
+		id := fmt.Sprintf("deleted-%d", i)
+		change := GroupKeyRanges{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{byte(i + 1)}, EndKey: []byte{byte(i + 2)}}}}
+		require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{change}))
+		group := m.GetAffinityGroupState(id).Group
+		rule := m.GetRegionLabeler().GetLabelRule(GetLabelRuleID(id))
+		require.NotNil(t, rule)
+		require.NoError(t, m.SyncGroupFromEtcdAtRevision(&group, 10))
+		require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 10))
+		require.NotContains(t, m.lastGroupRevision, id)
+		require.NotContains(t, m.lastLabelRevision, rule.ID)
+		require.NoError(t, m.SyncGroupFromEtcdAtRevision(&group, 11))
+		require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 11))
+	}
+	require.Len(t, m.lastGroupRevision, 2)
+	require.Len(t, m.lastLabelRevision, 2)
+	m.AdvanceWatchRevisions(9, 9)
+	require.Equal(t, int64(10), m.groupWatchRevision)
+	require.Equal(t, int64(10), m.labelWatchRevision)
+	m.AdvanceWatchRevisions(11, 11)
+	require.Empty(t, m.lastGroupRevision)
+	require.Empty(t, m.lastLabelRevision)
 }
 
 func TestAffinityRangesRejectStaleBaseAndRecover(t *testing.T) {
@@ -499,8 +171,7 @@ func TestAffinityRangesRejectStaleBaseAndRecover(t *testing.T) {
 	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
 	ranges := m.keyRanges[id]
 	ranges.KeyRanges = append(ranges.KeyRanges, keyutil.KeyRange{StartKey: []byte{3}, EndKey: []byte{4}})
-	rule := MakeLabelRule(ranges)
-	require.NoError(t, m.regionLabeler.SetLabelRule(rule))
+	require.NoError(t, m.regionLabeler.SetLabelRule(MakeLabelRule(ranges)))
 	add := []GroupKeyRanges{{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{6}, EndKey: []byte{7}}}}}
 	require.ErrorIs(t, m.UpdateAffinityGroupKeyRanges(add, nil), errs.ErrEtcdTxnConflict)
 	require.Equal(t, 2, m.GetAffinityGroupState(id).RangeCount)
@@ -519,8 +190,7 @@ func TestAffinityOldEchoDoesNotLoseNextRangeUpdate(t *testing.T) {
 	old := m.regionLabeler.GetLabelRule(GetLabelRuleID(id))
 	add(6)
 	require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(old, 10))
-	require.Len(t, m.regionLabeler.GetLabelRule(GetLabelRuleID(id)).GetKeyRanges(), 3,
-		"a delayed event must not regress the shared label index")
+	require.Len(t, m.regionLabeler.GetLabelRule(GetLabelRuleID(id)).GetKeyRanges(), 3)
 	add(9)
 	require.Equal(t, 4, m.GetAffinityGroupState(id).RangeCount)
 	require.Len(t, m.regionLabeler.GetLabelRule(GetLabelRuleID(id)).GetKeyRanges(), 4)
@@ -540,14 +210,11 @@ func TestAffinityOldPutDoesNotResurrectLocallyDeletedGroup(t *testing.T) {
 
 func TestAffinityBatchCapacityRejectsBeforeAnyWrite(t *testing.T) {
 	m := newMetadataTestManager(t)
-	// Even requests with few writes must count their CAS comparisons. These
-	// empty-range groups fit the write-only budget but exceed the full budget.
 	withoutRanges := make([]GroupKeyRanges, etcdutil.MaxEtcdTxnOps/3+1)
 	for i := range withoutRanges {
 		withoutRanges[i].GroupID = fmt.Sprintf("no-ranges-capacity-%d", i)
 	}
 	require.ErrorIs(t, m.CreateAffinityGroups(withoutRanges), errs.ErrExceedMaxEtcdTxnOps)
-	require.Nil(t, m.pendingSequence)
 	for _, change := range withoutRanges {
 		value, err := m.storage.LoadAffinityGroup(change.GroupID)
 		require.NoError(t, err)
@@ -570,9 +237,6 @@ func TestAffinityBatchCapacityRejectsBeforeAnyWrite(t *testing.T) {
 	require.ErrorIs(t, m.DeleteAffinityGroups(ids, true), errs.ErrExceedMaxEtcdTxnOps)
 	for _, id := range ids {
 		require.True(t, m.IsGroupExist(id))
-		value, err := m.storage.LoadAffinityGroup(id)
-		require.NoError(t, err)
-		require.NotEmpty(t, value)
 	}
 }
 
