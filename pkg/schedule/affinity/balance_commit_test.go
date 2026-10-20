@@ -316,6 +316,12 @@ func TestBalanceCommitRejectsChangedRangeLabel(t *testing.T) {
 	require.False(t, committed)
 	require.NoError(t, err)
 	require.Equal(t, 1, manager.GetAffinityGroupState(id).RangeCount)
+	require.Equal(t, []keyutil.KeyRange{{StartKey: []byte{0}, EndKey: []byte{1}}}, manager.keyRanges[id].KeyRanges)
+	value, err := base.LoadRegionRule(rule.ID)
+	require.NoError(t, err)
+	remoteRule, err := labeler.NewLabelRuleFromJSON([]byte(value))
+	require.NoError(t, err)
+	require.NoError(t, manager.SyncKeyRangesFromEtcd(remoteRule))
 	require.Equal(t, []keyutil.KeyRange{{StartKey: []byte{9}, EndKey: []byte{10}}}, manager.keyRanges[id].KeyRanges)
 }
 
