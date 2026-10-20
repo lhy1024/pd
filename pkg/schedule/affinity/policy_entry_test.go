@@ -127,8 +127,9 @@ func TestUpdateAffinityGroupPolicyRejectsStaleNoop(t *testing.T) {
 			_, err = manager.UpdateAffinityGroupPolicy(groupID, policy)
 			require.ErrorIs(t, err, errs.ErrEtcdTxnConflict)
 			require.Equal(t, remote, loadStoredGroup(t, manager, groupID))
-			require.Equal(t, remote.BalancePolicy, manager.GetAffinityGroupState(groupID).BalancePolicy,
-				"the shared conflict path refreshes the stale cache")
+			require.Equal(t, policy, manager.GetAffinityGroupState(groupID).BalancePolicy,
+				"deterministic conflicts wait for the normal watcher")
+			require.NoError(t, manager.SyncGroupFromEtcdAtRevision(&remote, 0))
 
 			updated, err := manager.UpdateAffinityGroupPolicy(groupID, policy)
 			require.NoError(t, err)

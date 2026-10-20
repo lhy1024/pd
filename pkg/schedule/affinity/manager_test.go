@@ -239,48 +239,6 @@ func TestSyncGroupFromEtcdUpdatesBalancePolicy(t *testing.T) {
 	re.Equal(BalancePolicyAuto, manager.GetAffinityGroupState("policy").BalancePolicy)
 }
 
-func TestAffinityWatcherRevisionRejectsStaleRangeEcho(t *testing.T) {
-	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	store := storage.NewStorageWithMemoryBackend()
-	storeInfos := core.NewStoresInfo()
-	storeInfos.PutStore(core.NewStoreInfo(&metapb.Store{Id: 1, Address: "test1"}))
-	conf := mockconfig.NewTestOptions()
-	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
-	re.NoError(err)
-	manager, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
-	re.NoError(err)
-	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "revision"}}))
-
-	state := manager.GetAffinityGroupState("revision")
-	re.NoError(manager.SyncGroupFromEtcdAtRevision(&state.Group, 1))
-	makeRule := func(count int) *labeler.LabelRule {
-		ranges := make([]keyutil.KeyRange, count)
-		for i := range ranges {
-			ranges[i] = keyutil.KeyRange{StartKey: []byte{byte(i)}, EndKey: []byte{byte(i + 1)}}
-		}
-		rule := MakeLabelRule(GroupKeyRanges{GroupID: "revision", KeyRanges: ranges})
-		return rule
-	}
-	rule := makeRule(1)
-	re.NoError(regionLabeler.SetLabelRule(rule))
-	re.NoError(manager.SyncKeyRangesFromEtcdAtRevision(rule, 10))
-	rule = makeRule(3)
-	re.NoError(regionLabeler.SetLabelRule(rule))
-	re.NoError(manager.SyncKeyRangesFromEtcdAtRevision(rule, 12))
-	rule = makeRule(2)
-	re.NoError(regionLabeler.SetLabelRule(rule))
-	re.NoError(manager.SyncKeyRangesFromEtcdAtRevision(rule, 11))
-	re.Equal(3, manager.GetAffinityGroupState("revision").RangeCount)
-	re.NoError(regionLabeler.DeleteLabelRule(GetLabelRuleID("revision")))
-	re.NoError(manager.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID("revision"), 11))
-	re.Equal(3, manager.GetAffinityGroupState("revision").RangeCount)
-	re.NoError(manager.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID("revision"), 13))
-	re.Equal(0, manager.GetAffinityGroupState("revision").RangeCount)
-}
-
 // TestRegionCountStaleCache documents that RegionCount counts stale cache entries when group changes.
 func TestRegionCountStaleCache(t *testing.T) {
 	re := require.New(t)

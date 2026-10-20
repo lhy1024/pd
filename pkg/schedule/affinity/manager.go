@@ -17,7 +17,6 @@ package affinity
 import (
 	"context"
 	"encoding/json"
-	"maps"
 	"slices"
 	"strings"
 
@@ -83,13 +82,6 @@ type Manager struct {
 	// The following members are protected by metaMutex only, not protected by RWMutex.
 	// keyRanges cached in memory to reduce labeler lock contention
 	keyRanges map[string]GroupKeyRanges // {group_id} -> key ranges
-	// last...Revision rejects delayed watcher echoes after a local publish or a
-	// newer event. A zero revision means an in-process compatibility caller.
-	lastGroupRevision map[string]int64
-	lastLabelRevision map[string]int64
-	// Completed watch batches replace per-key history with a stream watermark.
-	groupWatchRevision int64
-	labelWatchRevision int64
 	// labelRuleBuffer is a buffer used during etcd synchronization.
 	// When synchronizing via etcd, LabelRule information may arrive earlier than group information.
 	labelRuleBuffer map[string]*labeler.LabelRule // {group_id} -> labelRule
@@ -113,8 +105,6 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 		metadataTables:      make(map[string]*metadataTableState),
 		keyRanges:           make(map[string]GroupKeyRanges),
 		labelRuleBuffer:     make(map[string]*labeler.LabelRule),
-		lastGroupRevision:   make(map[string]int64),
-		lastLabelRevision:   make(map[string]int64),
 	}
 	if err := m.initialize(); err != nil {
 		return nil, err
@@ -478,44 +468,26 @@ func (m *Manager) GetAllAffinityGroupStates() []*GroupState {
 
 // SyncGroupFromEtcd synchronizes a group from etcd to the in-memory state.
 func (m *Manager) SyncGroupFromEtcd(group *Group) {
-	if err := m.applyGroupFromEtcd(group, 0); err != nil {
+	if err := m.applyGroupFromEtcd(group); err != nil {
 		log.Error("failed to sync affinity group from etcd", zap.Error(err))
 	}
 }
 
-// AdvanceWatchRevisions records fully applied batches from the group and label
-// watches. Callers must finish every event in a batch (or a full snapshot) before
-// advancing either stream. Zero leaves that stream unchanged. Watermarks reject
-// old echoes after the corresponding per-key revision history is reclaimed.
-func (m *Manager) AdvanceWatchRevisions(groupRevision, labelRevision int64) {
+// SyncGroupFromEtcdAtRevision applies a watcher event. LoopWatcher already
+// serializes events and consistent reloads; the revision argument is retained
+// for compatibility with older callers.
+func (m *Manager) SyncGroupFromEtcdAtRevision(group *Group, _ int64) error {
+	return m.applyGroupFromEtcd(group)
+}
+
+func (m *Manager) applyGroupFromEtcd(group *Group) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	if groupRevision > m.groupWatchRevision {
-		m.groupWatchRevision = groupRevision
-		maps.DeleteFunc(m.lastGroupRevision, func(_ string, revision int64) bool { return revision <= groupRevision })
-	}
-	if labelRevision > m.labelWatchRevision {
-		m.labelWatchRevision = labelRevision
-		maps.DeleteFunc(m.lastLabelRevision, func(_ string, revision int64) bool { return revision <= labelRevision })
-	}
+	return m.syncGroupFromEtcdLocked(group)
 }
 
-// SyncGroupFromEtcdAtRevision applies an ordered watcher event.
-func (m *Manager) SyncGroupFromEtcdAtRevision(group *Group, revision int64) error {
-	return m.applyGroupFromEtcd(group, revision)
-}
-
-func (m *Manager) applyGroupFromEtcd(group *Group, revision int64) error {
-	m.metaMutex.Lock()
-	defer m.metaMutex.Unlock()
-	return m.syncGroupFromEtcdLocked(group, revision)
-}
-
-func (m *Manager) syncGroupFromEtcdLocked(group *Group, revision int64) error {
+func (m *Manager) syncGroupFromEtcdLocked(group *Group) error {
 	if group == nil {
-		return nil
-	}
-	if revision > 0 && (revision <= m.groupWatchRevision || revision <= m.lastGroupRevision[group.ID]) {
 		return nil
 	}
 	if err := validateBalancePolicy(group.BalancePolicy); err != nil {
@@ -528,29 +500,6 @@ func (m *Manager) syncGroupFromEtcdLocked(group *Group, revision int64) error {
 	copy := *group
 	copy.VoterStoreIDs = normalizeVoters(group.VoterStoreIDs)
 	group = &copy
-	if revision > 0 {
-		// Local writes publish memory before their watch echoes arrive. Check
-		// even absent groups: an old put must not resurrect a locally deleted
-		// group before its delete echo arrives.
-		persisted, err := m.storage.LoadAffinityGroup(group.ID)
-		if err != nil {
-			return err
-		}
-		if persisted == "" {
-			return nil
-		}
-		var current Group
-		if err := json.Unmarshal([]byte(persisted), &current); err != nil ||
-			current.ID != group.ID || current.CreateTimestamp != group.CreateTimestamp ||
-			current.LeaderStoreID != group.LeaderStoreID ||
-			!slices.Equal(normalizeVoters(current.VoterStoreIDs), group.VoterStoreIDs) ||
-			current.BalancePolicy != group.BalancePolicy {
-			return nil
-		}
-	}
-	if revision > 0 {
-		m.lastGroupRevision[group.ID] = revision
-	}
 
 	// Fast path: avoid taking write lock if nothing changes.
 	m.RLock()
@@ -719,8 +668,6 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 	m.affinityRegionCount = 0
 	m.keyRanges = make(map[string]GroupKeyRanges)
 	m.labelRuleBuffer = make(map[string]*labeler.LabelRule)
-	m.lastGroupRevision = make(map[string]int64)
-	m.lastLabelRevision = make(map[string]int64)
 	for i := range loaded {
 		m.initGroupLocked(&loaded[i])
 	}
@@ -729,42 +676,25 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 
 // SyncGroupDeleteFromEtcd synchronizes a group deletion from etcd.
 func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) {
-	if err := m.applyGroupDeleteFromEtcd(groupID, 0); err != nil {
+	if err := m.applyGroupDeleteFromEtcd(groupID); err != nil {
 		log.Error("failed to sync affinity group deletion from etcd",
 			zap.String("group-id", groupID), zap.Error(err))
 	}
 }
 
-// SyncGroupDeleteFromEtcdAtRevision applies an ordered watcher deletion.
-func (m *Manager) SyncGroupDeleteFromEtcdAtRevision(groupID string, revision int64) error {
-	return m.applyGroupDeleteFromEtcd(groupID, revision)
+// SyncGroupDeleteFromEtcdAtRevision applies a watcher deletion. The revision
+// argument is retained for compatibility with older callers.
+func (m *Manager) SyncGroupDeleteFromEtcdAtRevision(groupID string, _ int64) error {
+	return m.applyGroupDeleteFromEtcd(groupID)
 }
 
-func (m *Manager) applyGroupDeleteFromEtcd(groupID string, revision int64) error {
+func (m *Manager) applyGroupDeleteFromEtcd(groupID string) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	return m.syncGroupDeleteFromEtcdLocked(groupID, revision)
+	return m.syncGroupDeleteFromEtcdLocked(groupID)
 }
 
-func (m *Manager) syncGroupDeleteFromEtcdLocked(groupID string, revision int64) error {
-	if revision > 0 && (revision <= m.groupWatchRevision || revision <= m.lastGroupRevision[groupID]) {
-		return nil
-	}
-	if revision > 0 {
-		// A delayed delete must not remove a group that has already been
-		// recreated or rewritten by a local API request.
-		persisted, err := m.storage.LoadAffinityGroup(groupID)
-		if err != nil {
-			return err
-		}
-		if persisted != "" {
-			return nil
-		}
-	}
-	if revision > 0 {
-		m.lastGroupRevision[groupID] = revision
-	}
-
+func (m *Manager) syncGroupDeleteFromEtcdLocked(groupID string) error {
 	delete(m.keyRanges, groupID)
 	delete(m.labelRuleBuffer, groupID)
 
@@ -781,29 +711,26 @@ func (m *Manager) syncGroupDeleteFromEtcdLocked(groupID string, revision int64) 
 
 // SyncKeyRangesFromEtcd synchronizes key ranges from a label rule.
 func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
-	return m.applyKeyRangesFromEtcd(labelRule, 0)
+	return m.applyKeyRangesFromEtcd(labelRule)
 }
 
-// SyncKeyRangesFromEtcdAtRevision applies an ordered watcher event.
-func (m *Manager) SyncKeyRangesFromEtcdAtRevision(labelRule *labeler.LabelRule, revision int64) error {
-	return m.applyKeyRangesFromEtcd(labelRule, revision)
+// SyncKeyRangesFromEtcdAtRevision applies a watcher event. The revision
+// argument is retained for compatibility with older callers.
+func (m *Manager) SyncKeyRangesFromEtcdAtRevision(labelRule *labeler.LabelRule, _ int64) error {
+	return m.applyKeyRangesFromEtcd(labelRule)
 }
 
-func (m *Manager) applyKeyRangesFromEtcd(labelRule *labeler.LabelRule, revision int64) error {
+func (m *Manager) applyKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	return m.syncKeyRangesFromEtcdLocked(labelRule, revision)
+	return m.syncKeyRangesFromEtcdLocked(labelRule)
 }
 
-func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule, revision int64) error {
+func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule) error {
 	groupID, isAffinity := parseAffinityGroupIDFromLabelRule(labelRule)
 	if !isAffinity {
 		return nil
 	}
-	if revision > 0 && (revision <= m.labelWatchRevision || revision <= m.lastLabelRevision[labelRule.ID]) {
-		return nil
-	}
-
 	// Extract key ranges from label rule
 	gkr, err := extractKeyRangesFromLabelRule(labelRule)
 	if err != nil {
@@ -811,19 +738,6 @@ func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule, revi
 			zap.String("rule-id", labelRule.ID),
 			zap.Error(err))
 		return err
-	}
-	if revision > 0 {
-		current, err := m.loadAffinityLabelFromStorage(labelRule.ID)
-		if err != nil {
-			return err
-		}
-		if !affinityLabelEqual(current, labelRule) {
-			return nil
-		}
-	}
-
-	if revision > 0 {
-		m.lastLabelRevision[labelRule.ID] = revision
 	}
 	m.regionLabeler.ApplyLabelRule(labelRule.ID, labelRule)
 	m.Lock()
@@ -856,56 +770,32 @@ func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule, revi
 	return nil
 }
 
-func affinityLabelEqual(a, b *labeler.LabelRule) bool {
-	if a == nil || b == nil || a.ID != b.ID || a.RuleType != b.RuleType {
-		return false
-	}
-	ar, aerr := extractKeyRangesFromLabelRule(a)
-	br, berr := extractKeyRangesFromLabelRule(b)
-	return aerr == nil && berr == nil && affinityRangesEqual(ar, br)
-}
-
 // SyncKeyRangesDeleteFromEtcd synchronizes key ranges deletion.
 func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) {
-	if err := m.applyKeyRangesDeleteFromEtcd(ruleID, 0); err != nil {
+	if err := m.applyKeyRangesDeleteFromEtcd(ruleID); err != nil {
 		log.Error("failed to sync affinity key range deletion from etcd",
 			zap.String("rule-id", ruleID), zap.Error(err))
 	}
 }
 
-// SyncKeyRangesDeleteFromEtcdAtRevision applies an ordered watcher deletion.
-func (m *Manager) SyncKeyRangesDeleteFromEtcdAtRevision(ruleID string, revision int64) error {
-	return m.applyKeyRangesDeleteFromEtcd(ruleID, revision)
+// SyncKeyRangesDeleteFromEtcdAtRevision applies a watcher deletion. The
+// revision argument is retained for compatibility with older callers.
+func (m *Manager) SyncKeyRangesDeleteFromEtcdAtRevision(ruleID string, _ int64) error {
+	return m.applyKeyRangesDeleteFromEtcd(ruleID)
 }
 
-func (m *Manager) applyKeyRangesDeleteFromEtcd(ruleID string, revision int64) error {
+func (m *Manager) applyKeyRangesDeleteFromEtcd(ruleID string) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	return m.syncKeyRangesDeleteFromEtcdLocked(ruleID, revision)
+	return m.syncKeyRangesDeleteFromEtcdLocked(ruleID)
 }
 
-func (m *Manager) syncKeyRangesDeleteFromEtcdLocked(ruleID string, revision int64) error {
+func (m *Manager) syncKeyRangesDeleteFromEtcdLocked(ruleID string) error {
 	groupID := strings.TrimPrefix(ruleID, LabelRuleIDPrefix)
 	if groupID == "" || groupID == ruleID {
 		return nil
 	}
-	if revision > 0 && (revision <= m.labelWatchRevision || revision <= m.lastLabelRevision[ruleID]) {
-		return nil
-	}
-	if revision > 0 {
-		current, err := m.loadAffinityLabelFromStorage(ruleID)
-		if err != nil {
-			return err
-		}
-		if current != nil {
-			return nil
-		}
-	}
-
 	// Clear keyRanges cache (needs metaMutex)
-	if revision > 0 {
-		m.lastLabelRevision[ruleID] = revision
-	}
 	m.regionLabeler.ApplyLabelRule(ruleID, nil)
 
 	delete(m.keyRanges, groupID)
@@ -918,18 +808,4 @@ func (m *Manager) syncKeyRangesDeleteFromEtcdLocked(ruleID string, revision int6
 		m.updateGroupLabelRuleLocked(groupID, nil, true)
 	}
 	return nil
-}
-
-// The scheduling RegionLabeler uses a memory cache; affinity writes use the
-// authoritative backend owned by the Manager.
-func (m *Manager) loadAffinityLabelFromStorage(id string) (*labeler.LabelRule, error) {
-	reader, ok := m.storage.(interface{ LoadRegionRule(string) (string, error) })
-	if !ok {
-		return m.regionLabeler.LoadRegionRuleFromStorage(id)
-	}
-	value, err := reader.LoadRegionRule(id)
-	if err != nil || value == "" {
-		return nil, err
-	}
-	return labeler.NewLabelRuleFromJSON([]byte(value))
 }

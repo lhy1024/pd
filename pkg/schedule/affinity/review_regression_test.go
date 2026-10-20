@@ -117,45 +117,6 @@ func TestAffinityTermFenceRejectsOldWriter(t *testing.T) {
 	require.ErrorIs(t, err, errs.ErrEtcdTxnConflict)
 }
 
-func TestWatchWatermarksReclaimRevisionHistory(t *testing.T) {
-	m := newMetadataTestManager(t)
-	for i := range 100 {
-		id := fmt.Sprintf("deleted-%d", i)
-		require.NoError(t, m.SyncGroupDeleteFromEtcdAtRevision(id, 10))
-		require.NoError(t, m.SyncKeyRangesDeleteFromEtcdAtRevision(GetLabelRuleID(id), 10))
-	}
-	require.Len(t, m.lastGroupRevision, 100)
-	require.Len(t, m.lastLabelRevision, 100)
-	m.AdvanceWatchRevisions(10, 0)
-	require.Empty(t, m.lastGroupRevision)
-	require.Len(t, m.lastLabelRevision, 100)
-	m.AdvanceWatchRevisions(0, 10)
-	require.Empty(t, m.lastLabelRevision)
-
-	for i := range 2 {
-		id := fmt.Sprintf("deleted-%d", i)
-		change := GroupKeyRanges{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{byte(i + 1)}, EndKey: []byte{byte(i + 2)}}}}
-		require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{change}))
-		group := m.GetAffinityGroupState(id).Group
-		rule := m.GetRegionLabeler().GetLabelRule(GetLabelRuleID(id))
-		require.NotNil(t, rule)
-		require.NoError(t, m.SyncGroupFromEtcdAtRevision(&group, 10))
-		require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 10))
-		require.NotContains(t, m.lastGroupRevision, id)
-		require.NotContains(t, m.lastLabelRevision, rule.ID)
-		require.NoError(t, m.SyncGroupFromEtcdAtRevision(&group, 11))
-		require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 11))
-	}
-	require.Len(t, m.lastGroupRevision, 2)
-	require.Len(t, m.lastLabelRevision, 2)
-	m.AdvanceWatchRevisions(9, 9)
-	require.Equal(t, int64(10), m.groupWatchRevision)
-	require.Equal(t, int64(10), m.labelWatchRevision)
-	m.AdvanceWatchRevisions(11, 11)
-	require.Empty(t, m.lastGroupRevision)
-	require.Empty(t, m.lastLabelRevision)
-}
-
 func TestAffinityRangesRejectStaleBaseAndRecover(t *testing.T) {
 	m := newMetadataTestManager(t)
 	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
@@ -164,38 +125,12 @@ func TestAffinityRangesRejectStaleBaseAndRecover(t *testing.T) {
 	require.NoError(t, m.regionLabeler.SetLabelRule(MakeLabelRule(ranges)))
 	add := []GroupKeyRanges{{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{6}, EndKey: []byte{7}}}}}
 	require.ErrorIs(t, m.UpdateAffinityGroupKeyRanges(add, nil), errs.ErrEtcdTxnConflict)
-	require.Equal(t, 2, m.GetAffinityGroupState(id).RangeCount)
+	// A deterministic CAS conflict does not trigger a full metadata reload.
+	// The normal watcher applies the winning label before the caller retries.
+	require.Equal(t, 1, m.GetAffinityGroupState(id).RangeCount)
+	require.NoError(t, m.SyncKeyRangesFromEtcd(m.regionLabeler.GetLabelRule(GetLabelRuleID(id))))
 	require.NoError(t, m.UpdateAffinityGroupKeyRanges(add, nil))
 	require.Equal(t, 3, m.GetAffinityGroupState(id).RangeCount)
-}
-
-func TestAffinityOldEchoDoesNotLoseNextRangeUpdate(t *testing.T) {
-	m := newMetadataTestManager(t)
-	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
-	add := func(start byte) {
-		require.NoError(t, m.UpdateAffinityGroupKeyRanges([]GroupKeyRanges{{GroupID: id,
-			KeyRanges: []keyutil.KeyRange{{StartKey: []byte{start}, EndKey: []byte{start + 1}}}}}, nil))
-	}
-	add(3)
-	old := m.regionLabeler.GetLabelRule(GetLabelRuleID(id))
-	add(6)
-	require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(old, 10))
-	require.Len(t, m.regionLabeler.GetLabelRule(GetLabelRuleID(id)).GetKeyRanges(), 3)
-	add(9)
-	require.Equal(t, 4, m.GetAffinityGroupState(id).RangeCount)
-	require.Len(t, m.regionLabeler.GetLabelRule(GetLabelRuleID(id)).GetKeyRanges(), 4)
-}
-
-func TestAffinityOldPutDoesNotResurrectLocallyDeletedGroup(t *testing.T) {
-	m := newMetadataTestManager(t)
-	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
-	old := m.GetAffinityGroupState(id).Group
-	rule := m.regionLabeler.GetLabelRule(GetLabelRuleID(id))
-	require.NoError(t, m.DeleteAffinityGroups([]string{id}, true))
-	require.NoError(t, m.SyncGroupFromEtcdAtRevision(&old, 10))
-	require.NoError(t, m.SyncKeyRangesFromEtcdAtRevision(rule, 10))
-	require.False(t, m.IsGroupExist(id))
-	require.Empty(t, m.labelRuleBuffer)
 }
 
 func TestAffinityBatchCapacityRejectsBeforeAnyWrite(t *testing.T) {

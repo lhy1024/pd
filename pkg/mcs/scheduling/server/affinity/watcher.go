@@ -57,17 +57,15 @@ type Watcher struct {
 }
 
 type groupSyncEvent struct {
-	group    *affinity.Group
-	id       string
-	revision int64
-	deleted  bool
+	group   *affinity.Group
+	id      string
+	deleted bool
 }
 
 type labelSyncEvent struct {
-	rule     *labeler.LabelRule
-	id       string
-	revision int64
-	deleted  bool
+	rule    *labeler.LabelRule
+	id      string
+	deleted bool
 }
 
 // NewWatcher creates a new watcher to watch the affinity changes from PD.
@@ -113,7 +111,7 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 			log.Warn("failed to unmarshal affinity group", zap.String("key", string(kv.Key)), zap.Error(err))
 			return err
 		}
-		w.groupPending = append(w.groupPending, groupSyncEvent{group: group, revision: kv.ModRevision})
+		w.groupPending = append(w.groupPending, groupSyncEvent{group: group})
 		return nil
 	}
 
@@ -121,26 +119,23 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 		key := string(kv.Key)
 		log.Info("delete affinity group", zap.String("key", key))
 		groupID := strings.TrimPrefix(key, keypath.AffinityGroupsPrefix())
-		w.groupPending = append(w.groupPending, groupSyncEvent{id: groupID, revision: kv.ModRevision, deleted: true})
+		w.groupPending = append(w.groupPending, groupSyncEvent{id: groupID, deleted: true})
 		return nil
 	}
 	applyPending := func() error {
 		pending := w.groupPending
 		w.groupPending = nil
-		var revision int64
 		for _, event := range pending {
 			if event.deleted {
-				if err := w.affinityManager.SyncGroupDeleteFromEtcdAtRevision(event.id, event.revision); err != nil {
+				if err := w.affinityManager.SyncGroupDeleteFromEtcdAtRevision(event.id, 0); err != nil {
 					return err
 				}
 			} else {
-				if err := w.affinityManager.SyncGroupFromEtcdAtRevision(event.group, event.revision); err != nil {
+				if err := w.affinityManager.SyncGroupFromEtcdAtRevision(event.group, 0); err != nil {
 					return err
 				}
 			}
-			revision = max(revision, event.revision)
 		}
-		w.affinityManager.AdvanceWatchRevisions(revision, 0)
 		return nil
 	}
 
@@ -155,7 +150,6 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 		true, /* withPrefix */
 	)
 	w.groupWatcher.SetReconcileDeletedKeys()
-	w.groupWatcher.SetReconcileDeletedKeyRevision()
 	w.groupWatcher.SetInitialLoadedKeys(initialKeys)
 	w.groupWatcher.SetConsistentLoad()
 	w.groupWatcher.SetAtomicLoadCallbacks()
@@ -184,7 +178,7 @@ func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
 			log.Warn("failed to unmarshal affinity label rule", zap.String("key", key), zap.Error(err))
 			return err
 		}
-		w.labelPending = append(w.labelPending, labelSyncEvent{rule: rule, revision: kv.ModRevision})
+		w.labelPending = append(w.labelPending, labelSyncEvent{rule: rule})
 		return nil
 	}
 
@@ -192,24 +186,21 @@ func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
 		key := string(kv.Key)
 		log.Info("delete affinity label rule", zap.String("key", key))
 		ruleID := strings.TrimPrefix(key, keypath.RegionLabelPathPrefix())
-		w.labelPending = append(w.labelPending, labelSyncEvent{id: ruleID, revision: kv.ModRevision, deleted: true})
+		w.labelPending = append(w.labelPending, labelSyncEvent{id: ruleID, deleted: true})
 		return nil
 	}
 	applyPending := func() error {
 		pending := w.labelPending
 		w.labelPending = nil
-		var revision int64
 		for _, event := range pending {
 			if event.deleted {
-				if err := w.affinityManager.SyncKeyRangesDeleteFromEtcdAtRevision(event.id, event.revision); err != nil {
+				if err := w.affinityManager.SyncKeyRangesDeleteFromEtcdAtRevision(event.id, 0); err != nil {
 					return err
 				}
-			} else if err := w.affinityManager.SyncKeyRangesFromEtcdAtRevision(event.rule, event.revision); err != nil {
+			} else if err := w.affinityManager.SyncKeyRangesFromEtcd(event.rule); err != nil {
 				return err
 			}
-			revision = max(revision, event.revision)
 		}
-		w.affinityManager.AdvanceWatchRevisions(0, revision)
 		return nil
 	}
 
@@ -226,7 +217,6 @@ func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
 	w.labelWatcher.SetConsistentLoad()
 	w.labelWatcher.SetAtomicLoadCallbacks()
 	w.labelWatcher.SetReconcileDeletedKeys()
-	w.labelWatcher.SetReconcileDeletedKeyRevision()
 	w.labelWatcher.SetInitialLoadedKeys(initialKeys)
 	w.labelWatcher.StartWatchLoop()
 	return w.labelWatcher.WaitLoad()
