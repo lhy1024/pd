@@ -74,14 +74,10 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 		return nil
 	}
 	// A failed compare is a definitive rejection: the transaction did not
-	// commit. Refresh the local view once before returning the conflict. This
-	// path deliberately omits the caller's primary condition because a stale
-	// cache is exactly what a deterministic CAS conflict reports; the read is
-	// not an authorization to write.
+	// commit. Match the other PD metadata writers and return the conflict
+	// directly. The watcher will apply the winning value; a full reload here
+	// would add a second read path and scan unrelated affinity metadata.
 	if errs.ErrEtcdTxnConflict.Equal(err) {
-		if reloadErr := m.reloadAffinityMetadataUnconditionallyLocked(ctx); reloadErr != nil {
-			return fmt.Errorf("%w (authoritative reload failed: %v)", err, reloadErr)
-		}
 		return err
 	}
 	// Callback failures cannot have committed. A submission error after writes
