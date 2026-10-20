@@ -97,6 +97,8 @@ func affinityConflict() error { return errs.ErrEtcdTxnConflict.FastGenByArgs() }
 // commitGroupTarget is the metadata boundary for conditional target changes.
 // The caller supplies its input-validity check; Manager owns serialization,
 // revision CAS, primary fencing, blocked-term admission and publication.
+//
+//nolint:unused // consumed by the planner integration in this branch.
 func (m *Manager) commitGroupTarget(ctx context.Context, original, target Group, ranges GroupKeyRanges, conditions []clientv3.Cmp, current func() bool) (bool, error) {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
