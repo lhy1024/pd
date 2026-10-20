@@ -115,8 +115,10 @@ func (m *Manager) GetBalanceSnapshot(groupID string) *BalanceSnapshot {
 	return result
 }
 
-// ObserveBalanceRegion invalidates searches on topology, health and scheduling
-// changes. Approximate size is read directly while validating a candidate.
+// ObserveBalanceRegion invalidates an unfinished search when the region
+// heartbeat changes its topology or affinity membership. The regular cache
+// path handles new RegionInfo objects; this fast path also covers callers that
+// inspect a region before refreshing the cache.
 func (m *Manager) ObserveBalanceRegion(region *core.RegionInfo) {
 	m.RLock()
 	_, observed := m.regions[region.GetID()]
@@ -132,26 +134,15 @@ func (m *Manager) ObserveBalanceRegion(region *core.RegionInfo) {
 			return
 		}
 	}
-	scheduleDenied := m.regionLabeler.ScheduleDisabled(region)
 	m.Lock()
 	defer m.Unlock()
 	if cached, ok := m.regions[region.GetID()]; ok {
-		if balanceRegionChanged(cached.balanceInput(), region) || cached.balanceScheduleDenied != scheduleDenied {
+		if balanceRegionChanged(cached.region, region) {
 			m.invalidateMetadataLocked(cached.groupInfo.ID)
-			cached.balanceRegion, cached.balanceScheduleDenied = region, scheduleDenied
-			m.regions[region.GetID()] = cached
-			cached.groupInfo.Regions[region.GetID()] = cached
 		}
 	} else if _, ok := m.groups[groupID]; ok {
 		m.invalidateMetadataLocked(groupID)
 	}
-}
-
-func (cache regionCache) balanceInput() *core.RegionInfo {
-	if cache.balanceRegion != nil {
-		return cache.balanceRegion
-	}
-	return cache.region
 }
 
 func balanceRegionChanged(a, b *core.RegionInfo) bool {

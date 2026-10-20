@@ -143,7 +143,7 @@ func TestObserveBalanceRegionVersionTracksRelevantChanges(t *testing.T) {
 			manager.GetBalanceSnapshot(ids[0])
 			before, ok := manager.GetBalanceVersion(ids[0])
 			require.True(t, ok)
-			region := manager.regions[1].balanceInput()
+			region := manager.regions[1].region
 
 			manager.ObserveBalanceRegion(tc.change(region))
 

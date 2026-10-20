@@ -47,12 +47,10 @@ const (
 )
 
 type regionCache struct {
-	region                *core.RegionInfo
-	balanceRegion         *core.RegionInfo
-	groupInfo             *runtimeGroupInfo
-	affinityVer           uint64
-	isAffinity            bool
-	balanceScheduleDenied bool
+	region      *core.RegionInfo
+	groupInfo   *runtimeGroupInfo
+	affinityVer uint64
+	isAffinity  bool
 }
 
 // Manager is the manager of all affinity information.
@@ -351,17 +349,15 @@ func (m *Manager) deleteCacheLocked(regionID uint64) {
 
 func (m *Manager) saveCache(cache *regionCache) {
 	regionID := cache.region.GetID()
-	cache.balanceScheduleDenied = m.regionLabeler.ScheduleDisabled(cache.region)
 	m.Lock()
 	defer m.Unlock()
 	// If the Group has changed, update it but do not save it afterward.
 	groupInfo, ok := m.groups[cache.groupInfo.ID]
 	if ok && groupInfo == cache.groupInfo && groupInfo.AffinityVer == cache.affinityVer {
 		old, exists := m.regions[regionID]
-		if !exists || balanceRegionChanged(old.balanceInput(), cache.region) {
+		if !exists || balanceRegionChanged(old.region, cache.region) {
 			m.invalidateMetadataLocked(groupInfo.ID)
 		}
-		cache.balanceRegion = cache.region
 		m.deleteCacheLocked(regionID)
 		m.regions[regionID] = *cache
 		groupInfo.Regions[regionID] = *cache
