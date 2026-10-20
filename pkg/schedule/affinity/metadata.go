@@ -17,6 +17,7 @@ package affinity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"strings"
 
@@ -26,6 +27,14 @@ import (
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 )
+
+var errAffinityWriteBlocked = errors.New("affinity manager is blocked until a new primary term reloads metadata")
+
+// IsAffinityWriteBlocked reports that an ambiguous metadata write has paused
+// this manager until a new primary term reloads authoritative state.
+func IsAffinityWriteBlocked(err error) bool {
+	return errors.Is(err, errAffinityWriteBlocked)
+}
 
 // metadataTableState is shared management state, independent of any planner.
 type metadataTableState struct {
@@ -87,11 +96,11 @@ func affinityConflict() error { return errs.ErrEtcdTxnConflict.FastGenByArgs() }
 
 // commitGroupTarget is the metadata boundary for conditional target changes.
 // The caller supplies its input-validity check; Manager owns serialization,
-// revision CAS, primary fencing, recovery and publication.
+// revision CAS, primary fencing, blocked-term admission and publication.
 func (m *Manager) commitGroupTarget(ctx context.Context, original, target Group, ranges GroupKeyRanges, conditions []clientv3.Cmp, current func() bool) (bool, error) {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	if err := m.recoverWritesLocked(ctx); err != nil {
+	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
 		return false, err
 	}
 	if !current() {

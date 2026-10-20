@@ -157,13 +157,13 @@ func (m *Manager) startAvailabilityCheckLoop() {
 
 // checkGroupsAvailability checks the condition of stores and invalidates groups with unavailable stores.
 func (m *Manager) checkGroupsAvailability() {
-	// Recover even when the very first create never reached etcd. The existing
-	// loop supplies bounded retry cadence without another recovery worker.
+	// A blocked Manager stays blocked until a new primary reloads it. The loop
+	// must not issue another affinity write while that admission gate is set.
 	m.metaMutex.Lock()
-	err := m.recoverWritesLocked(m.ctx)
+	err := m.ensureAffinityWritesReadyLocked()
 	m.metaMutex.Unlock()
 	if err != nil {
-		log.Warn("failed to recover affinity metadata", zap.Error(err))
+		log.Warn("affinity metadata writes are blocked", zap.Error(err))
 		return
 	}
 	if !m.IsAvailable() {

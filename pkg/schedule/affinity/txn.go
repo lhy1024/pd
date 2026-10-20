@@ -68,8 +68,8 @@ func (m *Manager) captureAffinityWriteConditions() ([]clientv3.Cmp, error) {
 	return slices.Clone(conditions), nil
 }
 
-// runAffinityTxn also serves recovery; it deliberately bypasses mutation
-// tracking so settling an unknown result cannot recursively create pending work.
+// runAffinityTxn is also used by takeover reload and deliberately bypasses
+// mutation tracking because a reload must not create a second write admission.
 func (m *Manager) runAffinityTxn(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
 	if len(conditions) == 0 {
 		return m.storage.RunInTxn(ctx, f)
@@ -181,7 +181,7 @@ func (m *Manager) CreateAffinityGroups(changes []GroupKeyRanges) error {
 }
 
 // CreateAffinityGroupsIfNotExists adds multiple affinity groups, skipping those that already exist.
-// Only groups still absent after write recovery require valid, nonempty ranges.
+// Only groups still absent after the admission gate require valid, nonempty ranges.
 func (m *Manager) CreateAffinityGroupsIfNotExists(changes []GroupKeyRanges) error {
 	return m.createGroupsWithSkipExisting(changes, true)
 }
@@ -210,7 +210,7 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
-	if err := m.recoverWritesLocked(m.ctx); err != nil {
+	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
 		return err
 	}
 	filteredGroups := groups
@@ -230,7 +230,7 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 		if len(filteredGroups) == 0 {
 			return nil
 		}
-		// The API must preserve each request until recovery decides whether it
+		// The API must preserve each request until the Manager decides whether it
 		// still exists. Validate only the groups that will actually be created.
 		for _, change := range filteredChanges {
 			if len(change.KeyRanges) == 0 {
@@ -357,7 +357,7 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
-	if err := m.recoverWritesLocked(m.ctx); err != nil {
+	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
 		return err
 	}
 	// Step 1: Check if group has key ranges when force is false
@@ -469,7 +469,7 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
-	if err := m.recoverWritesLocked(m.ctx); err != nil {
+	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
 		return nil, err
 	}
 	group := m.GetAffinityGroupState(groupID)
@@ -533,7 +533,7 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	// Step 1: Check whether the Group exists and validate.
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	if err := m.recoverWritesLocked(m.ctx); err != nil {
+	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
 		return nil, err
 	}
 	group := m.GetAffinityGroupState(groupID)
@@ -647,7 +647,7 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
-	if err := m.recoverWritesLocked(m.ctx); err != nil {
+	if err := m.ensureAffinityWritesReadyLocked(); err != nil {
 		return err
 	}
 	// Step 1: Validate the added KeyRanges.
