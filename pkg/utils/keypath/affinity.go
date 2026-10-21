@@ -21,12 +21,6 @@ import (
 // AffinityLabelPrefix identifies label rules owned by the affinity Manager.
 const AffinityLabelPrefix = "affinity_group/"
 
-// AffinityWriteSequencePath is the cluster-wide affinity write fence. It must
-// never be deleted, including when the last affinity group is removed.
-func AffinityWriteSequencePath() string {
-	return fmt.Sprintf("/pd/%d/affinity_write_sequence", ClusterID())
-}
-
 // AffinityGroupPath returns the path to save a specific affinity group object.
 // Its format is: "/pd/{cluster_id}/affinity_groups/{group_id}"
 func AffinityGroupPath(groupID string) string {
