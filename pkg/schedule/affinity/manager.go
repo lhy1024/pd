@@ -665,9 +665,9 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 	if err != nil {
 		return err
 	}
-// No persistence here: the transaction checks the captured authority, not
-// the revisions of the separately loaded prefixes. Ordinary label rules
-// keep their independent watcher/API path.
+	// No persistence here: the transaction checks the captured authority, not
+	// the revisions of the separately loaded prefixes. Ordinary label rules
+	// keep their independent watcher/API path.
 	plan.Apply()
 
 	m.Lock()
