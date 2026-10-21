@@ -274,13 +274,13 @@ func (s *Service) RegisterAffinityRouter() {
 	redirector := multiservicesapi.ServiceRedirector()
 	router := s.root.Group("affinity-groups")
 	router.Use(redirector)
-	router.POST("", postAffinityGroups)
-	router.PATCH("", batchModifyAffinityGroups)
+	router.POST("", affinityHandler.PostAffinityGroups)
+	router.PATCH("", affinityHandler.BatchModifyAffinityGroups)
 	router.GET("", getAllAffinityGroups)
 	router.GET("/:group_id", getAffinityGroup)
 	router.PATCH("/:group_id/policy", updateAffinityGroupPolicy)
-	router.PUT("/:group_id", updateAffinityGroupPeers)
-	router.DELETE("/:group_id", deleteAffinityGroup)
+	router.PUT("/:group_id", affinityHandler.UpdateAffinityGroupPeers)
+	router.DELETE("/:group_id", affinityHandler.DeleteAffinityGroup)
 }
 
 // getHealth returns the health status of the TSO service.
@@ -1727,22 +1727,6 @@ func getAffinityGroup(c *gin.Context) {
 }
 
 var affinityHandler = handler.AffinityHandler{GetManager: getAffinityManager}
-
-func postAffinityGroups(c *gin.Context) {
-	affinityHandler.PostAffinityGroups(c)
-}
-
-func batchModifyAffinityGroups(c *gin.Context) {
-	affinityHandler.BatchModifyAffinityGroups(c)
-}
-
-func updateAffinityGroupPeers(c *gin.Context) {
-	affinityHandler.UpdateAffinityGroupPeers(c)
-}
-
-func deleteAffinityGroup(c *gin.Context) {
-	affinityHandler.DeleteAffinityGroup(c)
-}
 
 // @Tags     affinity-groups
 // @Summary  Update the balance policy of an affinity group.

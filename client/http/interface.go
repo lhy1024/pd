@@ -1311,18 +1311,11 @@ func (c *client) GetAffinityGroups(ctx context.Context, groupIDs []string) (map[
 		return c.GetAllAffinityGroups(ctx)
 	}
 
-	var query strings.Builder
-	for i, id := range groupIDs {
-		if i > 0 {
-			query.WriteByte('&')
-		}
-		query.WriteString("ids=")
-		query.WriteString(url.QueryEscape(id))
-	}
+	query := url.Values{"ids": groupIDs}
 	var resp AffinityGroupsResponse
 	err := c.request(ctx, newRequestInfo().
 		WithName("GetAffinityGroups").
-		WithURI(fmt.Sprintf("%s?%s", AffinityGroups, query.String())).
+		WithURI(AffinityGroups+"?"+query.Encode()).
 		WithMethod(http.MethodGet).
 		WithResp(&resp))
 	if err != nil {
