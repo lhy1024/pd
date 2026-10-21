@@ -443,9 +443,6 @@ type LoopWatcher struct {
 	// reconcileDeletedKeys indicates whether a full load should delete keys that
 	// existed in the previous successfully applied state but not in the snapshot.
 	reconcileDeletedKeys bool
-	// reconcileDeleteRevision preserves the consistent snapshot revision on
-	// synthetic delete callbacks. Legacy watchers keep zero as before.
-	reconcileDeleteRevision bool
 	// loadedKeys tracks successfully applied keys only when reconcileDeletedKeys is enabled.
 	loadedKeys map[string]struct{}
 }
@@ -916,7 +913,7 @@ func (lw *LoopWatcher) load(ctx context.Context) (nextRevision int64, err error)
 			// Note: if there are no keys in etcd, the resp.More is false. It also means the load is finished.
 			if !resp.More {
 				if callbackErr == nil {
-					reconciledDeletedKeys, callbackErr = lw.reconcileLoadedKeys(snapshotKeys, snapshotRevision)
+					reconciledDeletedKeys, callbackErr = lw.reconcileLoadedKeys(snapshotKeys)
 				}
 				loadCompleted = true
 				return snapshotRevision + 1, callbackErr
@@ -954,7 +951,7 @@ func (lw *LoopWatcher) load(ctx context.Context) (nextRevision int64, err error)
 	}
 }
 
-func (lw *LoopWatcher) reconcileLoadedKeys(snapshotKeys map[string]struct{}, revision int64) ([]string, error) {
+func (lw *LoopWatcher) reconcileLoadedKeys(snapshotKeys map[string]struct{}) ([]string, error) {
 	if !lw.reconcileDeletedKeys {
 		return nil, nil
 	}
@@ -965,9 +962,6 @@ func (lw *LoopWatcher) reconcileLoadedKeys(snapshotKeys map[string]struct{}, rev
 			continue
 		}
 		kv := &mvccpb.KeyValue{Key: []byte(key)}
-		if lw.reconcileDeleteRevision {
-			kv.ModRevision = revision
-		}
 		if err := lw.deleteFn(kv); err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -1117,12 +1111,6 @@ func (lw *LoopWatcher) SetReconcileDeletedKeys() {
 	lw.reconcileDeletedKeys = true
 	lw.loadedKeys = make(map[string]struct{})
 	lw.reloadOnCompaction = true
-}
-
-// SetReconcileDeletedKeyRevision preserves the consistent snapshot revision
-// on synthetic delete callbacks produced by deletion reconciliation.
-func (lw *LoopWatcher) SetReconcileDeletedKeyRevision() {
-	lw.reconcileDeleteRevision = true
 }
 
 // SetInitialLoadedKeys seeds the deletion reconciliation state with keys that
