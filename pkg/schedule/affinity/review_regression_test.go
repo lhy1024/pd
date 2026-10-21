@@ -38,7 +38,9 @@ import (
 // return the ambiguous error; the next request may retry explicitly.
 type committedErrorStorage struct {
 	storage.Storage
-	err error
+	err       error
+	reloadErr error
+	calls     int
 }
 
 func (s *committedErrorStorage) RunInTxn(ctx context.Context, f func(kv.Txn) error) error {
@@ -46,6 +48,10 @@ func (s *committedErrorStorage) RunInTxn(ctx context.Context, f func(kv.Txn) err
 }
 
 func (s *committedErrorStorage) RunInTxnWithConditions(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
+	s.calls++
+	if s.calls == 2 && s.reloadErr != nil {
+		return s.reloadErr
+	}
 	var err error
 	if len(conditions) == 0 {
 		err = s.Storage.RunInTxn(ctx, f)
@@ -58,6 +64,34 @@ func (s *committedErrorStorage) RunInTxnWithConditions(ctx context.Context, cond
 	err = s.err
 	s.err = nil
 	return err
+}
+
+func TestUnknownWriteReloadFailureRecoversOnExplicitRetry(t *testing.T) {
+	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
+	defer cleanup()
+	base := storage.NewStorageWithEtcdBackend(client)
+	m := newMetadataTestManager(t)
+	m.storage = base
+	termKey := "/test/affinity-primary-term-reload-failure"
+	termValue := "old"
+	_, err := client.Put(t.Context(), termKey, termValue)
+	require.NoError(t, err)
+	m.SetAffinityWriteGuard(func() ([]clientv3.Cmp, bool) {
+		return []clientv3.Cmp{clientv3.Compare(clientv3.Value(termKey), "=", termValue)}, true
+	})
+	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
+	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
+	responseErr := errors.New("commit response lost")
+	reloadErr := errors.New("authoritative read failed")
+	m.storage = &committedErrorStorage{Storage: base, err: responseErr, reloadErr: reloadErr}
+	_, err = m.UpdateAffinityGroupPeers(id, 2, []uint64{1, 2, 3})
+	require.ErrorIs(t, err, responseErr)
+	// The commit did happen, but the first authoritative reload also failed.
+	// Switching storage back is the only recovery step before an explicit retry.
+	m.storage = base
+	_, err = m.UpdateAffinityGroupPeers(id, 3, []uint64{1, 2, 3})
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), m.GetAffinityGroupState(id).LeaderStoreID)
 }
 
 func TestUnknownWriteReloadsAndAllowsExplicitRetry(t *testing.T) {
@@ -131,6 +165,23 @@ func TestAffinityRangesRejectStaleBaseAndRecover(t *testing.T) {
 	require.NoError(t, m.SyncKeyRangesFromEtcd(m.regionLabeler.GetLabelRule(GetLabelRuleID(id))))
 	require.NoError(t, m.UpdateAffinityGroupKeyRanges(add, nil))
 	require.Equal(t, 3, m.GetAffinityGroupState(id).RangeCount)
+}
+
+func TestAffinityRangeWatcherIgnoresDelayedPut(t *testing.T) {
+	m := newMetadataTestManager(t)
+	ids := seedMetadataTestGroups(t, m, []uint64{1, 1})
+	old := m.regionLabeler.GetLabelRule(GetLabelRuleID(ids[0]))
+	require.NotNil(t, old)
+	add := []GroupKeyRanges{{GroupID: ids[0], KeyRanges: []keyutil.KeyRange{{StartKey: []byte{4}, EndKey: []byte{5}}}}}
+	require.NoError(t, m.UpdateAffinityGroupKeyRanges(add, nil))
+	require.Equal(t, 2, m.GetAffinityGroupState(ids[0]).RangeCount)
+	// A delayed watcher event still carries the old value. It must not replace
+	// the range view used by the next cross-group overlap check.
+	require.NoError(t, m.SyncKeyRangesFromEtcdEvent(old))
+	require.Equal(t, 2, m.GetAffinityGroupState(ids[0]).RangeCount)
+	conflicting := []GroupKeyRanges{{GroupID: ids[1], KeyRanges: []keyutil.KeyRange{{StartKey: []byte{4}, EndKey: []byte{5}}}}}
+	require.Error(t, m.UpdateAffinityGroupKeyRanges(conflicting, nil))
+	require.Equal(t, 1, m.GetAffinityGroupState(ids[1]).RangeCount)
 }
 
 func TestAffinityBatchCapacityRejectsBeforeAnyWrite(t *testing.T) {

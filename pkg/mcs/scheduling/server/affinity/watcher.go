@@ -194,10 +194,10 @@ func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
 		w.labelPending = nil
 		for _, event := range pending {
 			if event.deleted {
-				if err := w.affinityManager.SyncKeyRangesDeleteFromEtcd(event.id); err != nil {
+				if err := w.affinityManager.SyncKeyRangesDeleteFromEtcdEvent(event.id); err != nil {
 					return err
 				}
-			} else if err := w.affinityManager.SyncKeyRangesFromEtcd(event.rule); err != nil {
+			} else if err := w.affinityManager.SyncKeyRangesFromEtcdEvent(event.rule); err != nil {
 				return err
 			}
 		}

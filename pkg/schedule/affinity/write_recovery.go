@@ -78,6 +78,12 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 	// directly. The watcher will apply the winning value; a full reload here
 	// would add a second read path and scan unrelated affinity metadata.
 	if errs.ErrEtcdTxnConflict.Equal(err) {
+		m.RLock()
+		noWatcher := m.affinityWriteTerm == nil
+		m.RUnlock()
+		if noWatcher {
+			m.metadataNeedsReload = true
+		}
 		return err
 	}
 	// Callback failures cannot have committed. A submission error after writes
@@ -87,6 +93,15 @@ func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []cl
 		return err
 	}
 	if reloadErr := m.reloadAffinityMetadataUnconditionallyLocked(ctx); reloadErr != nil {
+		m.RLock()
+		noWatcher := m.affinityWriteTerm == nil
+		m.RUnlock()
+		if noWatcher {
+			// The durable write may have committed, but the one reconciliation
+			// read also failed. Make the next explicit request refresh the
+			// authoritative baseline before constructing its CAS conditions.
+			m.metadataNeedsReload = true
+		}
 		return fmt.Errorf("%w (authoritative reload failed: %v)", err, reloadErr)
 	}
 	return err
