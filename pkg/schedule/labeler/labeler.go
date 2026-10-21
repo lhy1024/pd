@@ -141,17 +141,6 @@ func (l *RegionLabeler) loadRules() error {
 	return nil
 }
 
-// LoadRegionRuleFromStorage reads one region label rule from the authoritative
-// backend. It is used by affinity watchers to reject a delayed event after a
-// local write has already published a newer value.
-func (l *RegionLabeler) LoadRegionRuleFromStorage(id string) (*LabelRule, error) {
-	value, err := l.storage.LoadRegionRule(id)
-	if err != nil || value == "" {
-		return nil, err
-	}
-	return NewLabelRuleFromJSON([]byte(value))
-}
-
 // BuildRangeListLocked publishes pending derived rule-index updates.
 // Deprecated: Unlock publishes them automatically.
 func (l *RegionLabeler) BuildRangeListLocked() {
@@ -300,7 +289,7 @@ func (l *RegionLabeler) SetLabelRuleLocked(rule *LabelRule) error {
 
 // ApplyLabelRule publishes an already validated, persisted rule without a
 // storage write. A nil rule removes the ID. Affinity Manager serializes this
-// publication with its API writes and rejects stale watcher revisions.
+// publication with its API writes.
 func (l *RegionLabeler) ApplyLabelRule(id string, rule *LabelRule) {
 	l.Lock()
 	defer l.Unlock()

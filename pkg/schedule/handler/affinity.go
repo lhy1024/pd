@@ -41,14 +41,6 @@ type AffinityKeyRange struct {
 	EndKey   []byte `json:"end_key"`
 }
 
-// toKeyutilKeyRange converts AffinityKeyRange to keyutil.KeyRange.
-func (r AffinityKeyRange) toKeyutilKeyRange() keyutil.KeyRange {
-	return keyutil.KeyRange{
-		StartKey: r.StartKey,
-		EndKey:   r.EndKey,
-	}
-}
-
 // CreateAffinityGroupInput defines the input for a single group in the creation request.
 type CreateAffinityGroupInput struct {
 	Ranges []AffinityKeyRange `json:"ranges"`
@@ -160,7 +152,7 @@ func (h AffinityHandler) createAffinityGroups(c *gin.Context) {
 					return
 				}
 			}
-			keyRanges = append(keyRanges, kr.toKeyutilKeyRange())
+			keyRanges = append(keyRanges, keyutil.KeyRange{StartKey: kr.StartKey, EndKey: kr.EndKey})
 		}
 
 		groups = append(groups, affinity.GroupKeyRanges{
@@ -200,8 +192,6 @@ func (h AffinityHandler) deleteAffinityGroups(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var err error
-
 	req := &BatchDeleteAffinityGroupsRequest{}
 	if err := c.BindJSON(req); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause().Error())
@@ -224,7 +214,7 @@ func (h AffinityHandler) deleteAffinityGroups(c *gin.Context) {
 	// Semantics are enforced in manager:
 	// - force=false: missing IDs will cause an error
 	// - force=true: missing IDs are ignored while existing groups are deleted
-	err = manager.DeleteAffinityGroups(req.IDs, req.Force)
+	err := manager.DeleteAffinityGroups(req.IDs, req.Force)
 	if handleAffinityError(c, err) {
 		return
 	}
@@ -240,8 +230,6 @@ func (h AffinityHandler) BatchModifyAffinityGroups(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var err error
-
 	req := &BatchModifyAffinityGroupsRequest{}
 	if err := c.BindJSON(req); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrBindJSON.Wrap(err).GenWithStackByCause().Error())
@@ -303,8 +291,6 @@ func (h AffinityHandler) UpdateAffinityGroupPeers(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var err error
-
 	groupID := c.Param("group_id")
 	req := &UpdateAffinityGroupPeersRequest{}
 	if err := c.BindJSON(req); err != nil {
@@ -336,8 +322,6 @@ func (h AffinityHandler) UpdateAffinityGroupPolicy(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var err error
-
 	groupID := c.Param("group_id")
 	req := &UpdateAffinityGroupPolicyRequest{}
 	if err := c.BindJSON(req); err != nil {
@@ -357,8 +341,6 @@ func (h AffinityHandler) DeleteAffinityGroup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var err error
-
 	groupID := c.Param("group_id")
 	if err := affinity.ValidateGroupID(groupID); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
@@ -376,12 +358,10 @@ func (h AffinityHandler) DeleteAffinityGroup(c *gin.Context) {
 	force := queryParams.Force
 
 	// Delete the affinity group from manager
-	err = manager.DeleteAffinityGroups([]string{groupID}, force)
+	err := manager.DeleteAffinityGroups([]string{groupID}, force)
 	if handleAffinityError(c, err) {
 		return
 	}
-
-	// Note: Label deletion is now handled inside the DeleteAffinityGroup method
 
 	c.JSON(http.StatusOK, "Affinity group deleted successfully.")
 }
@@ -420,8 +400,6 @@ func (h AffinityHandler) GetAffinityGroup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var err error
-
 	groupID := c.Param("group_id")
 	groupState, err := manager.CheckAndGetAffinityGroupState(groupID)
 	if handleAffinityError(c, err) {

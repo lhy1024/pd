@@ -607,8 +607,8 @@ func (m *Manager) ReloadAffinityMetadataFromStorage() error {
 	return m.reloadAffinityMetadataWithConditions(m.ctx, conditions)
 }
 
-// reloadAffinityMetadataLocked publishes only after an authority check proves
-// that all group/range reads belong to one unchanged affinity view.
+// reloadAffinityMetadataLocked checks the captured authority before publishing
+// the loaded group/range metadata.
 func (m *Manager) reloadAffinityMetadataLocked(ctx context.Context) error {
 	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
@@ -618,10 +618,9 @@ func (m *Manager) reloadAffinityMetadataLocked(ctx context.Context) error {
 }
 
 // reloadAffinityMetadataUnconditionallyLocked refreshes the local metadata
-// after a deterministic CAS conflict. The failed write has not committed, so
-// this read does not authorize a write and must not be rejected merely because
-// the caller's primary term is stale. The reload still uses the native read
-// revisions collected by the transaction to publish one coherent snapshot.
+// after an ambiguous write. This read does not authorize a write and is not
+// rejected merely because the caller's primary term is stale. The group and
+// label prefixes are loaded separately, without a cross-prefix revision fence.
 func (m *Manager) reloadAffinityMetadataUnconditionallyLocked(ctx context.Context) error {
 	return m.reloadAffinityMetadataWithConditions(ctx, nil)
 }
@@ -666,8 +665,9 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 	if err != nil {
 		return err
 	}
-	// No persistence here: the readonly transaction above guards the staged
-	// snapshot. Ordinary label rules keep their independent watcher/API path.
+// No persistence here: the transaction checks the captured authority, not
+// the revisions of the separately loaded prefixes. Ordinary label rules
+// keep their independent watcher/API path.
 	plan.Apply()
 
 	m.Lock()
