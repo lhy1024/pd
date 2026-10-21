@@ -50,6 +50,14 @@ type BalanceSnapshot struct {
 	conditions         []clientv3.Cmp
 }
 
+// BalanceGlobalCounts is a batch-level view used only to order candidates.
+// It may be slightly stale after an earlier table in the same batch commits;
+// the table snapshot and final CAS still provide the correctness checks.
+type BalanceGlobalCounts struct {
+	Leader map[uint64]int
+	Voter  map[uint64]int
+}
+
 func (m *Manager) balanceVersionLocked(state *metadataTableState) BalanceVersion {
 	var rules uint64
 	if m.balanceRuleRevision != nil {
@@ -70,19 +78,17 @@ func (m *Manager) GetBalanceVersion(groupID string) (BalanceVersion, bool) {
 	return m.balanceVersionLocked(state), true
 }
 
-// GetBalanceSnapshot copies only this table and the incremental global counts.
-// It performs no placement checks and starts no background work.
-func (m *Manager) GetBalanceSnapshot(groupID string) *BalanceSnapshot {
-	stores, fingerprint := m.loadBalanceStoreSnapshot()
+// GetBalanceGlobalCounts computes the global candidate counts once for a
+// planner batch. The maps are independent copies owned by the caller.
+func (m *Manager) GetBalanceGlobalCounts() BalanceGlobalCounts {
 	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
 	m.Lock()
-	m.updateBalanceStoreFingerprintLocked(fingerprint)
-	state := m.metadataTables[TableGroupPrefix(groupID)]
-	if state == nil {
-		m.Unlock()
-		m.metaMutex.Unlock()
-		return nil
-	}
+	defer m.Unlock()
+	return m.balanceGlobalCountsLocked()
+}
+
+func (m *Manager) balanceGlobalCountsLocked() BalanceGlobalCounts {
 	leaderCounts := make(map[uint64]int)
 	voterCounts := make(map[uint64]int)
 	for _, group := range m.groups {
@@ -93,11 +99,35 @@ func (m *Manager) GetBalanceSnapshot(groupID string) *BalanceSnapshot {
 			voterCounts[storeID]++
 		}
 	}
+	return BalanceGlobalCounts{Leader: leaderCounts, Voter: voterCounts}
+}
+
+// GetBalanceSnapshot copies only this table and the supplied batch counts.
+// It performs no placement checks and starts no background work.
+func (m *Manager) GetBalanceSnapshot(groupID string) *BalanceSnapshot {
+	return m.GetBalanceSnapshotWithCounts(groupID, BalanceGlobalCounts{})
+}
+
+// GetBalanceSnapshotWithCounts is the batch-aware form used by the planner.
+func (m *Manager) GetBalanceSnapshotWithCounts(groupID string, counts BalanceGlobalCounts) *BalanceSnapshot {
+	stores, fingerprint := m.loadBalanceStoreSnapshot()
+	m.metaMutex.Lock()
+	m.Lock()
+	m.updateBalanceStoreFingerprintLocked(fingerprint)
+	state := m.metadataTables[TableGroupPrefix(groupID)]
+	if state == nil {
+		m.Unlock()
+		m.metaMutex.Unlock()
+		return nil
+	}
+	if counts.Leader == nil || counts.Voter == nil {
+		counts = m.balanceGlobalCountsLocked()
+	}
 	result := &BalanceSnapshot{
 		TableID: TableGroupPrefix(groupID), Version: m.balanceVersionLocked(state),
 		Groups: make([]*GroupState, 0, len(state.groups)), Ranges: make(map[string]GroupKeyRanges, len(state.groups)),
 		Stores:             balanceCandidateStores(stores),
-		GlobalLeaderCounts: leaderCounts, GlobalVoterCounts: voterCounts,
+		GlobalLeaderCounts: counts.Leader, GlobalVoterCounts: counts.Voter,
 	}
 	for id := range state.groups {
 		if group := m.groups[id]; group != nil {

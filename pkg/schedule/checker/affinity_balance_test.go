@@ -441,7 +441,7 @@ func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {
 	for _, id := range ids {
 		require.NotContains(t, manager.GetAffinityGroupState(id).VoterStoreIDs, uint64(4))
 	}
-	balancer := &affinityBalancer{checker: checker, tables: map[string]*affinityBalanceTask{"_tidb_pt_100": {}}, wake: make(chan struct{}, 1)}
+	balancer := &affinityBalancer{checker: checker, tables: map[string]*affinityBalanceTask{"_tidb_pt_100": {}}}
 	balancer.enqueue(ids[0])
 	require.True(t, balancer.tables["_tidb_pt_100"].dirty, "periodic retry should mark a completed table dirty")
 
@@ -450,6 +450,29 @@ func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {
 	require.True(t, balancer.tables["_tidb_pt_100"].dirty, "repeated enqueue should remain one dirty marker")
 	balancer.processDirty(t.Context())
 	require.Contains(t, manager.GetAffinityGroupState(ids[0]).VoterStoreIDs, uint64(4))
+}
+
+func TestAffinityBalanceDefersDirtyDuringBatch(t *testing.T) {
+	tc, checker := newAffinityBalanceTestCluster(t, 3)
+	manager := tc.GetAffinityManager()
+	ids := []string{"_tidb_pt_100_p1", "_tidb_pt_100_p2", "_tidb_pt_100_p3"}
+	keys := []string{"a", "b", "c", "d"}
+	for i, id := range ids {
+		createBalanceGroup(t, manager, id, keys[i], keys[i+1], 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
+		addBalanceRegion(t, tc, manager, uint64(i+1), keys[i], keys[i+1], 1, 1, 2, 3)
+	}
+	queued := false
+	checker.cluster = &affinityBalanceScanCluster{CheckerCluster: tc, beforeScan: func() {
+		if !queued {
+			queued = true
+			checker.balancer.enqueue(ids[0])
+		}
+	}}
+	checker.balancer.enqueue(ids[0])
+	checker.balancer.processDirty(t.Context())
+	// A heartbeat during this search is retained for the next periodic batch;
+	// processDirty must not immediately consume it in the same call.
+	require.True(t, checker.balancer.tables["_tidb_pt_100"].dirty)
 }
 
 func TestAffinityBalanceCancellationRestartsFromFreshSnapshot(t *testing.T) {
