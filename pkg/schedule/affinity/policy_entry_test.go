@@ -36,13 +36,13 @@ func TestBalancePolicyValidationBoundaries(t *testing.T) {
 	} {
 		group := &Group{ID: tc.id, BalancePolicy: tc.policy}
 		require.NoError(t, manager.AdjustGroup(group))
-		manager.SyncGroupFromEtcd(group)
+		require.NoError(t, manager.SyncGroupFromEtcd(group))
 		require.NotNil(t, manager.GetAffinityGroupState(group.ID))
 	}
 
 	invalid := &Group{ID: "invalid-policy", BalancePolicy: BalancePolicy("manual")}
 	require.ErrorIs(t, manager.AdjustGroup(invalid), errs.ErrAffinityGroupContent)
-	manager.SyncGroupFromEtcd(invalid)
+	require.NoError(t, manager.SyncGroupFromEtcd(invalid))
 	require.Nil(t, manager.GetAffinityGroupState(invalid.ID))
 }
 
@@ -129,7 +129,7 @@ func TestUpdateAffinityGroupPolicyRejectsStaleNoop(t *testing.T) {
 			require.Equal(t, remote, loadStoredGroup(t, manager, groupID))
 			require.Equal(t, policy, manager.GetAffinityGroupState(groupID).BalancePolicy,
 				"deterministic conflicts wait for the normal watcher")
-			require.NoError(t, manager.SyncGroupFromEtcdAtRevision(&remote, 0))
+			require.NoError(t, manager.SyncGroupFromEtcd(&remote))
 
 			updated, err := manager.UpdateAffinityGroupPolicy(groupID, policy)
 			require.NoError(t, err)
