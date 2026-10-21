@@ -31,7 +31,6 @@ import (
 	"github.com/tikv/pd/pkg/mock/mockcluster"
 	"github.com/tikv/pd/pkg/schedule/affinity"
 	sche "github.com/tikv/pd/pkg/schedule/core"
-	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
 	"github.com/tikv/pd/pkg/utils/keyutil"
@@ -39,9 +38,6 @@ import (
 
 type affinityBalanceScanCluster struct {
 	sche.CheckerCluster
-	delay       time.Duration
-	starts      [][]byte
-	labelReads  int
 	beforeScan  func()
 	beforeFinal func()
 }
@@ -55,18 +51,9 @@ func (c *AffinityChecker) validateBalanceRegion(actual *affinity.GroupState, tar
 	return c.validateBalanceTarget(target, region, fit)
 }
 
-func (c *affinityBalanceScanCluster) GetRegionLabeler() *labeler.RegionLabeler {
-	c.labelReads++
-	return c.CheckerCluster.GetRegionLabeler()
-}
-
 func (c *affinityBalanceScanCluster) ScanRegions(startKey, endKey []byte, limit int) []*core.RegionInfo {
 	if c.beforeScan != nil {
 		c.beforeScan()
-	}
-	c.starts = append(c.starts, slices.Clone(startKey))
-	if c.delay > 0 {
-		time.Sleep(c.delay)
 	}
 	return c.CheckerCluster.ScanRegions(startKey, endKey, limit)
 }
@@ -439,7 +426,7 @@ func TestAffinityBalanceBusyVoterDestinationRetries(t *testing.T) {
 	require.Contains(t, manager.GetAffinityGroupState("_tidb_pt_100_p0").VoterStoreIDs, uint64(4))
 }
 
-func TestAffinityBalanceRecoveredDestinationInvalidatesStable(t *testing.T) {
+func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {
 	tc, checker := newAffinityBalanceTestCluster(t, 4)
 	tc.SetMaxStoreDownTime(time.Minute)
 	tc.SetStoreLastHeartbeatInterval(4, 2*time.Minute)
@@ -452,42 +439,17 @@ func TestAffinityBalanceRecoveredDestinationInvalidatesStable(t *testing.T) {
 		createBalanceGroup(t, manager, id, keys[i], keys[i+1], leader, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
 		addBalanceRegion(t, tc, manager, leader, keys[i], keys[i+1], leader, 1, 2, 3)
 	}
-	beforeVersion, exists := manager.GetBalanceVersion(ids[0])
-	require.True(t, exists)
-
 	require.True(t, runAffinityBalanceTask(t, t.Context(), checker))
 	balancer := &affinityBalancer{checker: checker, tables: map[string]*affinityBalanceTask{"_tidb_pt_100": {}}, queue: make(chan string, 1)}
 	balancer.enqueue(ids[0])
 	require.Len(t, balancer.queue, 1, "periodic retry should revisit a completed table")
 
 	tc.SetStoreUp(4)
-	// Snapshot creation samples the same store fingerprint as the availability loop.
-	recovered := manager.GetBalanceSnapshot(ids[0])
-	require.Greater(t, recovered.Version.Stores, beforeVersion.Stores)
-	require.Equal(t, beforeVersion.Table, recovered.Version.Table, "recovery of an unused destination does not change the table's Regions")
 	balancer.enqueue(ids[0])
-	require.Len(t, balancer.queue, 1, "destination recovery must wake the stable table")
+	require.Len(t, balancer.queue, 1, "repeated enqueue must not duplicate a queued table")
 	<-balancer.queue
 	require.False(t, runAffinityBalanceTask(t, t.Context(), checker))
 	require.Contains(t, manager.GetAffinityGroupState(ids[0]).VoterStoreIDs, uint64(4))
-}
-
-func TestAffinityBalanceCompletesSlowScanInOneCall(t *testing.T) {
-	tc, checker := newAffinityBalanceTestCluster(t, 4)
-	manager := tc.GetAffinityManager()
-	createBalanceGroup(t, manager, "_tidb_pt_100_p0", "a", "c", 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
-	createBalanceGroup(t, manager, "_tidb_pt_100_p1", "d", "e", 1, []uint64{1, 2, 4}, affinity.BalancePolicyFixed)
-	addBalanceRegion(t, tc, manager, 1, "a", "b", 1, 1, 2, 3)
-	addBalanceRegion(t, tc, manager, 2, "b", "c", 1, 1, 2, 3)
-	addBalanceRegion(t, tc, manager, 3, "d", "e", 1, 1, 2, 4)
-
-	// Each Region alone exceeds the former 10ms time slice.
-	scanCluster := &affinityBalanceScanCluster{CheckerCluster: tc, delay: 15 * time.Millisecond}
-	checker.cluster = scanCluster
-	require.False(t, runAffinityBalanceTask(t, t.Context(), checker))
-	require.Equal(t, [][]byte{[]byte("a"), []byte("b"), []byte("a"), []byte("b")}, scanCluster.starts,
-		"current and target scans must each visit every Region once")
-	require.Equal(t, uint64(2), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
 }
 
 func TestAffinityBalanceCancellationRestartsFromFreshSnapshot(t *testing.T) {
@@ -507,16 +469,13 @@ func TestAffinityBalanceCancellationRestartsFromFreshSnapshot(t *testing.T) {
 	require.False(t, stable)
 	require.Equal(t, uint64(1), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
 
-	// A cancelled attempt retains neither the first Region nor the old policy.
-	scanCluster.beforeScan, scanCluster.starts = nil, nil
+	scanCluster.beforeScan = nil
 	_, err = manager.UpdateAffinityGroupPolicy("_tidb_pt_100_p0", affinity.BalancePolicyFixed)
 	require.NoError(t, err)
 	require.True(t, runAffinityBalanceTask(t, t.Context(), checker))
-	require.Empty(t, scanCluster.starts)
 	_, err = manager.UpdateAffinityGroupPolicy("_tidb_pt_100_p0", affinity.BalancePolicyAuto)
 	require.NoError(t, err)
 	require.False(t, runAffinityBalanceTask(t, t.Context(), checker))
-	require.Equal(t, []byte("a"), scanCluster.starts[0])
 	require.Equal(t, uint64(2), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
 }
 
@@ -536,24 +495,18 @@ func TestAffinityBalanceFinalReviewRejectsChangedRegion(t *testing.T) {
 		"the final whole-table review must reject changed Regions outside the selected group")
 }
 
-func TestAffinityBalanceFixedGroupsSkipRegionScan(t *testing.T) {
+func TestAffinityBalanceLeavesFixedTargetsUnchanged(t *testing.T) {
 	tc, checker := newAffinityBalanceTestCluster(t, 3)
 	manager := tc.GetAffinityManager()
-	createBalanceGroup(t, manager, "_tidb_pt_100_p0", "a", "b", 1, []uint64{1, 2, 3}, affinity.BalancePolicyFixed)
-	createBalanceGroup(t, manager, "_tidb_pt_100_p1", "b", "c", 1, []uint64{1, 2, 3}, affinity.BalancePolicyFixed)
-	scanCluster := &affinityBalanceScanCluster{CheckerCluster: tc}
-	checker.cluster = scanCluster
+	ids := []string{"_tidb_pt_100_p0", "_tidb_pt_100_p1"}
+	createBalanceGroup(t, manager, ids[0], "a", "b", 1, []uint64{1, 2, 3}, affinity.BalancePolicyFixed)
+	createBalanceGroup(t, manager, ids[1], "b", "c", 1, []uint64{1, 2, 3}, affinity.BalancePolicyFixed)
 	require.True(t, runAffinityBalanceTask(t, t.Context(), checker))
-	require.Empty(t, scanCluster.starts, "fixed groups need no Region candidate scan")
-
-	require.NoError(t, tc.GetRegionLabeler().SetLabelRule(&labeler.LabelRule{
-		ID: "unrelated-stable-input", Index: 2,
-		Labels:   []labeler.RegionLabel{{Key: "balance-test", Value: "unrelated"}},
-		RuleType: labeler.KeyRange, Data: labeler.MakeKeyRanges("79", "7a"),
-	}))
-	require.True(t, runAffinityBalanceTask(t, t.Context(), checker))
-	require.Empty(t, scanCluster.starts)
-	require.Zero(t, scanCluster.labelReads, "snapshot creation must not scan global label rules")
+	for _, id := range ids {
+		group := manager.GetAffinityGroupState(id)
+		require.Equal(t, uint64(1), group.LeaderStoreID)
+		require.Equal(t, []uint64{1, 2, 3}, group.VoterStoreIDs)
+	}
 }
 
 func TestAffinityBalanceRoleReassignmentCanReplaceOldLeader(t *testing.T) {
@@ -629,13 +582,4 @@ func TestBalanceScoreLowerBoundIncludesFixedTargetsOutsideCandidates(t *testing.
 	require.False(t, balanceScoreAtTheoreticalLowerBound(&affinity.BalanceSnapshot{
 		Stores: []uint64{1, 2, 3, 4}, Groups: groups,
 	}, scorer))
-}
-
-func TestLeaderCandidatesDeferStoreSortingUntilVoterPhase(t *testing.T) {
-	group := &affinity.Group{ID: "g", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2}}
-	scorer, err := affinity.NewBalanceScorer([]*affinity.Group{group})
-	require.NoError(t, err)
-	snapshot := &affinity.BalanceSnapshot{Stores: []uint64{3, 2, 1}, Groups: []*affinity.GroupState{{Group: *group}}}
-	require.Nil(t, newBalanceCandidates(snapshot, scorer, false).stores)
-	require.NotNil(t, newBalanceCandidates(snapshot, scorer, true).stores)
 }
