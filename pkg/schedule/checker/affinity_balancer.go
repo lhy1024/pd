@@ -34,10 +34,6 @@ import (
 	"github.com/tikv/pd/pkg/utils/keyutil"
 )
 
-// A worker yields between complete Region checks or raw candidates. A single
-// placement/best-location call runs normally; this is no internal work budget.
-const affinityBalanceTurn = 10 * time.Millisecond
-
 type affinityBalancer struct {
 	checker *AffinityChecker
 	mu      sync.Mutex
@@ -52,30 +48,6 @@ type affinityBalanceTask struct {
 	// Queue admission is protected by balancer.mu. Completed searches are
 	// retried by the periodic ticker; no permanent stable cache is retained.
 	queued bool
-	// Only the worker reads or writes unfinished search progress.
-	search *balanceSearch
-}
-
-type balanceSearchPhase uint8
-
-const (
-	balanceScanCurrent balanceSearchPhase = iota
-	balanceFindLeader
-	balanceFindVoter
-	balanceVerifyFinal
-)
-
-type balanceSearch struct {
-	snapshot   *affinity.BalanceSnapshot
-	scorer     *affinity.BalanceScorer
-	phase      balanceSearchPhase
-	groupIndex int
-	scan       *balanceRegionScan
-	candidates balanceCandidates
-	move       affinity.BalanceMove
-	target     *affinity.Group
-	blocked    bool
-	checked    map[uint64]balanceCheckedRegion
 }
 
 type balanceCheckedRegion struct {
@@ -156,204 +128,157 @@ func (b *affinityBalancer) run(ctx context.Context) {
 			if task == nil {
 				continue
 			}
-			_, resume, err := b.step(ctx, id, task)
+			_, err := b.step(ctx, id)
 			if err != nil && !errs.ErrEtcdTxnConflict.Equal(err) && ctx.Err() == nil {
 				log.Warn("failed to balance affinity table", zap.String("table-id", id), zap.Error(err))
 			}
 			b.mu.Lock()
 			task.queued = false
-			if !resume {
-				task.search = nil
-			}
-			if resume && err == nil {
-				select {
-				case b.queue <- id:
-					task.queued = true
-				default:
-					// The ticker will retry this table on the next round.
-				}
-			}
+
 			b.mu.Unlock()
 		}
 	}
 }
 
-func (b *affinityBalancer) prepareSearch(id string, task *affinityBalanceTask) (*balanceSearch, error) {
-	manager := b.checker.affinityManager
-	version, exists := manager.GetBalanceVersion(id)
-	if !exists {
-		task.search = nil
-		return nil, nil
-	}
-	search := task.search
-	if search != nil && search.snapshot.Version == version {
-		return search, nil
+// step completes one table search, including final review and one commit
+// attempt. The queue/ticker retries with a fresh snapshot; no search progress is
+// retained between calls. Large tables occupy the worker until this call ends.
+func (b *affinityBalancer) step(ctx context.Context, id string) (stable bool, err error) {
+	c, manager := b.checker, b.checker.affinityManager
+	if !c.balanceSchedulingAllowed() {
+		return false, nil
 	}
 	snapshot := manager.GetBalanceSnapshot(id)
 	if snapshot == nil {
-		return nil, nil
+		return false, nil
 	}
-	// A single-group table has no balance move to search. Avoid traversing the
-	// cluster's label rules for this common no-planning path.
 	if len(snapshot.Groups) <= 1 {
-		search = &balanceSearch{snapshot: snapshot}
-		task.search = search
-		return search, nil
+		return true, nil
 	}
-	// Build the scorer before searching ranges.
 	groups := make([]*affinity.Group, 0, len(snapshot.Groups))
 	for _, group := range snapshot.Groups {
 		groups = append(groups, &group.Group)
 	}
 	scorer, err := affinity.NewBalanceScorer(groups)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	if !manager.BalanceSnapshotCurrent(snapshot) {
-		return nil, errs.ErrEtcdTxnConflict.FastGenByArgs()
+	// Once both dimensions attain the mathematical minimum over every candidate
+	// store, no strict improvement exists. The regular checker still owns safety
+	// repairs and operator convergence, so no Region scan is needed here.
+	if balanceScoreAtTheoreticalLowerBound(snapshot, scorer) {
+		return true, nil
 	}
-	search = &balanceSearch{snapshot: snapshot, scorer: scorer, checked: make(map[uint64]balanceCheckedRegion)}
-	search.candidates = newBalanceCandidates(snapshot, scorer, false)
-	task.search = search
-	return search, nil
-}
-
-// step searches for the first legal strict improvement, rather than constructing
-// a legal action library or promising the best action in this turn.
-func (b *affinityBalancer) step(ctx context.Context, id string, task *affinityBalanceTask) (stable, resume bool, err error) {
-	c, manager := b.checker, b.checker.affinityManager
-	if !c.balanceSchedulingAllowed() {
-		return false, false, nil
-	}
-	search, err := b.prepareSearch(id, task)
-	if err != nil || search == nil {
-		return false, false, err
-	}
-	task.search = search
-	snapshot := search.snapshot
-	if search.scorer == nil || len(snapshot.Groups) <= 1 {
-		return true, false, nil
-	}
-	// Once both dimensions already attain the mathematical minimum over every
-	// candidate store (including zero-count stores), no strict improvement can
-	// exist. Avoid scanning the table's Regions; the regular checker still owns
-	// safety repairs and operator convergence.
-	if balanceScoreAtTheoreticalLowerBound(snapshot, search.scorer) {
-		return true, false, nil
-	}
-	deadline := time.Now().Add(affinityBalanceTurn)
-	waiting := c.waitingAffinityRegions()
-	for ctx.Err() == nil {
+	checkInput := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !manager.BalanceSnapshotCurrent(snapshot) {
-			return false, false, errs.ErrEtcdTxnConflict.FastGenByArgs()
+			return errs.ErrEtcdTxnConflict.FastGenByArgs()
 		}
-		if time.Now().After(deadline) {
-			return false, true, nil
+		return nil
+	}
+	waiting := c.waitingAffinityRegions()
+	checked := make(map[uint64]balanceCheckedRegion)
+	for _, group := range snapshot.Groups {
+		if group.BalancePolicy == affinity.BalancePolicyFixed {
+			continue
 		}
-		switch search.phase {
-		case balanceScanCurrent:
-			if search.groupIndex >= len(snapshot.Groups) {
-				search.phase = balanceFindLeader
-				continue
+		ranges := snapshot.Ranges[group.ID]
+		if !group.AffinitySchedulingAllowed || len(ranges.KeyRanges) == 0 {
+			return false, nil
+		}
+		scan := newBalanceRegionScan(ranges)
+		for {
+			if err := checkInput(); err != nil {
+				return false, err
 			}
-			group := snapshot.Groups[search.groupIndex]
-			if group.BalancePolicy == affinity.BalancePolicyFixed {
-				search.groupIndex++
-				continue
-			}
-			if search.scan == nil {
-				ranges := snapshot.Ranges[group.ID]
-				if !group.AffinitySchedulingAllowed || len(ranges.KeyRanges) == 0 {
-					return false, false, nil
-				}
-				scan := newBalanceRegionScan(ranges)
-				search.scan = &scan
-			}
-			region, covered, done := search.scan.next(c.cluster)
+			region, covered, done := scan.next(c.cluster)
 			if !covered {
-				return false, false, nil
+				return false, nil
 			}
 			if done {
-				search.groupIndex++
-				search.scan = nil
-				continue
+				break
 			}
 			fit, status := c.validateBalanceCurrentRegion(group, region, waiting)
 			if status != balanceAllowed {
-				return false, false, nil
+				return false, nil
 			}
-			search.checked[region.GetID()] = balanceCheckedRegion{group, region, fit}
-		case balanceFindLeader, balanceFindVoter:
-			if search.target == nil {
-				move, found := search.candidates.next()
-				if !found {
-					if search.blocked {
-						return false, false, nil
-					}
-					if search.phase == balanceFindLeader {
-						search.phase = balanceFindVoter
-						search.candidates = newBalanceCandidates(snapshot, search.scorer, true)
-						continue
-					}
-					return true, false, nil
-				}
-				if _, improves := search.scorer.Evaluate(move); !improves {
-					continue
-				}
-				search.move = move
-				group := snapshot.Groups[search.candidates.group]
-				target := group.Group
-				target.LeaderStoreID, target.VoterStoreIDs = move.LeaderStoreID, slices.Clone(group.VoterStoreIDs)
-				if move.FromStoreID != 0 {
-					target.VoterStoreIDs[slices.Index(target.VoterStoreIDs, move.FromStoreID)] = move.ToStoreID
-				}
-				search.target = &target
-				scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
-				search.scan = &scan
-			}
-			group := snapshot.Groups[search.candidates.group]
-			status := c.balanceTargetExecutionStatus(&group.Group, search.target)
-			if status != balanceAllowed {
-				search.blocked = search.blocked || status == balanceTemporarilyBlocked
-				search.target, search.scan = nil, nil
-				continue
-			}
-			region, covered, done := search.scan.next(c.cluster)
-			if !covered {
-				return false, false, nil
-			}
-			if done {
-				if err := manager.PrepareBalanceCommit(ctx, snapshot); err != nil {
-					return false, false, err
-				}
-				search.phase, search.scan = balanceVerifyFinal, nil
-				continue
-			}
-			checked, ok := search.checked[region.GetID()]
-			if !ok || !sameBalanceRegionInput(checked.region, region) || !c.balanceRegionReady(group, region, waiting) {
-				return false, false, nil
-			}
-			status = c.validateBalanceTarget(search.target, region, checked.fit)
-			if status != balanceAllowed {
-				search.blocked = search.blocked || status == balanceTemporarilyBlocked
-				search.target, search.scan = nil, nil
-			}
-		case balanceVerifyFinal:
-			if !b.verifyFinalRegions(ctx, search) {
-				return false, false, ctx.Err()
-			}
-			group := snapshot.Groups[search.candidates.group]
-			if !c.balanceSchedulingAllowed() || c.balanceTargetExecutionStatus(&group.Group, search.target) != balanceAllowed {
-				return false, false, nil
-			}
-			committed, err := manager.CommitBalanceTarget(ctx, snapshot, search.target)
-			if committed {
-				log.Debug("balanced affinity partition", zap.String("group-id", search.target.ID))
-			}
-			return false, false, err
+			checked[region.GetID()] = balanceCheckedRegion{group, region, fit}
 		}
 	}
-	return false, false, ctx.Err()
+	// Exhaust leader-only improvements before trying voter replacements.
+	for _, replace := range []bool{false, true} {
+		candidates := newBalanceCandidates(snapshot, scorer, replace)
+		blocked := false
+		for {
+			if err := checkInput(); err != nil {
+				return false, err
+			}
+			move, found := candidates.next()
+			if !found {
+				break
+			}
+			if _, improves := scorer.Evaluate(move); !improves {
+				continue
+			}
+			group := snapshot.Groups[candidates.group]
+			target := group.Group
+			target.LeaderStoreID, target.VoterStoreIDs = move.LeaderStoreID, slices.Clone(group.VoterStoreIDs)
+			if move.FromStoreID != 0 {
+				target.VoterStoreIDs[slices.Index(target.VoterStoreIDs, move.FromStoreID)] = move.ToStoreID
+			}
+			scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
+			status := balanceAllowed
+			for {
+				if err := checkInput(); err != nil {
+					return false, err
+				}
+				status = c.balanceTargetExecutionStatus(&group.Group, &target)
+				if status != balanceAllowed {
+					break
+				}
+				region, covered, done := scan.next(c.cluster)
+				if !covered {
+					return false, nil
+				}
+				if done {
+					break
+				}
+				current, ok := checked[region.GetID()]
+				if !ok || !sameBalanceRegionInput(current.region, region) || !c.balanceRegionReady(group, region, waiting) {
+					return false, nil
+				}
+				status = c.validateBalanceTarget(&target, region, current.fit)
+				if status != balanceAllowed {
+					break
+				}
+			}
+			if status != balanceAllowed {
+				blocked = blocked || status == balanceTemporarilyBlocked
+				continue
+			}
+			if err := manager.PrepareBalanceCommit(ctx, snapshot); err != nil {
+				return false, err
+			}
+			if !b.verifyFinalRegions(ctx, snapshot, checked) {
+				return false, ctx.Err()
+			}
+			if !c.balanceSchedulingAllowed() || c.balanceTargetExecutionStatus(&group.Group, &target) != balanceAllowed {
+				return false, nil
+			}
+			committed, err := manager.CommitBalanceTarget(ctx, snapshot, &target)
+			if committed {
+				log.Debug("balanced affinity partition", zap.String("group-id", target.ID))
+			}
+			return false, err
+		}
+		// A temporary leader restriction must not trigger a voter replacement.
+		if blocked {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func sameBalanceRegionInput(a, b *core.RegionInfo) bool {
@@ -363,25 +288,23 @@ func sameBalanceRegionInput(a, b *core.RegionInfo) bool {
 		a.GetLeader().GetStoreId() == b.GetLeader().GetStoreId() && core.SortedPeersEqual(a.GetPeers(), b.GetPeers())
 }
 
-// verifyFinalRegions takes one complete RegionTree range view. It never saves
-// partial success across turns: cancellation aborts the check, and a later
-// attempt must collect the whole view again. This lightweight pass may exceed
-// the turn duration; placement and etcd IO run outside the RegionTree lock.
-func (b *affinityBalancer) verifyFinalRegions(ctx context.Context, search *balanceSearch) bool {
+// verifyFinalRegions takes one complete RegionTree range view. Cancellation
+// aborts the check; placement and etcd IO run outside the RegionTree lock.
+func (b *affinityBalancer) verifyFinalRegions(ctx context.Context, snapshot *affinity.BalanceSnapshot, checkedRegions map[uint64]balanceCheckedRegion) bool {
 	var ranges []keyutil.KeyRange
-	for _, group := range search.snapshot.Groups {
+	for _, group := range snapshot.Groups {
 		if group.BalancePolicy != affinity.BalancePolicyFixed {
-			ranges = append(ranges, search.snapshot.Ranges[group.ID].KeyRanges...)
+			ranges = append(ranges, snapshot.Ranges[group.ID].KeyRanges...)
 		}
 	}
 	slices.SortFunc(ranges, func(a, b keyutil.KeyRange) int { return bytes.Compare(a.StartKey, b.StartKey) })
 	regions, err := b.checker.cluster.BatchScanRegions(keyutil.NewKeyRanges(ranges), core.WithOutputMustContainAllKeyRange())
-	if err != nil || len(regions) != len(search.checked) {
+	if err != nil || len(regions) != len(checkedRegions) {
 		return false
 	}
 	waiting := b.checker.waitingAffinityRegions()
 	for _, region := range regions {
-		checked, ok := search.checked[region.GetID()]
+		checked, ok := checkedRegions[region.GetID()]
 		if ctx.Err() != nil || !ok || !sameBalanceRegionInput(checked.region, region) ||
 			!b.checker.balanceRegionReady(checked.group, region, waiting) {
 			return false
