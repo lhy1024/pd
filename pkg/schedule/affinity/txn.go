@@ -583,6 +583,10 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 		if updated.ID != original.ID || updated.CreateTimestamp != original.CreateTimestamp ||
 			(affinityVer != 0 && (updated.BalancePolicy != original.BalancePolicy || updated.LeaderStoreID != original.LeaderStoreID ||
 				!slices.Equal(normalizeVoters(updated.VoterStoreIDs), original.VoterStoreIDs))) {
+			// The scheduler observed a persisted target different from its
+			// local baseline. Keep the existing return contract, but make the
+			// next call refresh the authoritative group before retrying.
+			m.metadataNeedsReload = true
 			return errs.ErrEtcdTxnConflict.FastGenByArgs()
 		}
 		// PD's admin cache can lag behind scheduling's policy updates. Change

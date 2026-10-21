@@ -219,6 +219,33 @@ func TestAffinityRangesRejectStaleBaseAndRecover(t *testing.T) {
 	require.Equal(t, 3, m.GetAffinityGroupState(id).RangeCount)
 }
 
+func TestInternalPeerConflictSchedulesBaselineRefresh(t *testing.T) {
+	m := newMetadataTestManager(t)
+	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
+	base := m.storage.(storage.Storage)
+	persisted := loadStoredGroup(t, m, id)
+	persisted.LeaderStoreID = 2
+	require.NoError(t, base.RunInTxn(m.ctx, func(txn kv.Txn) error {
+		return base.SaveAffinityGroup(txn, id, &persisted)
+	}))
+	version := m.GetAffinityGroupState(id).affinityVer
+	state, err := m.updateAffinityGroupPeersWithAffinityVer(id, version, 3, []uint64{1, 2, 3})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), state.LeaderStoreID)
+	require.True(t, m.metadataNeedsReload)
+	// The conflict above only reports the old state. The next internal retry
+	// must refresh the persisted target before comparing its baseline.
+	version = m.GetAffinityGroupState(id).affinityVer
+	state, err = m.updateAffinityGroupPeersWithAffinityVer(id, version, 3, []uint64{1, 2, 3})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), loadStoredGroup(t, m, id).LeaderStoreID)
+	require.Equal(t, uint64(2), state.LeaderStoreID)
+	version = m.GetAffinityGroupState(id).affinityVer
+	state, err = m.updateAffinityGroupPeersWithAffinityVer(id, version, 3, []uint64{1, 2, 3})
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), state.LeaderStoreID)
+}
+
 func TestAffinityRangeWatcherIgnoresDelayedPut(t *testing.T) {
 	m := newMetadataTestManager(t)
 	ids := seedMetadataTestGroups(t, m, []uint64{1, 1})
