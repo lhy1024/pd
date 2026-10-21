@@ -177,18 +177,12 @@ func MakeLabelRule(groupKeyRanges GroupKeyRanges) *labeler.LabelRule {
 
 // CreateAffinityGroups adds multiple affinity groups to storage and creates corresponding label rules.
 func (m *Manager) CreateAffinityGroups(changes []GroupKeyRanges) error {
-	if err := m.refreshMetadataBeforeWrite(); err != nil {
-		return err
-	}
 	return m.createGroupsWithSkipExisting(changes, false)
 }
 
 // CreateAffinityGroupsIfNotExists adds multiple affinity groups, skipping those that already exist.
 // Only groups still absent after the admission gate require valid, nonempty ranges.
 func (m *Manager) CreateAffinityGroupsIfNotExists(changes []GroupKeyRanges) error {
-	if err := m.refreshMetadataBeforeWrite(); err != nil {
-		return err
-	}
 	return m.createGroupsWithSkipExisting(changes, true)
 }
 
@@ -215,6 +209,9 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return err
+	}
 
 	filteredGroups := groups
 	filteredChanges := changes
@@ -310,6 +307,9 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 		return nil
 	})
 	if err != nil {
+		if errs.ErrEtcdTxnConflict.Equal(err) {
+			m.metadataNeedsReload = true
+		}
 		log.Error("failed to add affinity groups",
 			zap.Int("total-groups", len(filteredChanges)),
 			zap.Error(err))
@@ -346,9 +346,6 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 //   - Skips non-existent groups
 //   - Deletes groups even if they have key ranges
 func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
-	if err := m.refreshMetadataBeforeWrite(); err != nil {
-		return err
-	}
 	if len(groupIDs) == 0 {
 		return errs.ErrAffinityGroupContent.FastGenByArgs("no group ids provided")
 	}
@@ -362,6 +359,9 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return err
+	}
 
 	// Step 1: Check if group has key ranges when force is false
 	for _, groupID := range groupIDs {
@@ -430,6 +430,9 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 		return nil
 	})
 	if err != nil {
+		if errs.ErrEtcdTxnConflict.Equal(err) {
+			m.metadataNeedsReload = true
+		}
 		log.Error("failed to delete affinity groups",
 			zap.Int("total-groups", len(toDelete)),
 			zap.Error(err))
@@ -450,17 +453,11 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 
 // UpdateAffinityGroupPeers updates the leader and voter stores of an affinity group and marks it available.
 func (m *Manager) UpdateAffinityGroupPeers(groupID string, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
-	if err := m.refreshMetadataBeforeWrite(); err != nil {
-		return nil, err
-	}
 	return m.updateAffinityGroupPeersWithAffinityVer(groupID, 0, leaderStoreID, voterStoreIDs)
 }
 
 // UpdateAffinityGroupPolicy updates the balance policy of an affinity group.
 func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy) (*GroupState, error) {
-	if err := m.refreshMetadataBeforeWrite(); err != nil {
-		return nil, err
-	}
 	if err := ValidateGroupID(groupID); err != nil {
 		return nil, err
 	}
@@ -477,6 +474,9 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return nil, err
+	}
 
 	group := m.GetAffinityGroupState(groupID)
 	if group == nil {
@@ -495,6 +495,9 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 		return m.storage.SaveAffinityGroup(txn, groupID, &updated)
 	})
 	if err != nil {
+		if errs.ErrEtcdTxnConflict.Equal(err) {
+			m.metadataNeedsReload = true
+		}
 		return nil, err
 	}
 	if group.BalancePolicy == policy {
@@ -539,6 +542,9 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	// Step 1: Check whether the Group exists and validate.
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return nil, err
+	}
 	group := m.GetAffinityGroupState(groupID)
 	if group == nil {
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
@@ -613,9 +619,6 @@ func (m *Manager) keyRangesOrEmpty(groupID string) GroupKeyRanges {
 // Currently migration (removing a range from group A and adding the same range to group B in one request)
 // is not supported because add validation checks overlaps against existing ranges before removals are applied.
 func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRanges) error {
-	if err := m.refreshMetadataBeforeWrite(); err != nil {
-		return err
-	}
 	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return err
@@ -652,6 +655,9 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return err
+	}
 
 	// Step 1: Validate the added KeyRanges.
 	originalRanges := make(map[string]GroupKeyRanges, len(addOps)+len(removeOps))
@@ -773,6 +779,9 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 		return nil
 	})
 	if err != nil {
+		if errs.ErrEtcdTxnConflict.Equal(err) {
+			m.metadataNeedsReload = true
+		}
 		log.Error("failed to update affinity group ranges",
 			zap.Int("total-groups", len(addOps)+len(removeOps)),
 			zap.Error(err))
