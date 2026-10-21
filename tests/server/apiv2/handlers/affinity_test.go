@@ -65,23 +65,16 @@ func (suite *affinityHandlerTestSuite) TearDownTest() {
 	suite.env.RunFuncInStartedEnvs(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
-		manager, err := leader.GetServer().GetAffinityManager()
-		if err != nil {
-			// If affinity manager is not available, skip cleanup
-			// This can happen during test teardown
-			return
-		}
-
-		allGroups := manager.GetAllAffinityGroupStates()
-		groupIDs := make([]string, 0, len(allGroups))
-		for _, group := range allGroups {
-			groupIDs = append(groupIDs, group.ID)
+		// Use the same primary routing as the tests. PD's local Manager is not
+		// the writer (or the current cache) while scheduling is independent.
+		groups := mustGetAllAffinityGroups(re, leader.GetAddr()).AffinityGroups
+		groupIDs := make([]string, 0, len(groups))
+		for id := range groups {
+			groupIDs = append(groupIDs, id)
 		}
 
 		if len(groupIDs) > 0 {
-			err = manager.DeleteAffinityGroups(groupIDs, true)
-			// Use NoError to ensure cleanup succeeds and catch state pollution issues
-			re.NoError(err, "failed to cleanup affinity groups in TearDownTest")
+			mustBatchDeleteAffinityGroups(re, leader.GetAddr(), &handlers.BatchDeleteAffinityGroupsRequest{IDs: groupIDs, Force: true})
 		}
 
 		testutil.Eventually(re, func() bool {
