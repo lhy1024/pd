@@ -94,6 +94,58 @@ func TestUnknownWriteReloadFailureRecoversOnExplicitRetry(t *testing.T) {
 	require.Equal(t, uint64(3), m.GetAffinityGroupState(id).LeaderStoreID)
 }
 
+func TestUnknownPolicyWriteReloadFailureRefreshesBaseline(t *testing.T) {
+	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
+	defer cleanup()
+	base := storage.NewStorageWithEtcdBackend(client)
+	m := newMetadataTestManager(t)
+	m.storage = base
+	termKey := "/test/affinity-policy-primary-term-reload-failure"
+	_, err := client.Put(t.Context(), termKey, "old")
+	require.NoError(t, err)
+	m.SetAffinityWriteGuard(func() ([]clientv3.Cmp, bool) {
+		return []clientv3.Cmp{clientv3.Compare(clientv3.Value(termKey), "=", "old")}, true
+	})
+	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
+	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
+	responseErr := errors.New("policy response lost")
+	reloadErr := errors.New("policy authoritative read failed")
+	m.storage = &committedErrorStorage{Storage: base, err: responseErr, reloadErr: reloadErr}
+	_, err = m.UpdateAffinityGroupPolicy(id, BalancePolicyFixed)
+	require.ErrorIs(t, err, responseErr)
+	require.Equal(t, BalancePolicyAuto, m.GetAffinityGroupState(id).BalancePolicy)
+
+	m.storage = base
+	_, err = m.UpdateAffinityGroupPolicy(id, BalancePolicyFixed)
+	require.NoError(t, err)
+	require.Equal(t, BalancePolicyFixed, m.GetAffinityGroupState(id).BalancePolicy)
+}
+
+func TestUnknownRangeWriteReloadFailureRefreshesBaseline(t *testing.T) {
+	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
+	defer cleanup()
+	base := storage.NewStorageWithEtcdBackend(client)
+	m := newMetadataTestManager(t)
+	m.storage = base
+	termKey := "/test/affinity-range-primary-term-reload-failure"
+	_, err := client.Put(t.Context(), termKey, "old")
+	require.NoError(t, err)
+	m.SetAffinityWriteGuard(func() ([]clientv3.Cmp, bool) {
+		return []clientv3.Cmp{clientv3.Compare(clientv3.Value(termKey), "=", "old")}, true
+	})
+	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
+	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
+	addFirst := []GroupKeyRanges{{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{4}, EndKey: []byte{5}}}}}
+	m.storage = &committedErrorStorage{Storage: base, err: errors.New("range response lost"), reloadErr: errors.New("range authoritative read failed")}
+	require.Error(t, m.UpdateAffinityGroupKeyRanges(addFirst, nil))
+	require.Equal(t, 1, m.GetAffinityGroupState(id).RangeCount)
+
+	m.storage = base
+	addSecond := []GroupKeyRanges{{GroupID: id, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{6}, EndKey: []byte{7}}}}}
+	require.NoError(t, m.UpdateAffinityGroupKeyRanges(addSecond, nil))
+	require.Equal(t, 3, m.GetAffinityGroupState(id).RangeCount)
+}
+
 func TestUnknownWriteReloadsAndAllowsExplicitRetry(t *testing.T) {
 	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
 	defer cleanup()
@@ -179,6 +231,22 @@ func TestAffinityRangeWatcherIgnoresDelayedPut(t *testing.T) {
 	// the range view used by the next cross-group overlap check.
 	require.NoError(t, m.SyncKeyRangesFromEtcdEvent(old))
 	require.Equal(t, 2, m.GetAffinityGroupState(ids[0]).RangeCount)
+	conflicting := []GroupKeyRanges{{GroupID: ids[1], KeyRanges: []keyutil.KeyRange{{StartKey: []byte{4}, EndKey: []byte{5}}}}}
+	require.Error(t, m.UpdateAffinityGroupKeyRanges(conflicting, nil))
+	require.Equal(t, 1, m.GetAffinityGroupState(ids[1]).RangeCount)
+}
+
+func TestAffinityGroupWatcherIgnoresDelayedDeleteAfterRecreate(t *testing.T) {
+	m := newMetadataTestManager(t)
+	ids := seedMetadataTestGroups(t, m, []uint64{1, 1})
+	require.NoError(t, m.DeleteAffinityGroups([]string{ids[0]}, true))
+	rangeToProtect := GroupKeyRanges{GroupID: ids[0], KeyRanges: []keyutil.KeyRange{{StartKey: []byte{4}, EndKey: []byte{5}}}}
+	require.NoError(t, m.CreateAffinityGroups([]GroupKeyRanges{rangeToProtect}))
+	require.Equal(t, 1, m.GetAffinityGroupState(ids[0]).RangeCount)
+	// The old delete event must observe the recreated group in storage and
+	// leave its ranges available to the next cross-group overlap check.
+	require.NoError(t, m.SyncGroupDeleteFromEtcd(ids[0]))
+	require.NotNil(t, m.GetAffinityGroupState(ids[0]))
 	conflicting := []GroupKeyRanges{{GroupID: ids[1], KeyRanges: []keyutil.KeyRange{{StartKey: []byte{4}, EndKey: []byte{5}}}}}
 	require.Error(t, m.UpdateAffinityGroupKeyRanges(conflicting, nil))
 	require.Equal(t, 1, m.GetAffinityGroupState(ids[1]).RangeCount)

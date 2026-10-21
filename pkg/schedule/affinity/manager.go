@@ -85,9 +85,9 @@ type Manager struct {
 	// labelRuleBuffer is a buffer used during etcd synchronization.
 	// When synchronizing via etcd, LabelRule information may arrive earlier than group information.
 	labelRuleBuffer map[string]*labeler.LabelRule // {group_id} -> labelRule
-	// metadataNeedsReload is set when this Manager has no watcher (Classic
-	// mode) and a write's local baseline may be stale. The next explicit write
-	// refreshes the authoritative baseline before validating its request.
+	// metadataNeedsReload is set when a write's local baseline may be stale.
+	// The next explicit write refreshes the authoritative baseline before
+	// validating its request.
 	metadataNeedsReload bool
 }
 
@@ -129,9 +129,9 @@ func (m *Manager) initialize() error {
 	return nil
 }
 
-func (m *Manager) refreshMetadataBeforeWrite() error {
-	m.metaMutex.Lock()
-	defer m.metaMutex.Unlock()
+// refreshMetadataBeforeWriteLocked refreshes a stale authoritative baseline.
+// The caller must hold metaMutex and keep it through validation and commit.
+func (m *Manager) refreshMetadataBeforeWriteLocked() error {
 	if !m.metadataNeedsReload {
 		return nil
 	}
@@ -706,6 +706,16 @@ func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) error {
 }
 
 func (m *Manager) syncGroupDeleteFromEtcdLocked(groupID string) error {
+	// A delayed delete event must not remove a group that was recreated under
+	// the same ID after the event's revision. Read the current authoritative
+	// value while holding the same metadata lock used by range validation.
+	value, err := m.storage.LoadAffinityGroup(groupID)
+	if err != nil {
+		return err
+	}
+	if value != "" {
+		return nil
+	}
 	delete(m.keyRanges, groupID)
 	delete(m.labelRuleBuffer, groupID)
 
