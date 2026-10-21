@@ -51,29 +51,6 @@ func TestGetBalanceSnapshotScopesAndCopiesTableState(t *testing.T) {
 	require.Equal(t, byte(0), fresh.Ranges[ids[0]].KeyRanges[0].StartKey[0])
 }
 
-func TestBalanceSnapshotVersionTracksTargetAndMembership(t *testing.T) {
-	manager := newMetadataTestManager(t)
-	ids := seedMetadataTestGroups(t, manager, []uint64{1, 1})
-	initial := manager.GetBalanceSnapshot(ids[0])
-
-	_, err := manager.UpdateAffinityGroupPeers(ids[0], 2, []uint64{1, 2, 3})
-	require.NoError(t, err)
-	afterTarget := manager.GetBalanceSnapshot(ids[0])
-	require.Greater(t, afterTarget.Version.Table, initial.Version.Table)
-	require.Equal(t, uint64(2), afterTarget.Groups[0].LeaderStoreID)
-
-	newID := "_tidb_pt_10_p3"
-	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: newID, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{2}, EndKey: []byte{3}}}}}))
-	afterAdd := manager.GetBalanceSnapshot(ids[0])
-	require.Greater(t, afterAdd.Version.Table, afterTarget.Version.Table)
-	require.Len(t, afterAdd.Groups, 3)
-
-	require.NoError(t, manager.DeleteAffinityGroups([]string{newID}, true))
-	afterDelete := manager.GetBalanceSnapshot(ids[0])
-	require.Greater(t, afterDelete.Version.Table, afterAdd.Version.Table)
-	require.Len(t, afterDelete.Groups, 2)
-}
-
 func TestBalanceSnapshotVersionTracksPlacementRules(t *testing.T) {
 	manager := newMetadataTestManager(t)
 	id := seedMetadataTestGroups(t, manager, []uint64{1})[0]

@@ -38,16 +38,13 @@ type affinityBalancer struct {
 	checker *AffinityChecker
 	mu      sync.Mutex
 	tables  map[string]*affinityBalanceTask
-	queue   chan string
-	// roundRobinCursor advances across the sorted table IDs so a full queue
-	// cannot repeatedly reserve the same map prefix and starve later tables.
-	roundRobinCursor int
+	wake    chan struct{}
 }
 
 type affinityBalanceTask struct {
-	// Queue admission is protected by balancer.mu. Completed searches are
+	// Dirty admission is protected by balancer.mu. Completed searches are
 	// retried by the periodic ticker; no permanent stable cache is retained.
-	queued bool
+	dirty bool
 }
 
 type balanceCheckedRegion struct {
@@ -57,7 +54,7 @@ type balanceCheckedRegion struct {
 }
 
 func newAffinityBalancer(ctx context.Context, checker *AffinityChecker) *affinityBalancer {
-	balancer := &affinityBalancer{checker: checker, tables: make(map[string]*affinityBalanceTask), queue: make(chan string, 64)}
+	balancer := &affinityBalancer{checker: checker, tables: make(map[string]*affinityBalanceTask), wake: make(chan struct{}, 1)}
 	go balancer.run(ctx)
 	return balancer
 }
@@ -69,20 +66,14 @@ func (b *affinityBalancer) enqueue(groupID string) {
 	}
 	tableID := affinity.TableGroupPrefix(groupID)
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	task := b.tables[tableID]
 	if task == nil {
 		task = &affinityBalanceTask{}
 		b.tables[tableID] = task
 	}
-	if task.queued {
-		return
-	}
-	select {
-	case b.queue <- tableID:
-		task.queued = true
-	default:
-	}
+	task.dirty = true
+	b.mu.Unlock()
+	b.signal()
 }
 
 func (b *affinityBalancer) run(ctx context.Context) {
@@ -93,55 +84,59 @@ func (b *affinityBalancer) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			b.mu.Lock()
-			ids := make([]string, 0, len(b.tables))
-			for id := range b.tables {
+			b.markAllDirty()
+			b.processDirty(ctx)
+		case <-b.wake:
+			b.processDirty(ctx)
+		}
+	}
+}
+
+func (b *affinityBalancer) signal() {
+	select {
+	case b.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (b *affinityBalancer) markAllDirty() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id, task := range b.tables {
+		if _, exists := b.checker.affinityManager.GetBalanceVersion(id); !exists {
+			delete(b.tables, id)
+			continue
+		}
+		task.dirty = true
+	}
+}
+
+func (b *affinityBalancer) processDirty(ctx context.Context) {
+	for {
+		b.mu.Lock()
+		ids := make([]string, 0, len(b.tables))
+		for id, task := range b.tables {
+			if task.dirty {
 				ids = append(ids, id)
+				task.dirty = false
 			}
-			sort.Strings(ids)
-			if len(ids) == 0 {
-				b.mu.Unlock()
-				continue
-			}
-			start := b.roundRobinCursor % len(ids)
-			for offset := range ids {
-				id := ids[(start+offset)%len(ids)]
-				task := b.tables[id]
-				if _, exists := b.checker.affinityManager.GetBalanceVersion(id); !exists && !task.queued {
-					delete(b.tables, id)
-					continue
-				}
-				if !task.queued {
-					select {
-					case b.queue <- id:
-						task.queued = true
-					default:
-					}
-				}
-			}
-			b.roundRobinCursor = (start + 1) % len(ids)
-			b.mu.Unlock()
-		case id := <-b.queue:
-			b.mu.Lock()
-			task := b.tables[id]
-			b.mu.Unlock()
-			if task == nil {
-				continue
-			}
+		}
+		b.mu.Unlock()
+		if len(ids) == 0 || ctx.Err() != nil {
+			return
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
 			err := b.step(ctx, id)
 			if err != nil && !errs.ErrEtcdTxnConflict.Equal(err) && ctx.Err() == nil {
 				log.Warn("failed to balance affinity table", zap.String("table-id", id), zap.Error(err))
 			}
-			b.mu.Lock()
-			task.queued = false
-
-			b.mu.Unlock()
 		}
 	}
 }
 
 // step completes one table search, including final review and one commit
-// attempt. The queue/ticker retries with a fresh snapshot; no search progress is
+// attempt. The dirty-table worker retries with a fresh snapshot; no search progress is
 // retained between calls. Large tables occupy the worker until this call ends.
 func (b *affinityBalancer) step(ctx context.Context, id string) error {
 	c, manager := b.checker, b.checker.affinityManager

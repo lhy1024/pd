@@ -441,15 +441,14 @@ func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {
 	for _, id := range ids {
 		require.NotContains(t, manager.GetAffinityGroupState(id).VoterStoreIDs, uint64(4))
 	}
-	balancer := &affinityBalancer{checker: checker, tables: map[string]*affinityBalanceTask{"_tidb_pt_100": {}}, queue: make(chan string, 1)}
+	balancer := &affinityBalancer{checker: checker, tables: map[string]*affinityBalanceTask{"_tidb_pt_100": {}}, wake: make(chan struct{}, 1)}
 	balancer.enqueue(ids[0])
-	require.Len(t, balancer.queue, 1, "periodic retry should revisit a completed table")
+	require.True(t, balancer.tables["_tidb_pt_100"].dirty, "periodic retry should mark a completed table dirty")
 
 	tc.SetStoreUp(4)
 	balancer.enqueue(ids[0])
-	require.Len(t, balancer.queue, 1, "repeated enqueue must not duplicate a queued table")
-	<-balancer.queue
-	runAffinityBalanceTask(t, t.Context(), checker)
+	require.True(t, balancer.tables["_tidb_pt_100"].dirty, "repeated enqueue should remain one dirty marker")
+	balancer.processDirty(t.Context())
 	require.Contains(t, manager.GetAffinityGroupState(ids[0]).VoterStoreIDs, uint64(4))
 }
 
