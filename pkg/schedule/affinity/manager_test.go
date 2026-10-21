@@ -209,7 +209,7 @@ func TestSyncLabelRuleBeforeGroup(t *testing.T) {
 	re.NoError(manager.SyncKeyRangesFromEtcd(parsedRule))
 
 	// Group arrives after label rule.
-	manager.SyncGroupFromEtcd(&Group{ID: gkr.GroupID})
+	re.NoError(manager.SyncGroupFromEtcd(&Group{ID: gkr.GroupID}))
 
 	state := manager.GetAffinityGroupState(gkr.GroupID)
 	re.NotNil(state)
@@ -231,11 +231,11 @@ func TestSyncGroupFromEtcdUpdatesBalancePolicy(t *testing.T) {
 	re.NoError(err)
 
 	input := &Group{ID: "policy", BalancePolicy: BalancePolicyFixed, LeaderStoreID: 1, VoterStoreIDs: []uint64{3, 1, 2}}
-	manager.SyncGroupFromEtcd(input)
+	re.NoError(manager.SyncGroupFromEtcd(input))
 	re.Equal(BalancePolicyFixed, manager.GetAffinityGroupState("policy").BalancePolicy)
 	re.Equal([]uint64{1, 2, 3}, manager.GetAffinityGroupState("policy").VoterStoreIDs)
 	re.Equal([]uint64{3, 1, 2}, input.VoterStoreIDs, "watcher input must not be mutated")
-	manager.SyncGroupFromEtcd(&Group{ID: "policy", BalancePolicy: BalancePolicyAuto})
+	re.NoError(manager.SyncGroupFromEtcd(&Group{ID: "policy", BalancePolicy: BalancePolicyAuto}))
 	re.Equal(BalancePolicyAuto, manager.GetAffinityGroupState("policy").BalancePolicy)
 }
 

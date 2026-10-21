@@ -477,20 +477,7 @@ func (m *Manager) GetAllAffinityGroupStates() []*GroupState {
 // They are called by the watcher when it receives events from etcd.
 
 // SyncGroupFromEtcd synchronizes a group from etcd to the in-memory state.
-func (m *Manager) SyncGroupFromEtcd(group *Group) {
-	if err := m.applyGroupFromEtcd(group); err != nil {
-		log.Error("failed to sync affinity group from etcd", zap.Error(err))
-	}
-}
-
-// SyncGroupFromEtcdAtRevision applies a watcher event. LoopWatcher already
-// serializes events and consistent reloads; the revision argument is retained
-// for compatibility with older callers.
-func (m *Manager) SyncGroupFromEtcdAtRevision(group *Group, _ int64) error {
-	return m.applyGroupFromEtcd(group)
-}
-
-func (m *Manager) applyGroupFromEtcd(group *Group) error {
+func (m *Manager) SyncGroupFromEtcd(group *Group) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	return m.syncGroupFromEtcdLocked(group)
@@ -685,20 +672,7 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 }
 
 // SyncGroupDeleteFromEtcd synchronizes a group deletion from etcd.
-func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) {
-	if err := m.applyGroupDeleteFromEtcd(groupID); err != nil {
-		log.Error("failed to sync affinity group deletion from etcd",
-			zap.String("group-id", groupID), zap.Error(err))
-	}
-}
-
-// SyncGroupDeleteFromEtcdAtRevision applies a watcher deletion. The revision
-// argument is retained for compatibility with older callers.
-func (m *Manager) SyncGroupDeleteFromEtcdAtRevision(groupID string, _ int64) error {
-	return m.applyGroupDeleteFromEtcd(groupID)
-}
-
-func (m *Manager) applyGroupDeleteFromEtcd(groupID string) error {
+func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	return m.syncGroupDeleteFromEtcdLocked(groupID)
@@ -721,16 +695,6 @@ func (m *Manager) syncGroupDeleteFromEtcdLocked(groupID string) error {
 
 // SyncKeyRangesFromEtcd synchronizes key ranges from a label rule.
 func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
-	return m.applyKeyRangesFromEtcd(labelRule)
-}
-
-// SyncKeyRangesFromEtcdAtRevision applies a watcher event. The revision
-// argument is retained for compatibility with older callers.
-func (m *Manager) SyncKeyRangesFromEtcdAtRevision(labelRule *labeler.LabelRule, _ int64) error {
-	return m.applyKeyRangesFromEtcd(labelRule)
-}
-
-func (m *Manager) applyKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	return m.syncKeyRangesFromEtcdLocked(labelRule)
@@ -781,20 +745,7 @@ func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule) erro
 }
 
 // SyncKeyRangesDeleteFromEtcd synchronizes key ranges deletion.
-func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) {
-	if err := m.applyKeyRangesDeleteFromEtcd(ruleID); err != nil {
-		log.Error("failed to sync affinity key range deletion from etcd",
-			zap.String("rule-id", ruleID), zap.Error(err))
-	}
-}
-
-// SyncKeyRangesDeleteFromEtcdAtRevision applies a watcher deletion. The
-// revision argument is retained for compatibility with older callers.
-func (m *Manager) SyncKeyRangesDeleteFromEtcdAtRevision(ruleID string, _ int64) error {
-	return m.applyKeyRangesDeleteFromEtcd(ruleID)
-}
-
-func (m *Manager) applyKeyRangesDeleteFromEtcd(ruleID string) error {
+func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	return m.syncKeyRangesDeleteFromEtcdLocked(ruleID)
