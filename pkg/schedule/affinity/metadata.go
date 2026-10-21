@@ -93,6 +93,9 @@ func affinityConflict() error { return errs.ErrEtcdTxnConflict.FastGenByArgs() }
 //
 //nolint:unused // consumed by the planner integration in this branch.
 func (m *Manager) commitGroupTarget(ctx context.Context, original, target Group, ranges GroupKeyRanges, conditions []clientv3.Cmp, current func() bool) (bool, error) {
+	if err := m.refreshMetadataBeforeWrite(); err != nil {
+		return false, err
+	}
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 	if !current() {

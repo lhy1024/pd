@@ -88,6 +88,10 @@ type Manager struct {
 	// labelRuleBuffer is a buffer used during etcd synchronization.
 	// When synchronizing via etcd, LabelRule information may arrive earlier than group information.
 	labelRuleBuffer map[string]*labeler.LabelRule // {group_id} -> labelRule
+	// metadataNeedsReload is set when this Manager has no watcher (Classic
+	// mode) and a write's local baseline may be stale. The next explicit write
+	// refreshes the authoritative baseline before validating its request.
+	metadataNeedsReload bool
 }
 
 // NewManager creates a new affinity Manager.
@@ -126,6 +130,39 @@ func (m *Manager) initialize() error {
 	m.startAvailabilityCheckLoop()
 	log.Info("affinity manager initialized", zap.Int("group-count", len(m.groups)))
 	return nil
+}
+
+func (m *Manager) refreshMetadataBeforeWrite() error {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	if !m.metadataNeedsReload {
+		return nil
+	}
+	m.metadataNeedsReload = false
+	if err := m.reloadAffinityMetadataUnconditionallyLocked(m.ctx); err != nil {
+		m.metadataNeedsReload = true
+		return err
+	}
+	return nil
+}
+
+// loadAffinityLabelRule reads one affinity label from the authoritative
+// storage. AffinityStorage deliberately exposes only the affinity operations;
+// production storage also implements RuleStorage, while the fallback keeps
+// lightweight test/storage implementations compatible.
+func (m *Manager) loadAffinityLabelRule(ruleID string) (string, error) {
+	if loader, ok := m.storage.(interface {
+		LoadRegionRule(string) (string, error)
+	}); ok {
+		return loader.LoadRegionRule(ruleID)
+	}
+	var value string
+	err := m.storage.LoadAllAffinityLabels(func(key, candidate string) {
+		if key == ruleID || strings.HasSuffix(key, "/"+ruleID) {
+			value = candidate
+		}
+	})
+	return value, err
 }
 
 // IsAvailable checks that the Manager contains at least one Group.
@@ -700,6 +737,42 @@ func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
 	return m.syncKeyRangesFromEtcdLocked(labelRule)
 }
 
+// SyncKeyRangesFromEtcdEvent applies a watcher event only when its value still
+// matches storage. This prevents a delayed old event from replacing a newer
+// local API range view used by cross-group overlap validation.
+func (m *Manager) SyncKeyRangesFromEtcdEvent(labelRule *labeler.LabelRule) error {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	// A watcher event can be delayed after a local API commit. Read the
+	// authoritative label before publishing it; an old event must never replace
+	// the range view used by the next cross-group overlap check.
+	if labelRule != nil {
+		value, err := m.loadAffinityLabelRule(labelRule.ID)
+		if err != nil {
+			return err
+		}
+		if value == "" {
+			return nil
+		}
+		current, err := labeler.NewLabelRuleFromJSON([]byte(value))
+		if err != nil {
+			return err
+		}
+		currentRanges, err := extractKeyRangesFromLabelRule(current)
+		if err != nil {
+			return err
+		}
+		eventRanges, err := extractKeyRangesFromLabelRule(labelRule)
+		if err != nil {
+			return err
+		}
+		if !affinityRangesEqual(currentRanges, eventRanges) {
+			return nil
+		}
+	}
+	return m.syncKeyRangesFromEtcdLocked(labelRule)
+}
+
 func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule) error {
 	groupID, isAffinity := parseAffinityGroupIDFromLabelRule(labelRule)
 	if !isAffinity {
@@ -748,6 +821,21 @@ func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule) erro
 func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	return m.syncKeyRangesDeleteFromEtcdLocked(ruleID)
+}
+
+// SyncKeyRangesDeleteFromEtcdEvent ignores a delayed delete when the rule has
+// already been recreated or replaced by a newer API write.
+func (m *Manager) SyncKeyRangesDeleteFromEtcdEvent(ruleID string) error {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	// Ignore a delayed delete event when the rule has already been recreated or
+	// replaced by a newer API write.
+	if value, err := m.loadAffinityLabelRule(ruleID); err != nil {
+		return err
+	} else if value != "" {
+		return nil
+	}
 	return m.syncKeyRangesDeleteFromEtcdLocked(ruleID)
 }
 

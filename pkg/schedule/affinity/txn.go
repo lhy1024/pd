@@ -177,12 +177,18 @@ func MakeLabelRule(groupKeyRanges GroupKeyRanges) *labeler.LabelRule {
 
 // CreateAffinityGroups adds multiple affinity groups to storage and creates corresponding label rules.
 func (m *Manager) CreateAffinityGroups(changes []GroupKeyRanges) error {
+	if err := m.refreshMetadataBeforeWrite(); err != nil {
+		return err
+	}
 	return m.createGroupsWithSkipExisting(changes, false)
 }
 
 // CreateAffinityGroupsIfNotExists adds multiple affinity groups, skipping those that already exist.
 // Only groups still absent after the admission gate require valid, nonempty ranges.
 func (m *Manager) CreateAffinityGroupsIfNotExists(changes []GroupKeyRanges) error {
+	if err := m.refreshMetadataBeforeWrite(); err != nil {
+		return err
+	}
 	return m.createGroupsWithSkipExisting(changes, true)
 }
 
@@ -340,6 +346,9 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 //   - Skips non-existent groups
 //   - Deletes groups even if they have key ranges
 func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
+	if err := m.refreshMetadataBeforeWrite(); err != nil {
+		return err
+	}
 	if len(groupIDs) == 0 {
 		return errs.ErrAffinityGroupContent.FastGenByArgs("no group ids provided")
 	}
@@ -441,11 +450,17 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 
 // UpdateAffinityGroupPeers updates the leader and voter stores of an affinity group and marks it available.
 func (m *Manager) UpdateAffinityGroupPeers(groupID string, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
+	if err := m.refreshMetadataBeforeWrite(); err != nil {
+		return nil, err
+	}
 	return m.updateAffinityGroupPeersWithAffinityVer(groupID, 0, leaderStoreID, voterStoreIDs)
 }
 
 // UpdateAffinityGroupPolicy updates the balance policy of an affinity group.
 func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy) (*GroupState, error) {
+	if err := m.refreshMetadataBeforeWrite(); err != nil {
+		return nil, err
+	}
 	if err := ValidateGroupID(groupID); err != nil {
 		return nil, err
 	}
@@ -598,6 +613,9 @@ func (m *Manager) keyRangesOrEmpty(groupID string) GroupKeyRanges {
 // Currently migration (removing a range from group A and adding the same range to group B in one request)
 // is not supported because add validation checks overlaps against existing ranges before removals are applied.
 func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRanges) error {
+	if err := m.refreshMetadataBeforeWrite(); err != nil {
+		return err
+	}
 	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return err
