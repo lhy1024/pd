@@ -200,9 +200,7 @@ func (b *affinityBalancer) prepareSearch(id string, task *affinityBalanceTask) (
 		task.search = search
 		return search, nil
 	}
-	// Build the scorer before searching ranges. A table already at the
-	// mathematical lower bound has no candidate to validate or commit, so its
-	// stable result needs only the cheap local counts.
+	// Build the scorer before searching ranges.
 	groups := make([]*affinity.Group, 0, len(snapshot.Groups))
 	for _, group := range snapshot.Groups {
 		groups = append(groups, &group.Group)
@@ -210,11 +208,6 @@ func (b *affinityBalancer) prepareSearch(id string, task *affinityBalanceTask) (
 	scorer, err := affinity.NewBalanceScorer(groups)
 	if err != nil {
 		return nil, err
-	}
-	if balanceScoreAtTheoreticalLowerBound(snapshot, scorer) {
-		search = &balanceSearch{snapshot: snapshot, scorer: scorer}
-		task.search = search
-		return search, nil
 	}
 	if !manager.BalanceSnapshotCurrent(snapshot) {
 		return nil, errs.ErrEtcdTxnConflict.FastGenByArgs()
