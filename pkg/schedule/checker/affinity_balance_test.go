@@ -76,7 +76,7 @@ func newAffinityBalanceTestCluster(t *testing.T, storeCount uint64) (*mockcluste
 	return tc, newTestAffinityChecker(t.Context(), tc, opt)
 }
 
-func createBalanceGroup(t *testing.T, manager *affinity.Manager, id, start, end string,
+func createBalanceGroup(t testing.TB, manager *affinity.Manager, id, start, end string,
 	leader uint64, voters []uint64, policy affinity.BalancePolicy) {
 	t.Helper()
 	group := &affinity.Group{ID: id, LeaderStoreID: leader, VoterStoreIDs: voters}
@@ -87,7 +87,7 @@ func createBalanceGroup(t *testing.T, manager *affinity.Manager, id, start, end 
 	}
 }
 
-func addBalanceRegion(t *testing.T, tc *mockcluster.Cluster, manager *affinity.Manager, id uint64,
+func addBalanceRegion(t testing.TB, tc *mockcluster.Cluster, manager *affinity.Manager, id uint64,
 	start, end string, leader uint64, voters ...uint64) *core.RegionInfo {
 	t.Helper()
 	followers := slices.DeleteFunc(slices.Clone(voters), func(id uint64) bool { return id == leader })
