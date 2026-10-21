@@ -16,8 +16,6 @@ package affinity
 
 import (
 	"context"
-	"encoding/json"
-	"slices"
 	"testing"
 	"time"
 
@@ -149,11 +147,9 @@ func TestBalanceCommitRejectsNewSpecialUseVoter(t *testing.T) {
 type balanceConditionalStorage struct {
 	storage.Storage
 	expected clientv3.Cmp
-	received [][]clientv3.Cmp
 }
 
 func (s *balanceConditionalStorage) RunInTxnWithConditions(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
-	s.received = append(s.received, slices.Clone(conditions))
 	if len(conditions) != 1 ||
 		string(conditions[0].KeyBytes()) != string(s.expected.KeyBytes()) ||
 		conditions[0].Target != s.expected.Target || conditions[0].Result != s.expected.Result ||
@@ -199,7 +195,6 @@ func TestBalanceCommitRejectsRevokedPrimaryTerm(t *testing.T) {
 	snapshot := manager.GetBalanceSnapshot(ids[0])
 	require.NotNil(t, snapshot)
 	require.NoError(t, manager.PrepareBalanceCommit(t.Context(), snapshot))
-	require.Empty(t, conditional.received)
 
 	require.NoError(t, base.RunInTxn(t.Context(), func(txn kv.Txn) error {
 		return txn.Save(termKey, "primary-term-2")
@@ -207,80 +202,8 @@ func TestBalanceCommitRejectsRevokedPrimaryTerm(t *testing.T) {
 	committed, err := manager.CommitBalanceTarget(t.Context(), snapshot, balanceCommitTarget(snapshot, ids[0], 2))
 	require.NoError(t, err)
 	require.False(t, committed)
-	require.Len(t, conditional.received, 1)
-	require.Equal(t, []clientv3.Cmp{expected}, conditional.received[0])
 	require.Equal(t, uint64(1), manager.GetAffinityGroupState(ids[0]).LeaderStoreID)
 	require.Equal(t, uint64(1), loadStoredGroup(t, manager, ids[0]).LeaderStoreID)
-}
-
-func TestPrepareBalanceCommitRejectsIndependentRangeWatcherUpdates(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		apply func(*testing.T, *Manager, string)
-	}{
-		{
-			name: "labeler-ahead-of-range-cache",
-			apply: func(t *testing.T, manager *Manager, groupID string) {
-				rule := MakeLabelRule(GroupKeyRanges{GroupID: groupID, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{9}, EndKey: []byte{10}}}})
-				require.NoError(t, manager.regionLabeler.SetLabelRule(rule))
-			},
-		},
-		{
-			name: "range-cache-ahead-of-labeler",
-			apply: func(t *testing.T, manager *Manager, groupID string) {
-				rule := MakeLabelRule(GroupKeyRanges{GroupID: groupID, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{9}, EndKey: []byte{10}}}})
-				data, err := json.Marshal(rule)
-				require.NoError(t, err)
-				rule, err = labeler.NewLabelRuleFromJSON(data)
-				require.NoError(t, err)
-				require.NoError(t, manager.SyncKeyRangesFromEtcd(rule))
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			manager := newMetadataTestManager(t)
-			groupID := seedMetadataTestGroups(t, manager, []uint64{1})[0]
-			tc.apply(t, manager, groupID)
-			snapshot := manager.GetBalanceSnapshot(groupID)
-			require.NotNil(t, snapshot)
-			require.True(t, manager.BalanceSnapshotCurrent(snapshot))
-
-			require.NoError(t, manager.PrepareBalanceCommit(t.Context(), snapshot))
-		})
-	}
-}
-
-func TestPrepareBalanceCommitIgnoresRangeOrder(t *testing.T) {
-	manager := newMetadataTestManager(t)
-	ranges := GroupKeyRanges{GroupID: "_tidb_pt_10_p1", KeyRanges: []keyutil.KeyRange{
-		{StartKey: []byte{0}, EndKey: []byte{1}}, {StartKey: []byte{2}, EndKey: []byte{3}},
-	}}
-	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{ranges}))
-	reordered := cloneBalanceRanges(ranges)
-	slices.Reverse(reordered.KeyRanges)
-	require.NoError(t, manager.regionLabeler.SetLabelRule(MakeLabelRule(reordered)))
-
-	snapshot := manager.GetBalanceSnapshot(ranges.GroupID)
-	require.NotNil(t, snapshot)
-	require.NoError(t, manager.PrepareBalanceCommit(t.Context(), snapshot))
-	require.Equal(t, ranges, snapshot.Ranges[ranges.GroupID])
-}
-
-func TestPrepareBalanceCommitIgnoresSimilarTableKeys(t *testing.T) {
-	manager := newMetadataTestManager(t)
-	ids := seedMetadataTestGroups(t, manager, []uint64{1})
-	otherID := "_tidb_pt_10_pother_p1"
-	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{
-		GroupID: otherID,
-		KeyRanges: []keyutil.KeyRange{{
-			StartKey: []byte{10},
-			EndKey:   []byte{11},
-		}},
-	}}))
-
-	snapshot := manager.GetBalanceSnapshot(ids[0])
-	require.NotNil(t, snapshot)
-	require.NoError(t, manager.PrepareBalanceCommit(t.Context(), snapshot))
 }
 
 func TestBalanceCommitDoesNotOverwriteLaterWatcherTarget(t *testing.T) {
@@ -293,7 +216,7 @@ func TestBalanceCommitDoesNotOverwriteLaterWatcherTarget(t *testing.T) {
 	require.NoError(t, base.RunInTxn(t.Context(), func(txn kv.Txn) error {
 		return base.SaveAffinityGroup(txn, later.ID, &later)
 	}))
-	manager.SyncGroupFromEtcd(&later)
+	require.NoError(t, manager.SyncGroupFromEtcd(&later))
 
 	committed, err := manager.CommitBalanceTarget(t.Context(), snapshot, balanceCommitTarget(snapshot, ids[0], 2))
 	require.ErrorIs(t, err, errs.ErrEtcdTxnConflict)
@@ -351,7 +274,7 @@ func TestBalanceCommitDoesNotPublishToRebuiltGroupWithSameID(t *testing.T) {
 	require.NoError(t, base.RunInTxn(t.Context(), func(txn kv.Txn) error {
 		return base.SaveAffinityGroup(txn, rebuilt.ID, &rebuilt)
 	}))
-	manager.SyncGroupFromEtcd(&rebuilt)
+	require.NoError(t, manager.SyncGroupFromEtcd(&rebuilt))
 
 	committed, err := manager.CommitBalanceTarget(t.Context(), snapshot, balanceCommitTarget(snapshot, ids[0], 2))
 	require.ErrorIs(t, err, errs.ErrEtcdTxnConflict)

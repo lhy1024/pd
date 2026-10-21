@@ -128,7 +128,7 @@ func (b *affinityBalancer) run(ctx context.Context) {
 			if task == nil {
 				continue
 			}
-			_, err := b.step(ctx, id)
+			err := b.step(ctx, id)
 			if err != nil && !errs.ErrEtcdTxnConflict.Equal(err) && ctx.Err() == nil {
 				log.Warn("failed to balance affinity table", zap.String("table-id", id), zap.Error(err))
 			}
@@ -143,17 +143,17 @@ func (b *affinityBalancer) run(ctx context.Context) {
 // step completes one table search, including final review and one commit
 // attempt. The queue/ticker retries with a fresh snapshot; no search progress is
 // retained between calls. Large tables occupy the worker until this call ends.
-func (b *affinityBalancer) step(ctx context.Context, id string) (stable bool, err error) {
+func (b *affinityBalancer) step(ctx context.Context, id string) error {
 	c, manager := b.checker, b.checker.affinityManager
 	if !c.balanceSchedulingAllowed() {
-		return false, nil
+		return nil
 	}
 	snapshot := manager.GetBalanceSnapshot(id)
 	if snapshot == nil {
-		return false, nil
+		return nil
 	}
 	if len(snapshot.Groups) <= 1 {
-		return true, nil
+		return nil
 	}
 	groups := make([]*affinity.Group, 0, len(snapshot.Groups))
 	for _, group := range snapshot.Groups {
@@ -161,13 +161,13 @@ func (b *affinityBalancer) step(ctx context.Context, id string) (stable bool, er
 	}
 	scorer, err := affinity.NewBalanceScorer(groups)
 	if err != nil {
-		return false, err
+		return err
 	}
 	// Once both dimensions attain the mathematical minimum over every candidate
 	// store, no strict improvement exists. The regular checker still owns safety
 	// repairs and operator convergence, so no Region scan is needed here.
 	if balanceScoreAtTheoreticalLowerBound(snapshot, scorer) {
-		return true, nil
+		return nil
 	}
 	checkInput := func() error {
 		if err := ctx.Err(); err != nil {
@@ -186,23 +186,23 @@ func (b *affinityBalancer) step(ctx context.Context, id string) (stable bool, er
 		}
 		ranges := snapshot.Ranges[group.ID]
 		if !group.AffinitySchedulingAllowed || len(ranges.KeyRanges) == 0 {
-			return false, nil
+			return nil
 		}
 		scan := newBalanceRegionScan(ranges)
 		for {
 			if err := checkInput(); err != nil {
-				return false, err
+				return err
 			}
 			region, covered, done := scan.next(c.cluster)
 			if !covered {
-				return false, nil
+				return nil
 			}
 			if done {
 				break
 			}
 			fit, status := c.validateBalanceCurrentRegion(group, region, waiting)
 			if status != balanceAllowed {
-				return false, nil
+				return nil
 			}
 			checked[region.GetID()] = balanceCheckedRegion{group, region, fit}
 		}
@@ -213,7 +213,7 @@ func (b *affinityBalancer) step(ctx context.Context, id string) (stable bool, er
 		blocked := false
 		for {
 			if err := checkInput(); err != nil {
-				return false, err
+				return err
 			}
 			move, found := candidates.next()
 			if !found {
@@ -232,7 +232,7 @@ func (b *affinityBalancer) step(ctx context.Context, id string) (stable bool, er
 			status := balanceAllowed
 			for {
 				if err := checkInput(); err != nil {
-					return false, err
+					return err
 				}
 				status = c.balanceTargetExecutionStatus(&group.Group, &target)
 				if status != balanceAllowed {
@@ -240,14 +240,14 @@ func (b *affinityBalancer) step(ctx context.Context, id string) (stable bool, er
 				}
 				region, covered, done := scan.next(c.cluster)
 				if !covered {
-					return false, nil
+					return nil
 				}
 				if done {
 					break
 				}
 				current, ok := checked[region.GetID()]
 				if !ok || !sameBalanceRegionInput(current.region, region) || !c.balanceRegionReady(group, region, waiting) {
-					return false, nil
+					return nil
 				}
 				status = c.validateBalanceTarget(&target, region, current.fit)
 				if status != balanceAllowed {
@@ -259,26 +259,26 @@ func (b *affinityBalancer) step(ctx context.Context, id string) (stable bool, er
 				continue
 			}
 			if err := manager.PrepareBalanceCommit(ctx, snapshot); err != nil {
-				return false, err
+				return err
 			}
 			if !b.verifyFinalRegions(ctx, snapshot, checked) {
-				return false, ctx.Err()
+				return ctx.Err()
 			}
 			if !c.balanceSchedulingAllowed() || c.balanceTargetExecutionStatus(&group.Group, &target) != balanceAllowed {
-				return false, nil
+				return nil
 			}
 			committed, err := manager.CommitBalanceTarget(ctx, snapshot, &target)
 			if committed {
 				log.Debug("balanced affinity partition", zap.String("group-id", target.ID))
 			}
-			return false, err
+			return err
 		}
 		// A temporary leader restriction must not trigger a voter replacement.
 		if blocked {
-			return false, nil
+			return nil
 		}
 	}
-	return true, nil
+	return nil
 }
 
 func sameBalanceRegionInput(a, b *core.RegionInfo) bool {
