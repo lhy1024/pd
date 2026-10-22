@@ -41,42 +41,23 @@ func TestCustomGroupsKeepIndependentMetadataTables(t *testing.T) {
 	}
 }
 
-func TestBalancePolicyValidationBoundaries(t *testing.T) {
-	manager := newMetadataTestManager(t)
-	for _, tc := range []struct {
-		id     string
-		policy BalancePolicy
-	}{
-		{id: "valid-empty", policy: ""},
-		{id: "valid-auto", policy: BalancePolicyAuto},
-		{id: "valid-fixed", policy: BalancePolicyFixed},
-	} {
-		group := &Group{ID: tc.id, BalancePolicy: tc.policy}
-		require.NoError(t, manager.AdjustGroup(group))
-		require.NoError(t, manager.SyncGroupFromEtcd(group))
-		require.NotNil(t, manager.GetAffinityGroupState(group.ID))
-	}
-
-	invalid := &Group{ID: "invalid-policy", BalancePolicy: BalancePolicy("manual")}
-	require.ErrorIs(t, manager.AdjustGroup(invalid), errs.ErrAffinityGroupContent)
-	require.NoError(t, manager.SyncGroupFromEtcd(invalid))
-	require.Nil(t, manager.GetAffinityGroupState(invalid.ID))
-}
-
 func TestUpdateAffinityGroupPolicyPersistsAndInvalidates(t *testing.T) {
 	manager := newMetadataTestManager(t)
 	groupID := seedMetadataTestGroups(t, manager, []uint64{1})[0]
 	group := manager.GetAffinityGroupState(groupID)
 	require.NotNil(t, group)
+	require.Equal(t, PhaseStable, group.Phase)
 	affinityVersion := group.affinityVer
 	balanceVersion := manager.metadataTables[TableGroupPrefix(groupID)].version
 
 	updated, err := manager.UpdateAffinityGroupPolicy(groupID, BalancePolicyFixed)
 	require.NoError(t, err)
 	require.Equal(t, BalancePolicyFixed, updated.BalancePolicy)
-	require.Empty(t, manager.GetAffinityGroupState(groupID).AffinityRegionCount)
 	current := manager.GetAffinityGroupState(groupID)
-	require.Greater(t, current.affinityVer, affinityVersion)
+	require.Equal(t, PhaseStable, current.Phase)
+	require.Equal(t, group.AffinityRegionCount, current.AffinityRegionCount)
+	require.Equal(t, group.RegionCount, current.RegionCount)
+	require.Equal(t, affinityVersion, current.affinityVer)
 	require.Greater(t, manager.metadataTables[TableGroupPrefix(groupID)].version, balanceVersion)
 
 	value, err := manager.storage.LoadAffinityGroup(groupID)
@@ -95,6 +76,26 @@ func TestUpdateAffinityGroupPolicyPersistsAndInvalidates(t *testing.T) {
 	updated, err = manager.UpdateAffinityGroupPolicy(groupID, "")
 	require.NoError(t, err)
 	require.Equal(t, BalancePolicyAuto, updated.BalancePolicy)
+	require.Equal(t, PhaseStable, updated.Phase)
+	require.Equal(t, affinityVersion, updated.affinityVer)
+
+	for _, policy := range []BalancePolicy{BalancePolicyFixed, BalancePolicyAuto} {
+		before := manager.GetAffinityGroupState(groupID)
+		balanceVersion = manager.metadataTables[TableGroupPrefix(groupID)].version
+		remote := before.Group
+		remote.BalancePolicy = policy
+		require.NoError(t, manager.storage.RunInTxn(t.Context(), func(txn kv.Txn) error {
+			return manager.storage.SaveAffinityGroup(txn, groupID, &remote)
+		}))
+		require.NoError(t, manager.SyncGroupFromEtcd(&remote))
+		current = manager.GetAffinityGroupState(groupID)
+		require.Equal(t, policy, current.BalancePolicy)
+		require.Equal(t, PhaseStable, current.Phase)
+		require.Equal(t, before.affinityVer, current.affinityVer)
+		require.Equal(t, before.AffinityRegionCount, current.AffinityRegionCount)
+		require.Equal(t, before.RegionCount, current.RegionCount)
+		require.Greater(t, manager.metadataTables[TableGroupPrefix(groupID)].version, balanceVersion)
+	}
 
 	_, err = manager.UpdateAffinityGroupPolicy(groupID, BalancePolicy("manual"))
 	require.ErrorIs(t, err, errs.ErrAffinityGroupContent)

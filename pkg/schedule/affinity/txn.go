@@ -510,7 +510,7 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
 	}
 	groupInfo.BalancePolicy = policy
-	m.resetCountLocked(groupInfo)
+	m.invalidateMetadataLocked(groupID)
 	return newGroupState(groupInfo), nil
 }
 
