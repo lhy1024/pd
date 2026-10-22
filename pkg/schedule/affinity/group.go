@@ -163,7 +163,7 @@ type runtimeGroupInfo struct {
 	availability groupAvailability
 	// degradedExpiredAt indicates the expiration time of groupDegraded. After this time, it should be treated as groupExpired.
 	degradedExpiredAt uint64
-	// AffinityVer initializes at 1 and increments by 1 each time the Group changes.
+	// AffinityVer tracks changes to Region affinity; policy-only updates preserve it.
 	AffinityVer uint64
 	// AffinityRegionCount indicates how many Regions have all Voter and Leader peers in the correct stores. (AffinityVer equals).
 	AffinityRegionCount int

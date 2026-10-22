@@ -535,9 +535,9 @@ func (m *Manager) syncGroupFromEtcdLocked(group *Group) error {
 		return nil
 	}
 	// Voter order has no meaning, but affinity comparisons use canonical order.
-	copy := *group
-	copy.VoterStoreIDs = normalizeVoters(group.VoterStoreIDs)
-	group = &copy
+	clonedGroup := *group
+	clonedGroup.VoterStoreIDs = normalizeVoters(group.VoterStoreIDs)
+	group = &clonedGroup
 
 	// Fast path: avoid taking write lock if nothing changes.
 	m.RLock()
@@ -607,7 +607,8 @@ func (m *Manager) syncGroupFromEtcdLocked(group *Group) error {
 		}
 		if groupInfo.BalancePolicy != group.BalancePolicy {
 			groupInfo.BalancePolicy = group.BalancePolicy
-			changed = true
+			// Policy changes invalidate planning inputs, not Region affinity.
+			m.invalidateMetadataLocked(group.ID)
 		}
 		if groupInfo.CreateTimestamp != group.CreateTimestamp {
 			groupInfo.CreateTimestamp = group.CreateTimestamp
