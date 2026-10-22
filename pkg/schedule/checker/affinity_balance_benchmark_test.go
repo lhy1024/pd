@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/tikv/pd/pkg/mock/mockcluster"
 	"github.com/tikv/pd/pkg/schedule/affinity"
@@ -89,7 +90,7 @@ func newAffinityBalanceBenchmarkSetup(b *testing.B, tc affinityBalanceBenchmarkC
 		cluster: cluster,
 		checker: checker,
 		manager: manager,
-		tableID: "_tidb_pt_affinity_benchmark",
+		tableID: "_tidb_pt_100",
 	}
 	rangeCount := max(1, tc.ranges)
 	if tc.regions%rangeCount != 0 {
@@ -146,6 +147,18 @@ func newAffinityBalanceBenchmarkSetup(b *testing.B, tc affinityBalanceBenchmarkC
 		for id := 4; id <= tc.stores; id++ {
 			cluster.SetStoreBusy(uint64(id), true)
 		}
+	}
+	// Keep stores connected throughout long searches without a heartbeat
+	// goroutine competing with the measured planner. Busy flags stay intact.
+	for id := 1; id <= tc.stores; id++ {
+		cluster.SetStoreLastHeartbeatInterval(uint64(id), -time.Hour)
+	}
+	snapshot := manager.GetBalanceSnapshot(setup.tableID)
+	if snapshot == nil {
+		b.Fatalf("benchmark table %s has no balance snapshot", setup.tableID)
+	}
+	if len(snapshot.Groups) != tc.groups {
+		b.Fatalf("benchmark table has %d groups, want %d", len(snapshot.Groups), tc.groups)
 	}
 	return setup
 }
@@ -205,6 +218,16 @@ func BenchmarkAffinityBalance(b *testing.B) {
 		{name: "ranges/s32_g12_r64_k8", stores: 32, groups: 12, regions: 64, ranges: 8, constrained: true},
 		{name: "rule_boundaries/s32_g12_r64", stores: 32, groups: 12, regions: 64, splitRules: true, constrained: true},
 		{name: "busy/s128_g24_r8", stores: 128, groups: 24, regions: 8, evenLeaders: true, busyDestinations: true},
+		{name: "large/constrained/s300_g300_r8", stores: 300, groups: 300, regions: 8, constrained: true},
+		{name: "large/constrained/s300_g1000_r8", stores: 300, groups: 1000, regions: 8, constrained: true},
+		{name: "large/constrained/s300_g300_r80", stores: 300, groups: 300, regions: 80, constrained: true},
+		{name: "large/constrained/s300_g1000_r80", stores: 300, groups: 1000, regions: 80, constrained: true},
+		{name: "large/improving/s300_g300_r8", stores: 300, groups: 300, regions: 8, resetAfterEachIteration: true},
+		{name: "large/improving/s300_g1000_r8", stores: 300, groups: 1000, regions: 8, resetAfterEachIteration: true},
+		{name: "large/voter/s300_g300_r8", stores: 300, groups: 300, regions: 8, evenLeaders: true, resetAfterEachIteration: true},
+		{name: "large/voter/s300_g1000_r8", stores: 300, groups: 1000, regions: 8, evenLeaders: true, resetAfterEachIteration: true},
+		{name: "large/busy/s300_g300_r8", stores: 300, groups: 300, regions: 8, evenLeaders: true, busyDestinations: true},
+		{name: "large/busy/s300_g1000_r8", stores: 300, groups: 1000, regions: 8, evenLeaders: true, busyDestinations: true},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
