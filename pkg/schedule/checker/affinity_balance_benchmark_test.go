@@ -44,10 +44,8 @@ func newAffinityBalanceBenchmarkSetup(
 	tc := mockcluster.NewCluster(ctx, opt)
 	for id := 1; id <= storeCount; id++ {
 		if constrained {
-			// The first three stores provide one location per zone. All other
-			// stores are in zone z1, so a voter replacement to them violates the
-			// placement rule. This makes the planner enumerate candidates without
-			// finding a legal move.
+			// Only the first three stores carry tier=source. Replacements to
+			// other stores fail the label constraint, so no legal move exists.
 			zone := "z1"
 			if id <= 3 {
 				zone = fmt.Sprintf("z%d", id)
@@ -106,10 +104,15 @@ func newAffinityBalanceBenchmarkSetup(
 func (s *affinityBalanceBenchmarkSetup) resetImprovingTargets(b *testing.B) {
 	b.Helper()
 	b.StopTimer()
+	committed := false
 	for _, groupID := range s.groupIDs {
+		committed = committed || s.manager.GetAffinityGroupState(groupID).LeaderStoreID != 1
 		if _, err := s.manager.UpdateAffinityGroupPeers(groupID, 1, []uint64{1, 2, 3}); err != nil {
 			b.Fatal(err)
 		}
+	}
+	if !committed {
+		b.Fatal("improving setup produced no committed target")
 	}
 	b.StartTimer()
 }
@@ -119,8 +122,9 @@ func (s *affinityBalanceBenchmarkSetup) resetImprovingTargets(b *testing.B) {
 // counts, lazy candidates, Region placement checks, final Region review, and a
 // single target commit when a legal improvement exists.
 //
-// The constrained cases are intentional: they measure the worst useful case
-// where the scorer finds improvements but placement rules reject every target.
+// The constrained cases measure searches where the scorer finds improvements
+// but store label constraints reject every target; they are not a general
+// worst-case bound for placement validation.
 // They must be kept separate from placement's FitRegion microbenchmarks because
 // the cost being measured includes affinity table and Region traversal.
 func BenchmarkAffinityBalance(b *testing.B) {

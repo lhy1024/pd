@@ -344,15 +344,30 @@ func TestAffinityBalanceCandidatePlacementPrefilter(t *testing.T) {
 			Key: "zone", Op: placement.In, Values: []string{"a"},
 		}},
 	}))
+	require.NoError(t, tc.GetRuleManager().SetRule(&placement.Rule{
+		GroupID: placement.DefaultGroupID, ID: "followers-bc", Index: 2,
+		Role: placement.Follower, Count: 2,
+		LabelConstraints: []placement.LabelConstraint{{Key: "zone", Op: placement.In, Values: []string{"b", "c"}}},
+	}))
+	require.NoError(t, tc.GetRuleManager().SetRule(&placement.Rule{
+		GroupID: placement.DefaultGroupID, ID: "learners-a", Index: 3,
+		Role: placement.Learner, Count: 1,
+		LabelConstraints: []placement.LabelConstraint{{Key: "zone", Op: placement.In, Values: []string{"a"}}},
+	}))
 	checker := newTestAffinityChecker(t.Context(), tc, opt)
 	ranges := affinity.GroupKeyRanges{KeyRanges: []keyutil.KeyRange{{StartKey: []byte("a"), EndKey: []byte("b")}}}
-	leaderTarget := &affinity.Group{LeaderStoreID: 3, VoterStoreIDs: []uint64{2, 3}}
+	leaderTarget := &affinity.Group{LeaderStoreID: 3, VoterStoreIDs: []uint64{1, 3, 4}}
 	require.False(t, checker.balanceTargetMaySatisfyPlacement(leaderTarget, ranges))
+	require.True(t, checker.balanceTargetMaySatisfyPlacement(
+		&affinity.Group{LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 3, 4}}, ranges))
+	require.False(t, checker.balanceTargetMaySatisfyPlacement(
+		&affinity.Group{LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}, ranges),
+		"matching a leader or learner rule does not make a follower eligible")
 
 	voterRule := &placement.Rule{
 		GroupID:  placement.DefaultGroupID,
 		ID:       "voters-b",
-		Index:    1,
+		Index:    4,
 		Override: true,
 		Role:     placement.Voter,
 		Count:    2,
@@ -363,6 +378,25 @@ func TestAffinityBalanceCandidatePlacementPrefilter(t *testing.T) {
 	require.NoError(t, tc.GetRuleManager().SetRule(voterRule))
 	voterTarget := &affinity.Group{LeaderStoreID: 3, VoterStoreIDs: []uint64{3, 4}}
 	require.True(t, checker.balanceTargetMaySatisfyPlacement(voterTarget, ranges))
+}
+
+func TestAffinityBalanceAcrossPlacementRuleBoundary(t *testing.T) {
+	tc, checker := newAffinityBalanceTestCluster(t, 3)
+	rule := tc.GetRuleManager().GetRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	rule.ID, rule.Index, rule.Override = "subrange", 1, true
+	rule.StartKeyHex, rule.EndKeyHex = "61", "62" // [a, b)
+	require.NoError(t, tc.GetRuleManager().SetRule(rule))
+	manager := tc.GetAffinityManager()
+	id := "_tidb_pt_100_p0"
+	createBalanceGroup(t, manager, id, "a", "c", 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
+	createBalanceGroup(t, manager, "_tidb_pt_100_p1", "c", "d", 1, []uint64{1, 2, 3}, affinity.BalancePolicyFixed)
+	addBalanceRegion(t, tc, manager, 1, "a", "b", 1, 1, 2, 3)
+	addBalanceRegion(t, tc, manager, 2, "b", "c", 1, 1, 2, 3)
+	require.Empty(t, tc.GetRuleManager().GetRulesForApplyRange([]byte("a"), []byte("c")))
+
+	runAffinityBalanceTask(t, t.Context(), checker)
+	require.NotEqual(t, uint64(1), manager.GetAffinityGroupState(id).LeaderStoreID,
+		"a group may span rule boundaries when its individual Regions satisfy placement")
 }
 
 func TestAffinityBalanceRejectsLearnerStoreAsVoter(t *testing.T) {
