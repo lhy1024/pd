@@ -53,6 +53,46 @@ func balanceCommitTarget(snapshot *BalanceSnapshot, groupID string, leaderStoreI
 	return nil
 }
 
+func TestBalanceCommitRejectsPolicyRoundTripWithoutResettingAffinity(t *testing.T) {
+	for _, source := range []string{"api", "watcher"} {
+		t.Run(source, func(t *testing.T) {
+			manager := newMetadataTestManager(t)
+			id := seedMetadataTestGroups(t, manager, []uint64{1})[0]
+			before := manager.GetAffinityGroupState(id)
+			snapshot := prepareBalanceCommit(t, manager, id)
+			target := balanceCommitTarget(snapshot, id, 2)
+			for _, policy := range []BalancePolicy{BalancePolicyFixed, BalancePolicyAuto} {
+				if source == "api" {
+					_, err := manager.UpdateAffinityGroupPolicy(id, policy)
+					require.NoError(t, err)
+				} else {
+					remote := before.Group
+					remote.BalancePolicy = policy
+					require.NoError(t, manager.storage.RunInTxn(t.Context(), func(txn kv.Txn) error {
+						return manager.storage.SaveAffinityGroup(txn, id, &remote)
+					}))
+					require.NoError(t, manager.SyncGroupFromEtcd(&remote))
+				}
+				current := manager.GetAffinityGroupState(id)
+				require.Equal(t, PhaseStable, current.Phase)
+				require.Equal(t, before.affinityVer, current.affinityVer)
+				require.Equal(t, before.AffinityRegionCount, current.AffinityRegionCount)
+				require.False(t, manager.BalanceSnapshotCurrent(snapshot))
+			}
+			// The policy and target now match their original values; the
+			// table generation must still reject the old planning result.
+			committed, err := manager.CommitBalanceTarget(t.Context(), snapshot, target)
+			require.False(t, committed)
+			require.ErrorIs(t, err, errs.ErrEtcdTxnConflict)
+			require.Equal(t, before.Group, loadStoredGroup(t, manager, id))
+			snapshot = prepareBalanceCommit(t, manager, id)
+			committed, err = manager.CommitBalanceTarget(t.Context(), snapshot, target)
+			require.NoError(t, err)
+			require.True(t, committed)
+		})
+	}
+}
+
 func TestBalanceCommitPreparingStoreRemainsAvailable(t *testing.T) {
 	manager := newMetadataTestManager(t)
 	id := seedMetadataTestGroups(t, manager, []uint64{1})[0]
