@@ -133,10 +133,6 @@ func (h AffinityHandler) createAffinityGroups(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
 			return
 		}
-		if !skipExistCheck && manager.IsGroupExist(groupID) {
-			c.AbortWithStatusJSON(http.StatusConflict, errs.ErrAffinityGroupExist.GenWithStackByArgs(groupID).Error())
-			return
-		}
 		if !skipExistCheck && len(input.Ranges) == 0 {
 			c.AbortWithStatusJSON(http.StatusBadRequest, errs.ErrAffinityGroupContent.GenWithStackByArgs("no key ranges provided for group "+groupID).Error())
 			return
@@ -255,11 +251,11 @@ func (h AffinityHandler) BatchModifyAffinityGroups(c *gin.Context) {
 
 	// Validate and convert operations in one pass
 	affectedGroups := make(map[string]bool)
-	addOps, err := convertAndValidateRangeOps(req.Add, manager, affectedGroups)
+	addOps, err := convertAndValidateRangeOps(req.Add, affectedGroups)
 	if handleAffinityError(c, err) {
 		return
 	}
-	removeOps, err := convertAndValidateRangeOps(req.Remove, manager, affectedGroups)
+	removeOps, err := convertAndValidateRangeOps(req.Remove, affectedGroups)
 	if handleAffinityError(c, err) {
 		return
 	}
@@ -457,15 +453,12 @@ func validateKeyRange(startKey, endKey []byte) error {
 // convertAndValidateRangeOps validates group operations and converts them to GroupKeyRanges format.
 // It updates affectedGroups with all groups encountered.
 // Multiple operations for the same group are automatically merged.
-func convertAndValidateRangeOps(ops []GroupRangesModification, manager *affinity.Manager, affectedGroups map[string]bool) ([]affinity.GroupKeyRanges, error) {
+func convertAndValidateRangeOps(ops []GroupRangesModification, affectedGroups map[string]bool) ([]affinity.GroupKeyRanges, error) {
 	grouped := make(map[string][]keyutil.KeyRange)
 
 	for _, op := range ops {
 		if err := affinity.ValidateGroupID(op.ID); err != nil {
 			return nil, err
-		}
-		if !manager.IsGroupExist(op.ID) {
-			return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(op.ID)
 		}
 		affectedGroups[op.ID] = true
 		if len(op.Ranges) == 0 {
