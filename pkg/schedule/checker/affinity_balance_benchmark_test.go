@@ -114,14 +114,14 @@ func newAffinityBalanceBenchmarkSetup(b *testing.B, tc affinityBalanceBenchmarkC
 			// Interleave groups so multiple ranges remain disjoint after Merge.
 			start := (rangeIndex*tc.groups + groupIndex) * regionsPerRange
 			ranges.KeyRanges = append(ranges.KeyRanges, keyutil.KeyRange{
-				StartKey: []byte(fmt.Sprintf("%08d", start)),
-				EndKey:   []byte(fmt.Sprintf("%08d", start+regionsPerRange)),
+				StartKey: fmt.Appendf(nil, "%08d", start),
+				EndKey:   fmt.Appendf(nil, "%08d", start+regionsPerRange),
 			})
 			if tc.splitRules {
 				rule := cluster.GetRuleManager().GetRule(placement.DefaultGroupID, placement.DefaultRuleID)
 				rule.ID, rule.Index, rule.Override = fmt.Sprintf("boundary-%d-%d", groupIndex, rangeIndex), 1, true
-				rule.StartKeyHex = hex.EncodeToString([]byte(fmt.Sprintf("%08d", start+regionsPerRange/2)))
-				rule.EndKeyHex = hex.EncodeToString([]byte(fmt.Sprintf("%08d", start+regionsPerRange)))
+				rule.StartKeyHex = hex.EncodeToString(fmt.Appendf(nil, "%08d", start+regionsPerRange/2))
+				rule.EndKeyHex = hex.EncodeToString(fmt.Appendf(nil, "%08d", start+regionsPerRange))
 				if err := cluster.GetRuleManager().SetRule(rule); err != nil {
 					b.Fatal(err)
 				}
@@ -243,7 +243,7 @@ func BenchmarkAffinityBalance(b *testing.B) {
 			}
 			b.ReportAllocs()
 			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				if err := setup.checker.balancer.step(setup.ctx, setup.tableID); err != nil {
 					b.Fatal(err)
 				}
@@ -292,7 +292,7 @@ func BenchmarkAffinityBalanceIdle(b *testing.B) {
 			balancer := &affinityBalancer{checker: setup.checker, tables: map[string]*affinityBalanceTask{setup.tableID: {}}}
 			b.ReportAllocs()
 			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				balancer.markAllDirty()
 				balancer.processDirty(setup.ctx)
 			}
