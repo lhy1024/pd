@@ -68,6 +68,29 @@ type labelSyncEvent struct {
 	deleted bool
 }
 
+func (w *Watcher) applyGroupPending() error {
+	pending := w.groupPending
+	w.groupPending = nil
+	for _, event := range pending {
+		var err error
+		if event.deleted {
+			err = w.affinityManager.SyncGroupDeleteFromEtcd(event.id)
+		} else {
+			err = w.affinityManager.SyncGroupFromEtcd(event.group)
+		}
+		if err != nil {
+			// Events before the failed one may already be published. Reconcile
+			// the Manager before LoopWatcher retries the batch, otherwise a key
+			// absent from the snapshot can remain as a ghost group.
+			if reloadErr := w.affinityManager.ReloadAffinityMetadataFromStorage(); reloadErr != nil {
+				log.Warn("failed to reconcile affinity groups after a partial watcher batch", zap.Error(reloadErr))
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 // NewWatcher creates a new watcher to watch the affinity changes from PD.
 func NewWatcher(
 	ctx context.Context,
@@ -123,20 +146,7 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 		return nil
 	}
 	applyPending := func() error {
-		pending := w.groupPending
-		w.groupPending = nil
-		for _, event := range pending {
-			if event.deleted {
-				if err := w.affinityManager.SyncGroupDeleteFromEtcd(event.id); err != nil {
-					return err
-				}
-			} else {
-				if err := w.affinityManager.SyncGroupFromEtcd(event.group); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return w.applyGroupPending()
 	}
 
 	w.groupWatcher = etcdutil.NewLoopWatcher(
