@@ -82,6 +82,10 @@ type Manager struct {
 	// The following members are protected by metaMutex only, not protected by RWMutex.
 	// keyRanges cached in memory to reduce labeler lock contention
 	keyRanges map[string]GroupKeyRanges // {group_id} -> key ranges
+	// affinityRangeVersion is the last globally fenced range-write version
+	// observed by this Manager. It is protected by metaMutex and is compared
+	// before every range mutation.
+	affinityRangeVersion uint64
 	// labelRuleBuffer is a buffer used during etcd synchronization.
 	// When synchronizing via etcd, LabelRule information may arrive earlier than group information.
 	labelRuleBuffer map[string]*labeler.LabelRule // {group_id} -> labelRule
@@ -645,6 +649,7 @@ func (m *Manager) reloadAffinityMetadataUnconditionallyLocked(ctx context.Contex
 // primary conditions through reloadAffinityMetadataLocked.
 func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, conditions []clientv3.Cmp) error {
 	loaded := make([]Group, 0)
+	var rangeVersion uint64
 	plan := m.regionLabeler.NewPlan()
 	for _, rule := range m.regionLabeler.GetAllLabelRules() {
 		if strings.HasPrefix(rule.ID, LabelRuleIDPrefix) {
@@ -653,7 +658,12 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 			}
 		}
 	}
-	err := m.runAffinityTxn(ctx, conditions, func(_ kv.Txn) error {
+	err := m.runAffinityTxn(ctx, conditions, func(txn kv.Txn) error {
+		var err error
+		rangeVersion, err = loadAffinityRangeVersion(txn)
+		if err != nil {
+			return err
+		}
 		if err := m.storage.LoadAllAffinityGroups(func(_, value string) {
 			var group Group
 			if json.Unmarshal([]byte(value), &group) == nil && validateBalancePolicy(group.BalancePolicy) == nil {
@@ -686,6 +696,7 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 
 	m.Lock()
 	defer m.Unlock()
+	m.affinityRangeVersion = rangeVersion
 	m.groups = make(map[string]*runtimeGroupInfo, len(loaded))
 	m.regions = make(map[uint64]regionCache)
 	m.metadataTables = make(map[string]*metadataTableState)

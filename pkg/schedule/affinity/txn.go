@@ -286,7 +286,7 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 		return err
 	}
 
-	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
+	err = m.runAffinityRangeMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
 		for _, group := range filteredGroups {
 			persisted, err := loadAffinityGroupInTxn(txn, group.ID)
 			if err != nil {
@@ -413,7 +413,7 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 
 	// Pin existing group/label revisions so an old delete cannot remove a
 	// recreated group. Capacity was checked before this single transaction.
-	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
+	err = m.runAffinityRangeMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
 		for _, id := range toDelete {
 			if _, err := loadAffinityValue(txn, keypath.AffinityGroupPath(id)); err != nil {
 				return err
@@ -577,6 +577,7 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 			return loadErr
 		}
 		if persisted == nil {
+			m.metadataNeedsReload = true
 			return errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
 		}
 		updated = *persisted
@@ -760,7 +761,7 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 	if len(labelOps)+2*len(affectedIDs) > 2*endpoint.MaxAffinityTxnBatchOps {
 		return errs.ErrExceedMaxEtcdTxnOps.GenWithStackByArgs()
 	}
-	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
+	err = m.runAffinityRangeMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
 		for _, groupID := range affectedIDs {
 			// Existing group revision also fences range transactions which
 			// delete their label, leaving no label key to rewrite in recovery.
