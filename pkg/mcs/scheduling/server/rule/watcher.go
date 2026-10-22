@@ -643,6 +643,7 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 		true, /* withPrefix */
 	)
 	rw.labelWatcher.SetRetryOnPostEventError()
+	rw.labelWatcher.SetReconcileDeletedKeys()
 	rw.labelWatcher.StartWatchLoop()
 	return rw.labelWatcher.WaitLoad()
 }

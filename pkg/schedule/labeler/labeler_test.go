@@ -15,7 +15,6 @@
 package labeler
 
 import (
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -102,8 +101,7 @@ func TestAdjustRule2(t *testing.T) {
 func TestGetSetRule(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	labeler, err := NewRegionLabeler(ctx, store, time.Millisecond*10)
 	re.NoError(err)
 	assertLabelerCounts := func(ruleCount, keyRangeCount int) {
@@ -164,8 +162,7 @@ func TestGetSetRule(t *testing.T) {
 }
 
 func TestApplyLabelRuleDoesNotWriteStorage(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
 	l, err := NewRegionLabeler(ctx, store, time.Hour)
 	require.NoError(t, err)
@@ -196,8 +193,7 @@ func TestTxnWithEtcd(t *testing.T) {
 	_, client, clean := etcdutil.NewTestEtcdCluster(t, 1, nil)
 	defer clean()
 	store := storage.NewStorageWithEtcdBackend(client)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	labeler, err := NewRegionLabeler(ctx, store, time.Millisecond*10)
 	re.NoError(err)
 	// test patch rules in batch
@@ -263,8 +259,7 @@ func TestTxnWithEtcd(t *testing.T) {
 func TestIndex(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	labeler, err := NewRegionLabeler(ctx, store, time.Millisecond*10)
 	re.NoError(err)
 	rules := []*LabelRule{
@@ -309,8 +304,7 @@ func TestIndex(t *testing.T) {
 func TestSaveLoadRule(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	labeler, err := NewRegionLabeler(ctx, store, time.Millisecond*10)
 	re.NoError(err)
 	rules := []*LabelRule{
@@ -322,8 +316,7 @@ func TestSaveLoadRule(t *testing.T) {
 		err := labeler.SetLabelRule(r)
 		re.NoError(err)
 	}
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	defer cancel1()
+	ctx1 := t.Context()
 	labeler, err = NewRegionLabeler(ctx1, store, time.Millisecond*100)
 	re.NoError(err)
 	for _, r := range rules {
@@ -360,8 +353,7 @@ func expectSameRules(re *require.Assertions, r1, r2 *LabelRule) {
 func TestKeyRange(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	labeler, err := NewRegionLabeler(ctx, store, time.Millisecond*10)
 	re.NoError(err)
 	rules := []*LabelRule{
@@ -405,8 +397,7 @@ func TestKeyRange(t *testing.T) {
 func TestLabelerRuleTTL(t *testing.T) {
 	re := require.New(t)
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	labeler, err := NewRegionLabeler(ctx, store, time.Minute)
 	re.NoError(err)
 	assertLabelerCounts := func(ruleCount, keyRangeCount int) {
@@ -479,8 +470,7 @@ func TestLabelerRuleTTL(t *testing.T) {
 
 func TestExpiredRuleRemovalPublishesRangeIndex(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	labeler, err := NewRegionLabeler(ctx, endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil), time.Hour)
 	re.NoError(err)
 	re.NoError(labeler.SetLabelRule(&LabelRule{
@@ -516,8 +506,7 @@ func TestGC(t *testing.T) {
 	re := require.New(t)
 	// set gcInterval to 1 hour.
 	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	labeler, err := NewRegionLabeler(ctx, store, time.Hour)
 	re.NoError(err)
 	ttls := []string{"1ms", "1ms", "1ms", "5ms", "5ms", "10ms", "1h", "24h"}

@@ -15,7 +15,6 @@
 package affinity
 
 import (
-	"context"
 	"fmt"
 	"maps"
 	"testing"
@@ -51,8 +50,7 @@ func TestStoreCondition(t *testing.T) {
 
 func TestCollectUnavailableStores(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	memoryStorage := storage.NewStorageWithMemoryBackend()
 	storeInfos := core.NewStoresInfo()
@@ -114,8 +112,7 @@ func TestCollectUnavailableStores(t *testing.T) {
 
 func TestObserveAvailableRegion(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := storage.NewStorageWithMemoryBackend()
 	storeInfos := core.NewStoresInfo()
@@ -203,8 +200,7 @@ func TestObserveAvailableRegion(t *testing.T) {
 
 func TestAvailabilityCheckInvalidatesGroup(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := storage.NewStorageWithMemoryBackend()
 	storeInfos := core.NewStoresInfo()
@@ -245,8 +241,7 @@ func TestAvailabilityCheckInvalidatesGroup(t *testing.T) {
 
 func TestStoreHealthCheck(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Create a test storage
 	store := storage.NewStorageWithMemoryBackend()
@@ -351,8 +346,7 @@ func TestStoreHealthCheck(t *testing.T) {
 // the set of unavailable stores does not change.
 func TestDegradedGroupShouldExpire(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := storage.NewStorageWithMemoryBackend()
 	storeInfos := core.NewStoresInfo()
@@ -400,8 +394,7 @@ func TestDegradedGroupShouldExpire(t *testing.T) {
 // and respects leader-only constraints.
 func TestGroupAvailabilityPriority(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := storage.NewStorageWithMemoryBackend()
 	storeInfos := core.NewStoresInfo()
