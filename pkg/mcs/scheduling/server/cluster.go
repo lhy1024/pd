@@ -127,6 +127,7 @@ func NewCluster(
 	checkMembershipCh chan struct{},
 	httpClient *http.Client,
 	backendAddress string,
+	keyspaceAware bool,
 ) (*Cluster, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	labelerManager, err := labeler.NewRegionLabeler(ctx, storage, regionLabelGCInterval)
@@ -137,7 +138,7 @@ func NewCluster(
 		return nil, err
 	}
 	ruleManager := placement.NewRuleManager(ctx, storage, basicCluster, persistConfig)
-	affinityManager, err := affinity.NewManager(ctx, storage, basicCluster, persistConfig, labelerManager)
+	affinityManager, err := affinity.NewManager(ctx, storage, basicCluster, persistConfig, labelerManager, keyspaceAware)
 	if err != nil {
 		storage.Close()
 		hbStreams.Close()

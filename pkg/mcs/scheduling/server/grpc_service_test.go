@@ -208,6 +208,7 @@ func newTestSchedulingServiceForSplit(
 		make(chan struct{}),
 		http.DefaultClient,
 		"",
+		false,
 	)
 	re.NoError(err)
 

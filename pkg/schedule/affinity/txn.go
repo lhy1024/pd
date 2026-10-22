@@ -219,6 +219,11 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 
 	seen := make(map[string]struct{}, len(groupIDs))
 	toDelete := make([]string, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if err := m.validateGroupID(groupID); err != nil {
+			return err
+		}
+	}
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
@@ -376,6 +381,9 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 
 	// Step 0: Validate that a Group is either fully added or fully removed.
 	for _, op := range addOps {
+		if err := m.validateGroupID(op.GroupID); err != nil {
+			return err
+		}
 		if len(op.KeyRanges) == 0 {
 			continue
 		}
@@ -385,6 +393,9 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 		toAdd[op.GroupID] = GroupKeyRanges{}
 	}
 	for _, op := range removeOps {
+		if err := m.validateGroupID(op.GroupID); err != nil {
+			return err
+		}
 		if len(op.KeyRanges) == 0 {
 			continue
 		}

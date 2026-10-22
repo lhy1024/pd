@@ -141,6 +141,37 @@ func TestGetRegionAffinityGroupState(t *testing.T) {
 	}
 }
 
+func TestKeyspaceAwareRejectsLegacyTiDBGroups(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := storage.NewStorageWithMemoryBackend()
+	stores := core.NewStoresInfo()
+	storeInfo := core.NewStoreInfo(&metapb.Store{Id: 1, Address: "test"})
+	storeInfo = storeInfo.Clone(core.SetLastHeartbeatTS(time.Now()))
+	stores.PutStore(storeInfo)
+	conf := mockconfig.NewTestOptions()
+	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+	re.NoError(err)
+	manager, err := NewManager(ctx, store, stores, conf, regionLabeler, true)
+	re.NoError(err)
+
+	err = manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "_tidb_t_1001"}})
+	re.ErrorContains(err, "classic affinity group IDs are not supported")
+	err = manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "_tidb_ks42_t_1001"}})
+	re.NoError(err)
+	_, err = manager.UpdateAffinityGroupPeers("_tidb_t_1001", 1, []uint64{1})
+	re.ErrorContains(err, "classic affinity group IDs are not supported")
+	err = manager.DeleteAffinityGroups([]string{"_tidb_t_1001"}, true)
+	re.ErrorContains(err, "classic affinity group IDs are not supported")
+	_, err = manager.CheckAndGetAffinityGroupState("_tidb_t_1001")
+	re.ErrorContains(err, "classic affinity group IDs are not supported")
+
+	classicManager, err := NewManager(ctx, store, stores, conf, regionLabeler)
+	re.NoError(err)
+	re.NoError(classicManager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "_tidb_t_1001"}}))
+}
+
 // TestBasicGroupOperations tests basic group CRUD operations
 func TestBasicGroupOperations(t *testing.T) {
 	re := require.New(t)

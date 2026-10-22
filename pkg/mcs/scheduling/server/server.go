@@ -553,7 +553,9 @@ func (s *Server) startCluster(ctx context.Context) error {
 		return err
 	}
 	hbStreams = hbstream.NewHeartbeatStreams(ctx, constant.SchedulingServiceName, basicCluster)
-	cluster, err = NewCluster(ctx, s.persistConfig, storage, basicCluster, hbStreams, s.checkMembershipCh, s.GetHTTPClient(), s.GetBackendEndpoints())
+	// The scheduling microservice is only used by the keyspace-aware server
+	// deployment, so reject legacy affinity IDs in its manager.
+	cluster, err = NewCluster(ctx, s.persistConfig, storage, basicCluster, hbStreams, s.checkMembershipCh, s.GetHTTPClient(), s.GetBackendEndpoints(), true)
 	storage = nil
 	hbStreams = nil
 	if err != nil {

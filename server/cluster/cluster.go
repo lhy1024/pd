@@ -414,7 +414,7 @@ func (c *RaftCluster) Start(s Server, bootstrap bool) (err error) {
 	log.Info("region labeler created", zap.Duration("cost", labelerDuration))
 
 	// create affinity manager with region labeler for key range validation and rebuild
-	c.affinityManager, err = affinity.NewManager(c.ctx, c.storage, c, c.GetOpts(), c.regionLabeler)
+	c.affinityManager, err = affinity.NewManager(c.ctx, c.storage, c, c.GetOpts(), c.regionLabeler, c.isKeyspaceGroupEnabled)
 	if err != nil {
 		return err
 	}

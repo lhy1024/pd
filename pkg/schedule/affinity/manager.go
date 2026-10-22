@@ -78,10 +78,13 @@ type Manager struct {
 	// labelRuleBuffer is a buffer used during etcd synchronization.
 	// When synchronizing via etcd, LabelRule information may arrive earlier than group information.
 	labelRuleBuffer map[string]*labeler.LabelRule // {group_id} -> labelRule
+	// keyspaceAware rejects legacy TiDB affinity IDs when the server runs in
+	// keyspace mode. Custom affinity IDs remain supported.
+	keyspaceAware bool
 }
 
 // NewManager creates a new affinity Manager.
-func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetInformer core.StoreSetInformer, conf config.SharedConfigProvider, regionLabeler *labeler.RegionLabeler) (*Manager, error) {
+func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetInformer core.StoreSetInformer, conf config.SharedConfigProvider, regionLabeler *labeler.RegionLabeler, keyspaceAware ...bool) (*Manager, error) {
 	if regionLabeler == nil {
 		return nil, errs.ErrAffinityInternal
 	}
@@ -97,6 +100,9 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 		unavailableStores:   make(map[uint64]storeCondition),
 		keyRanges:           make(map[string]GroupKeyRanges),
 		labelRuleBuffer:     make(map[string]*labeler.LabelRule),
+	}
+	if len(keyspaceAware) > 0 {
+		m.keyspaceAware = keyspaceAware[0]
 	}
 	if err := m.initialize(); err != nil {
 		return nil, err
@@ -146,6 +152,10 @@ func (m *Manager) IsAvailable() bool {
 }
 
 func (m *Manager) initGroupLocked(group *Group) {
+	if err := m.validateGroupID(group.ID); err != nil {
+		log.Warn("skip unsupported affinity group", zap.String("group-id", group.ID), zap.Error(err))
+		return
+	}
 	if _, ok := m.groups[group.ID]; ok {
 		log.Error("group already initialized", zap.String("group-id", group.ID))
 		return
@@ -429,7 +439,7 @@ func (m *Manager) GetAffinityGroupState(id string) *GroupState {
 
 // CheckAndGetAffinityGroupState returns the group state after validating the ID and presence.
 func (m *Manager) CheckAndGetAffinityGroupState(groupID string) (*GroupState, error) {
-	if err := ValidateGroupID(groupID); err != nil {
+	if err := m.validateGroupID(groupID); err != nil {
 		return nil, err
 	}
 	state := m.GetAffinityGroupState(groupID)

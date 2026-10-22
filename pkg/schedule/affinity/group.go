@@ -19,10 +19,13 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/keyspace/constant"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/pkg/utils/keyutil"
@@ -279,7 +282,7 @@ func (g *runtimeGroupInfo) IsRegularSchedulingAllowed() bool {
 
 // AdjustGroup validates the group and sets default values.
 func (m *Manager) AdjustGroup(g *Group) error {
-	if err := ValidateGroupID(g.ID); err != nil {
+	if err := m.validateGroupID(g.ID); err != nil {
 		return err
 	}
 	// If no distribution is provided, we will use the default distribution.
@@ -305,6 +308,33 @@ func (m *Manager) AdjustGroup(g *Group) error {
 		}
 	}
 
+	return nil
+}
+
+func (m *Manager) validateGroupID(id string) error {
+	if err := ValidateGroupID(id); err != nil {
+		return err
+	}
+	if !m.keyspaceAware {
+		return nil
+	}
+	if strings.HasPrefix(id, "_tidb_t_") || strings.HasPrefix(id, "_tidb_pt_") {
+		return errs.ErrAffinityGroupContent.FastGenByArgs("classic affinity group IDs are not supported in keyspace mode; use a keyspace-aware ID")
+	}
+	if !strings.HasPrefix(id, "_tidb_ks") {
+		return nil
+	}
+	parts := strings.SplitN(strings.TrimPrefix(id, "_tidb_ks"), "_", 2)
+	if len(parts) != 2 || parts[0] == "" {
+		return errs.ErrAffinityGroupContent.FastGenByArgs("invalid keyspace-aware affinity group ID")
+	}
+	keyspaceID, err := strconv.ParseUint(parts[0], 10, 32)
+	if err != nil || keyspaceID > uint64(constant.MaxValidKeyspaceID) {
+		return errs.ErrAffinityGroupContent.FastGenByArgs("invalid keyspace ID in affinity group ID")
+	}
+	if !strings.HasPrefix(parts[1], "t_") && !strings.HasPrefix(parts[1], "pt_") {
+		return errs.ErrAffinityGroupContent.FastGenByArgs("invalid keyspace-aware affinity group ID")
+	}
 	return nil
 }
 
