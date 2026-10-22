@@ -28,7 +28,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/errs"
@@ -814,6 +813,9 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 
 // getCurrentRanges retrieves the current key ranges for a group.
 func (m *Manager) getCurrentRanges(groupID string) (GroupKeyRanges, error) {
+	if !m.IsGroupExist(groupID) {
+		return GroupKeyRanges{}, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
+	}
 	// Try cache first
 	if gkr, ok := m.keyRanges[groupID]; ok {
 		return gkr, nil
@@ -823,13 +825,7 @@ func (m *Manager) getCurrentRanges(groupID string) (GroupKeyRanges, error) {
 	labelRule := m.regionLabeler.GetLabelRule(GetLabelRuleID(groupID))
 	if labelRule == nil {
 		// Allow starting from empty when the group exists but has no ranges yet.
-		m.RLock()
-		_, exists := m.groups[groupID]
-		m.RUnlock()
-		if exists {
-			return GroupKeyRanges{GroupID: groupID}, nil
-		}
-		return GroupKeyRanges{}, errors.Errorf("label rule not found for group %s", groupID)
+		return GroupKeyRanges{GroupID: groupID}, nil
 	}
 
 	return extractKeyRangesFromLabelRule(labelRule)

@@ -17,6 +17,7 @@ package affinity
 import (
 	"bytes"
 	"context"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -52,12 +53,13 @@ func affinityRangesEqual(a, b GroupKeyRanges) bool {
 	})
 }
 
-// TableGroupPrefix identifies the table to which an affinity group belongs.
+var partitionGroupIDRegexp = regexp.MustCompile(`^_tidb_pt_[0-9]+_p[0-9]+$`)
+
+// TableGroupPrefix identifies the table for numeric TiDB partition group IDs.
+// Custom group IDs each identify their own table.
 func TableGroupPrefix(groupID string) string {
-	if strings.HasPrefix(groupID, "_tidb_pt_") {
-		if index := strings.LastIndex(groupID, "_p"); index >= len("_tidb_pt_") {
-			return groupID[:index]
-		}
+	if partitionGroupIDRegexp.MatchString(groupID) {
+		return groupID[:strings.LastIndex(groupID, "_p")]
 	}
 	return groupID
 }

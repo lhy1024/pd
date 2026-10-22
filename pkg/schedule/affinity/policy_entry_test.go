@@ -24,6 +24,23 @@ import (
 	"github.com/tikv/pd/pkg/storage/kv"
 )
 
+func TestCustomGroupsKeepIndependentMetadataTables(t *testing.T) {
+	manager := newMetadataTestManager(t)
+	for _, id := range []string{"_tidb_pt_orders_pmanual", "_tidb_pt_orders_p1", "_tidb_pt_10_pmanual", "_tidb_pt_10_p1", "_tidb_pt_10_p2"} {
+		require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}))
+	}
+	require.Equal(t, "_tidb_pt_10", TableGroupPrefix("_tidb_pt_10_p1"))
+	require.Len(t, manager.metadataTables["_tidb_pt_10"].groups, 2)
+	for _, id := range []string{"_tidb_pt_orders_pmanual", "_tidb_pt_orders_p1", "_tidb_pt_10_pmanual"} {
+		require.Equal(t, id, TableGroupPrefix(id))
+		require.Len(t, manager.metadataTables[id].groups, 1)
+		version := manager.metadataTables[id].version
+		_, err := manager.UpdateAffinityGroupPolicy("_tidb_pt_10_p1", BalancePolicyFixed)
+		require.NoError(t, err)
+		require.Equal(t, version, manager.metadataTables[id].version)
+	}
+}
+
 func TestBalancePolicyValidationBoundaries(t *testing.T) {
 	manager := newMetadataTestManager(t)
 	for _, tc := range []struct {
