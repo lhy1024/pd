@@ -51,6 +51,24 @@ func TestGetBalanceSnapshotScopesAndCopiesTableState(t *testing.T) {
 	require.Equal(t, byte(0), fresh.Ranges[ids[0]].KeyRanges[0].StartKey[0])
 }
 
+func TestBalanceTableEligibilityTracksPolicy(t *testing.T) {
+	manager := newMetadataTestManager(t)
+	require.False(t, manager.IsBalanceTableEligible("_tidb_pt_10"))
+	ids := seedMetadataTestGroups(t, manager, []uint64{1})
+	require.False(t, manager.IsBalanceTableEligible(ids[0]))
+	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "_tidb_pt_10_p2"}}))
+	require.True(t, manager.IsBalanceTableEligible(ids[0]))
+
+	for _, id := range []string{ids[0], "_tidb_pt_10_p2"} {
+		_, err := manager.UpdateAffinityGroupPolicy(id, BalancePolicyFixed)
+		require.NoError(t, err)
+	}
+	require.False(t, manager.IsBalanceTableEligible(ids[0]))
+	_, err := manager.UpdateAffinityGroupPolicy(ids[0], BalancePolicyAuto)
+	require.NoError(t, err)
+	require.True(t, manager.IsBalanceTableEligible(ids[0]), "one auto group is sufficient when the table has other fixed groups")
+}
+
 func TestBalanceSnapshotVersionTracksPlacementRules(t *testing.T) {
 	manager := newMetadataTestManager(t)
 	id := seedMetadataTestGroups(t, manager, []uint64{1})[0]

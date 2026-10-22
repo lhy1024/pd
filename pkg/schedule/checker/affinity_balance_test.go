@@ -526,6 +526,40 @@ func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {
 	require.Contains(t, manager.GetAffinityGroupState(ids[0]).VoterStoreIDs, uint64(4))
 }
 
+func TestAffinityBalancePreservesDirtyWhileDisabled(t *testing.T) {
+	for _, blocker := range []string{"paused", "halted", "limit"} {
+		t.Run(blocker, func(t *testing.T) {
+			tc, checker := newAffinityBalanceTestCluster(t, 3)
+			manager := tc.GetAffinityManager()
+			ids := []string{"_tidb_pt_100_p0", "_tidb_pt_100_p1"}
+			keys := []string{"a", "b", "c"}
+			for i, id := range ids {
+				createBalanceGroup(t, manager, id, keys[i], keys[i+1], 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
+				addBalanceRegion(t, tc, manager, uint64(i+1), keys[i], keys[i+1], 1, 1, 2, 3)
+			}
+			balancer := &affinityBalancer{checker: checker, tables: make(map[string]*affinityBalanceTask)}
+			balancer.enqueue(ids[0])
+			switch blocker {
+			case "paused":
+				checker.PauseOrResume(60)
+			case "halted":
+				tc.SetHaltScheduling(true, "test")
+			case "limit":
+				tc.SetAffinityScheduleLimit(0)
+			}
+			balancer.processDirty(t.Context())
+			require.True(t, balancer.tables["_tidb_pt_100"].dirty)
+			require.Equal(t, uint64(1), manager.GetAffinityGroupState(ids[0]).LeaderStoreID)
+
+			checker.PauseOrResume(0)
+			tc.SetHaltScheduling(false, "test")
+			tc.SetAffinityScheduleLimit(4)
+			balancer.processDirty(t.Context())
+			require.NotEqual(t, uint64(1), manager.GetAffinityGroupState(ids[0]).LeaderStoreID)
+		})
+	}
+}
+
 func TestAffinityBalanceDefersDirtyDuringBatch(t *testing.T) {
 	tc, checker := newAffinityBalanceTestCluster(t, 3)
 	manager := tc.GetAffinityManager()

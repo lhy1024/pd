@@ -78,7 +78,7 @@ func newAffinityBalanceBenchmarkSetup(
 		manager: manager,
 		tableID: "_tidb_pt_affinity_benchmark",
 	}
-	for groupIndex := 0; groupIndex < groupCount; groupIndex++ {
+	for groupIndex := range groupCount {
 		groupID := fmt.Sprintf("%s_p%04d", setup.tableID, groupIndex)
 		start := fmt.Sprintf("%08d", groupIndex*regionsPerGroup)
 		end := fmt.Sprintf("%08d", (groupIndex+1)*regionsPerGroup)
@@ -91,7 +91,7 @@ func newAffinityBalanceBenchmarkSetup(
 		voters := []uint64{1, 2, 3}
 		createBalanceGroup(b, manager, groupID, start, end, leader, voters, affinity.BalancePolicyAuto)
 		setup.groupIDs = append(setup.groupIDs, groupID)
-		for regionIndex := 0; regionIndex < regionsPerGroup; regionIndex++ {
+		for regionIndex := range regionsPerGroup {
 			regionID := uint64(groupIndex*regionsPerGroup + regionIndex + 1)
 			regionStart := fmt.Sprintf("%08d", groupIndex*regionsPerGroup+regionIndex)
 			regionEnd := fmt.Sprintf("%08d", groupIndex*regionsPerGroup+regionIndex+1)
@@ -141,7 +141,6 @@ func BenchmarkAffinityBalance(b *testing.B) {
 		{name: "constrained/s128_g24_r8", stores: 128, groups: 24, regions: 8, constrained: true},
 	}
 	for _, tc := range cases {
-		tc := tc
 		b.Run(tc.name, func(b *testing.B) {
 			setup := newAffinityBalanceBenchmarkSetup(b, tc.stores, tc.groups, tc.regions, tc.constrained, tc.balanced)
 			if tc.constrained {

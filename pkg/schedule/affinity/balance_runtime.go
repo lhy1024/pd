@@ -78,17 +78,21 @@ func (m *Manager) GetBalanceVersion(groupID string) (BalanceVersion, bool) {
 	return m.balanceVersionLocked(state), true
 }
 
-// BalanceTableGroupCount reads only the table membership used by the planner
-// admission gate. It avoids loading store metadata for tables that cannot
-// have a balance move with zero or one group.
-func (m *Manager) BalanceTableGroupCount(groupID string) (int, bool) {
+// IsBalanceTableEligible checks membership and policy before loading planning
+// inputs. A table needs multiple groups and at least one non-fixed group.
+func (m *Manager) IsBalanceTableEligible(groupID string) bool {
 	m.RLock()
 	defer m.RUnlock()
 	state := m.metadataTables[TableGroupPrefix(groupID)]
-	if state == nil {
-		return 0, false
+	if state == nil || len(state.groups) <= 1 {
+		return false
 	}
-	return len(state.groups), true
+	for id := range state.groups {
+		if group := m.groups[id]; group != nil && group.BalancePolicy != BalancePolicyFixed {
+			return true
+		}
+	}
+	return false
 }
 
 // GetBalanceGlobalCounts computes the global candidate counts once for a

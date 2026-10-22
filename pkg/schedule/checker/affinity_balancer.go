@@ -101,6 +101,9 @@ func (b *affinityBalancer) markAllDirty() {
 }
 
 func (b *affinityBalancer) processDirty(ctx context.Context) {
+	if ctx.Err() != nil || !b.checker.balanceSchedulingAllowed() {
+		return
+	}
 	b.mu.Lock()
 	ids := make([]string, 0, len(b.tables))
 	for id, task := range b.tables {
@@ -116,7 +119,7 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 	sort.Strings(ids)
 	planningIDs := ids[:0]
 	for _, id := range ids {
-		if count, ok := b.checker.affinityManager.BalanceTableGroupCount(id); ok && count > 1 {
+		if b.checker.affinityManager.IsBalanceTableEligible(id) {
 			planningIDs = append(planningIDs, id)
 		}
 	}
@@ -138,7 +141,7 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 // attempt. The dirty-table worker retries with a fresh snapshot; no search progress is
 // retained between calls. Large tables occupy the worker until this call ends.
 func (b *affinityBalancer) step(ctx context.Context, id string) error {
-	if count, ok := b.checker.affinityManager.BalanceTableGroupCount(id); !ok || count <= 1 {
+	if !b.checker.balanceSchedulingAllowed() || !b.checker.affinityManager.IsBalanceTableEligible(id) {
 		return nil
 	}
 	return b.stepWithCounts(ctx, id, b.checker.affinityManager.GetBalanceGlobalCounts())
@@ -146,10 +149,7 @@ func (b *affinityBalancer) step(ctx context.Context, id string) error {
 
 func (b *affinityBalancer) stepWithCounts(ctx context.Context, id string, counts affinity.BalanceGlobalCounts) error {
 	c, manager := b.checker, b.checker.affinityManager
-	if !c.balanceSchedulingAllowed() {
-		return nil
-	}
-	if count, ok := manager.BalanceTableGroupCount(id); !ok || count <= 1 {
+	if !c.balanceSchedulingAllowed() || !manager.IsBalanceTableEligible(id) {
 		return nil
 	}
 	snapshot := manager.GetBalanceSnapshotWithCounts(id, counts)
