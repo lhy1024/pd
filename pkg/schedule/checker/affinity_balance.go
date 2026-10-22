@@ -151,6 +151,42 @@ func (c *AffinityChecker) validateBalanceTarget(target *affinity.Group, region *
 	}
 }
 
+// balanceTargetMaySatisfyPlacement is a conservative candidate-level filter.
+// It only rejects a target when one of its stores cannot match any placement
+// rule applicable to the group's ranges for the peer role it would have.
+// Counts, isolation, existing peers, and Region-specific state still require
+// the full virtual Region fit in validateBalanceTarget.
+func (c *AffinityChecker) balanceTargetMaySatisfyPlacement(target *affinity.Group, ranges affinity.GroupKeyRanges) bool {
+	if !c.cluster.GetSharedConfig().IsPlacementRulesEnabled() {
+		return true
+	}
+
+	for _, keyRange := range ranges.KeyRanges {
+		rules := c.ruleManager.GetRulesForApplyRange(keyRange.StartKey, keyRange.EndKey)
+		for _, id := range target.VoterStoreIDs {
+			info := c.cluster.GetStore(id)
+			if info == nil {
+				return false
+			}
+			leader := id == target.LeaderStoreID
+			matched := false
+			for _, rule := range rules {
+				roleMatches := rule.Role == placement.Voter ||
+					(leader && rule.Role == placement.Leader) ||
+					(!leader && rule.Role == placement.Follower)
+				if roleMatches && placement.MatchLabelConstraints(info, rule.LabelConstraints) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (c *AffinityChecker) balanceTargetExecutionStatus(actual, target *affinity.Group) balanceStatus {
 	type storeAction struct {
 		id             uint64

@@ -232,6 +232,9 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id string, counts
 			if move.FromStoreID != 0 {
 				target.VoterStoreIDs[slices.Index(target.VoterStoreIDs, move.FromStoreID)] = move.ToStoreID
 			}
+			if !c.balanceTargetMaySatisfyPlacement(&target, snapshot.Ranges[group.ID]) {
+				continue
+			}
 			scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
 			status := balanceAllowed
 			for {

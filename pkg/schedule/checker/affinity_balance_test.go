@@ -325,6 +325,46 @@ func TestAffinityBalanceRejectsIsolationRegression(t *testing.T) {
 		"a target with worse zone isolation must be rejected")
 }
 
+func TestAffinityBalanceCandidatePlacementPrefilter(t *testing.T) {
+	opt := newAffinityTestOptions()
+	tc := mockcluster.NewCluster(t.Context(), opt)
+	tc.SetEnablePlacementRules(true)
+	for id, zone := range map[uint64]string{1: "a", 2: "a", 3: "b", 4: "c"} {
+		tc.AddLabelsStore(id, 10, map[string]string{"zone": zone})
+		tc.SetStoreUp(id)
+	}
+	require.NoError(t, tc.GetRuleManager().SetRule(&placement.Rule{
+		GroupID:  placement.DefaultGroupID,
+		ID:       "leaders-a",
+		Index:    1,
+		Override: true,
+		Role:     placement.Leader,
+		Count:    1,
+		LabelConstraints: []placement.LabelConstraint{{
+			Key: "zone", Op: placement.In, Values: []string{"a"},
+		}},
+	}))
+	checker := newTestAffinityChecker(t.Context(), tc, opt)
+	ranges := affinity.GroupKeyRanges{KeyRanges: []keyutil.KeyRange{{StartKey: []byte("a"), EndKey: []byte("b")}}}
+	leaderTarget := &affinity.Group{LeaderStoreID: 3, VoterStoreIDs: []uint64{2, 3}}
+	require.False(t, checker.balanceTargetMaySatisfyPlacement(leaderTarget, ranges))
+
+	voterRule := &placement.Rule{
+		GroupID:  placement.DefaultGroupID,
+		ID:       "voters-b",
+		Index:    1,
+		Override: true,
+		Role:     placement.Voter,
+		Count:    2,
+		LabelConstraints: []placement.LabelConstraint{{
+			Key: "zone", Op: placement.In, Values: []string{"b", "c"},
+		}},
+	}
+	require.NoError(t, tc.GetRuleManager().SetRule(voterRule))
+	voterTarget := &affinity.Group{LeaderStoreID: 3, VoterStoreIDs: []uint64{3, 4}}
+	require.True(t, checker.balanceTargetMaySatisfyPlacement(voterTarget, ranges))
+}
+
 func TestAffinityBalanceRejectsLearnerStoreAsVoter(t *testing.T) {
 	tc, checker := newAffinityBalanceTestCluster(t, 5)
 	require.NoError(t, tc.GetRuleManager().SetRule(&placement.Rule{
