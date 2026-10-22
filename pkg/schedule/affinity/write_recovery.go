@@ -17,12 +17,16 @@ package affinity
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/pingcap/errors"
 
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
+	"github.com/tikv/pd/pkg/utils/keypath"
 )
 
 // affinityMutationTxn counts transaction operations and uses native revision
@@ -31,6 +35,55 @@ type affinityMutationTxn struct {
 	kv.Txn
 	reads int
 	ops   int
+}
+
+func loadAffinityRangeVersion(txn kv.Txn) (uint64, error) {
+	key := keypath.AffinityRangeVersionPath()
+	value, err := loadAffinityValue(txn, key)
+	if err != nil {
+		return 0, err
+	}
+	version := uint64(0)
+	if value != "" {
+		version, err = strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid affinity range version %q: %w", value, err)
+		}
+	}
+	return version, nil
+}
+
+// bumpAffinityRangeVersion adds the shared CAS fence used by every mutation
+// that changes affinity ranges or their region-label rules. The expected value
+// comes from this Manager's last authoritative reload or successful mutation;
+// stale managers therefore fail before their cross-group overlap check can be
+// committed.
+func bumpAffinityRangeVersion(txn kv.Txn, expected uint64) error {
+	version, err := loadAffinityRangeVersion(txn)
+	if err != nil {
+		return err
+	}
+	if version != expected {
+		return affinityConflict()
+	}
+	if version == ^uint64(0) {
+		return errors.New("affinity range version overflow")
+	}
+	return txn.Save(keypath.AffinityRangeVersionPath(), strconv.FormatUint(version+1, 10))
+}
+
+func (m *Manager) runAffinityRangeMutationLocked(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
+	expected := m.affinityRangeVersion
+	err := m.runAffinityMutationLocked(ctx, conditions, func(txn kv.Txn) error {
+		if err := bumpAffinityRangeVersion(txn, expected); err != nil {
+			return err
+		}
+		return f(txn)
+	})
+	if err == nil {
+		m.affinityRangeVersion = expected + 1
+	}
+	return err
 }
 
 // Load reads a value with a native revision comparison.
@@ -54,9 +107,10 @@ func (txn *affinityMutationTxn) Remove(key string) error {
 // runAffinityMutationLocked is the single transaction boundary for all writers.
 // It follows PD's existing metadata contract: native revision/CAS and primary
 // term fence the transaction; an ambiguous result is reconciled by an
-// authoritative reload, without replaying the business operation or adding a
-// durable write sequence. A late same-term ABA remains the documented PD-level
-// tradeoff for this low-frequency metadata path.
+// authoritative reload without replaying the business operation. Range/label
+// mutations add a shared version fence through runAffinityRangeMutationLocked
+// so cross-group overlap checks remain serialized even across an unknown
+// response.
 func (m *Manager) runAffinityMutationLocked(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
 	attempted := false
 	err := m.runAffinityTxn(ctx, conditions, func(inner kv.Txn) error {

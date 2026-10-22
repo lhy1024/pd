@@ -21,6 +21,13 @@ import (
 // AffinityLabelPrefix identifies label rules owned by the affinity Manager.
 const AffinityLabelPrefix = "affinity_group/"
 
+// AffinityRangeVersionPath identifies the global CAS version for affinity
+// range/label writes. All such writes compare and increment this key in their
+// transaction so stale cross-group overlap checks cannot commit concurrently.
+func AffinityRangeVersionPath() string {
+	return fmt.Sprintf("/pd/%d/affinity_range_version", ClusterID())
+}
+
 // AffinityGroupPath returns the path to save a specific affinity group object.
 // Its format is: "/pd/{cluster_id}/affinity_groups/{group_id}"
 func AffinityGroupPath(groupID string) string {

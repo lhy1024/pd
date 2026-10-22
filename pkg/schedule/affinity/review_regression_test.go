@@ -246,6 +246,51 @@ func TestInternalPeerConflictSchedulesBaselineRefresh(t *testing.T) {
 	require.Equal(t, uint64(3), state.LeaderStoreID)
 }
 
+func TestInternalPeerMissingGroupSchedulesBaselineRefresh(t *testing.T) {
+	m := newMetadataTestManager(t)
+	id := seedMetadataTestGroups(t, m, []uint64{1})[0]
+	require.NoError(t, m.storage.RunInTxn(t.Context(), func(txn kv.Txn) error {
+		return m.storage.DeleteAffinityGroup(txn, id)
+	}))
+	version := m.GetAffinityGroupState(id).affinityVer
+	_, err := m.updateAffinityGroupPeersWithAffinityVer(id, version, 2, []uint64{1, 2, 3})
+	require.ErrorIs(t, err, errs.ErrAffinityGroupNotFound)
+	require.True(t, m.metadataNeedsReload)
+	// The next explicit write refreshes the stale local group before checking
+	// it and reports the same not-found result from the authoritative state.
+	_, err = m.updateAffinityGroupPeersWithAffinityVer(id, version, 2, []uint64{1, 2, 3})
+	require.ErrorIs(t, err, errs.ErrAffinityGroupNotFound)
+	require.Nil(t, m.GetAffinityGroupState(id))
+}
+
+func TestRangeVersionFenceRejectsStaleCrossGroupWrite(t *testing.T) {
+	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, nil)
+	defer cleanup()
+	base := storage.NewStorageWithEtcdBackend(client)
+	first := newMetadataTestManager(t)
+	first.storage = base
+	require.NoError(t, first.ReloadAffinityMetadataFromStorage())
+	second := newMetadataTestManager(t)
+	second.storage = base
+	require.NoError(t, second.ReloadAffinityMetadataFromStorage())
+
+	rangeA := GroupKeyRanges{GroupID: "_tidb_pt_10_p1", KeyRanges: []keyutil.KeyRange{{StartKey: []byte{1}, EndKey: []byte{2}}}}
+	rangeB := GroupKeyRanges{GroupID: "_tidb_pt_10_p2", KeyRanges: []keyutil.KeyRange{{StartKey: []byte{1}, EndKey: []byte{2}}}}
+	require.NoError(t, first.CreateAffinityGroups([]GroupKeyRanges{rangeA}))
+
+	// The second Manager has a stale empty range view and version zero. The
+	// shared range version rejects its transaction before it can persist B.
+	err := second.CreateAffinityGroups([]GroupKeyRanges{rangeB})
+	require.ErrorIs(t, err, errs.ErrEtcdTxnConflict)
+	require.True(t, second.metadataNeedsReload)
+	err = second.CreateAffinityGroups([]GroupKeyRanges{rangeB})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overlap")
+	value, err := base.LoadAffinityGroup(rangeB.GroupID)
+	require.NoError(t, err)
+	require.Empty(t, value)
+}
+
 func TestAffinityRangeWatcherIgnoresDelayedPut(t *testing.T) {
 	m := newMetadataTestManager(t)
 	ids := seedMetadataTestGroups(t, m, []uint64{1, 1})
