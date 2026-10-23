@@ -98,6 +98,17 @@ func (w *Watcher) applyGroupPending() error {
 	return nil
 }
 
+// postGroupEvents publishes a watch batch. An empty callback is emitted after
+// a full LoopWatcher load (including compaction recovery). That load is the
+// authoritative snapshot, so reconcile the complete Manager view instead of
+// relying only on LoopWatcher's historical loadedKeys set.
+func (w *Watcher) postGroupEvents(events []*clientv3.Event) error {
+	if len(events) == 0 {
+		w.groupNeedsReload = true
+	}
+	return w.applyGroupPending()
+}
+
 // NewWatcher creates a new watcher to watch the affinity changes from PD.
 func NewWatcher(
 	ctx context.Context,
@@ -152,10 +163,6 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 		w.groupPending = append(w.groupPending, groupSyncEvent{id: groupID, deleted: true})
 		return nil
 	}
-	applyPending := func() error {
-		return w.applyGroupPending()
-	}
-
 	w.groupWatcher = etcdutil.NewLoopWatcher(
 		ctx, w.wg,
 		w.etcdClient,
@@ -163,7 +170,7 @@ func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
 		strings.TrimSuffix(keypath.AffinityGroupsPrefix(), "/"),
 		func([]*clientv3.Event) error { w.groupPending = nil; return nil },
 		putFn, deleteFn,
-		func([]*clientv3.Event) error { return applyPending() },
+		func(events []*clientv3.Event) error { return w.postGroupEvents(events) },
 		true, /* withPrefix */
 	)
 	w.groupWatcher.SetReconcileDeletedKeys()

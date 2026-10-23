@@ -98,6 +98,27 @@ func TestAffinityGroupBatchRetriesAuthoritativeReload(t *testing.T) {
 	require.Empty(t, manager.GetAllAffinityGroupStates())
 }
 
+func TestAffinityGroupFullLoadReconcilesManagerOnlyGroup(t *testing.T) {
+	ctx, client, clean := prepare(t)
+	defer clean()
+	store := endpoint.NewStorageEndpoint(kv.NewEtcdKVBase(client), nil)
+	labelStore := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
+	l, err := labeler.NewRegionLabeler(ctx, labelStore, time.Hour)
+	require.NoError(t, err)
+	manager, err := affinity.NewManager(ctx, store, core.NewBasicCluster(), mockconfig.NewTestOptions(), l)
+	require.NoError(t, err)
+	require.NoError(t, manager.CreateAffinityGroups([]affinity.GroupKeyRanges{{GroupID: "ghost"}}))
+	require.True(t, manager.IsGroupExist("ghost"))
+	// Delete only the authoritative value. The watcher has never observed the
+	// put, so loadedKeys cannot identify this Manager entry for reconciliation.
+	require.NoError(t, store.RunInTxn(ctx, func(txn kv.Txn) error {
+		return store.DeleteAffinityGroup(txn, "ghost")
+	}))
+	w := &Watcher{affinityManager: manager}
+	require.NoError(t, w.postGroupEvents(nil))
+	require.False(t, manager.IsGroupExist("ghost"))
+}
+
 func TestAffinityWatcherLifecycle(t *testing.T) {
 	re := require.New(t)
 	ctx, client, clean := prepare(t)
