@@ -55,7 +55,7 @@ type AffinityChecker struct {
 }
 
 // NewAffinityChecker create an affinity checker.
-func NewAffinityChecker(ctx context.Context, cluster sche.CheckerCluster, conf config.CheckerConfigProvider) *AffinityChecker {
+func NewAffinityChecker(ctx context.Context, cluster sche.CheckerCluster, conf config.CheckerConfigProvider, opController *operator.Controller) *AffinityChecker {
 	checker := &AffinityChecker{
 		cluster:          cluster,
 		ruleManager:      cluster.GetRuleManager(),
@@ -63,6 +63,7 @@ func NewAffinityChecker(ctx context.Context, cluster sche.CheckerCluster, conf c
 		conf:             conf,
 		recentMergeCache: cache.NewIDTTL(ctx, gcInterval, recentMergeTTL),
 		startTime:        time.Now(),
+		opController:     opController,
 	}
 	if checker.affinityManager != nil {
 		checker.balancer = newAffinityBalancer(ctx, checker)

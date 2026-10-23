@@ -50,7 +50,8 @@ func newAffinityTestOptions() *config.PersistOptions {
 }
 
 func newTestAffinityChecker(ctx context.Context, cluster sche.CheckerCluster, conf scheconfig.CheckerConfigProvider) *AffinityChecker {
-	checker := NewAffinityChecker(ctx, cluster, conf)
+	opController := operator.NewController(ctx, cluster.GetBasicCluster(), cluster.GetSharedConfig(), nil)
+	checker := NewAffinityChecker(ctx, cluster, conf, opController)
 	// Set startTime to 2 minutes ago to bypass startup TTL check
 	checker.startTime = time.Now().Add(-2 * time.Minute)
 	return checker
@@ -1233,7 +1234,7 @@ func TestAffinityMergeCheckDisabledByZeroConfig(t *testing.T) {
 			cluster.PutRegion(region2)
 
 			affinityManager := cluster.GetAffinityManager()
-			checker := NewAffinityChecker(t.Context(), cluster, opt)
+			checker := NewAffinityChecker(t.Context(), cluster, opt, nil)
 			group := &affinity.Group{
 				ID:            "test_group",
 				LeaderStoreID: 1,

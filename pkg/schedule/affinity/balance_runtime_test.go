@@ -33,9 +33,9 @@ func TestGetBalanceSnapshotScopesAndCopiesTableState(t *testing.T) {
 	_, err := manager.UpdateAffinityGroupPeers(otherTableID, 4, []uint64{2, 3, 4})
 	require.NoError(t, err)
 
-	snapshot := manager.GetBalanceSnapshot(ids[0])
+	snapshot := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
 	require.NotNil(t, snapshot)
-	require.Equal(t, TableGroupPrefix(ids[0]), snapshot.TableID)
+	require.Equal(t, TableIDForGroup(ids[0]), snapshot.TableID)
 	require.Len(t, snapshot.Groups, len(ids))
 	require.ElementsMatch(t, ids, []string{snapshot.Groups[0].ID, snapshot.Groups[1].ID, snapshot.Groups[2].ID})
 	require.NotContains(t, snapshot.Ranges, otherTableID)
@@ -46,27 +46,27 @@ func TestGetBalanceSnapshotScopesAndCopiesTableState(t *testing.T) {
 	ranges.KeyRanges[0].StartKey[0] = 9
 	snapshot.Ranges[ids[0]] = ranges
 
-	fresh := manager.GetBalanceSnapshot(ids[0])
+	fresh := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
 	require.Equal(t, uint64(1), fresh.Groups[0].LeaderStoreID)
 	require.Equal(t, byte(0), fresh.Ranges[ids[0]].KeyRanges[0].StartKey[0])
 }
 
 func TestBalanceTableEligibilityTracksPolicy(t *testing.T) {
 	manager := newMetadataTestManager(t)
-	require.False(t, manager.IsBalanceTableEligible("_tidb_pt_10"))
+	require.False(t, manager.IsBalanceTableEligible(TableIDForGroup("_tidb_pt_10_p1")))
 	ids := seedMetadataTestGroups(t, manager, []uint64{1})
-	require.False(t, manager.IsBalanceTableEligible(ids[0]))
+	require.False(t, manager.IsBalanceTableEligible(TableIDForGroup(ids[0])))
 	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "_tidb_pt_10_p2"}}))
-	require.True(t, manager.IsBalanceTableEligible(ids[0]))
+	require.True(t, manager.IsBalanceTableEligible(TableIDForGroup(ids[0])))
 
 	for _, id := range []string{ids[0], "_tidb_pt_10_p2"} {
 		_, err := manager.UpdateAffinityGroupPolicy(id, BalancePolicyFixed)
 		require.NoError(t, err)
 	}
-	require.False(t, manager.IsBalanceTableEligible(ids[0]))
+	require.False(t, manager.IsBalanceTableEligible(TableIDForGroup(ids[0])))
 	_, err := manager.UpdateAffinityGroupPolicy(ids[0], BalancePolicyAuto)
 	require.NoError(t, err)
-	require.True(t, manager.IsBalanceTableEligible(ids[0]), "one auto group is sufficient when the table has other fixed groups")
+	require.True(t, manager.IsBalanceTableEligible(TableIDForGroup(ids[0])), "one auto group is sufficient when the table has other fixed groups")
 }
 
 func TestBalanceSnapshotVersionTracksPlacementRules(t *testing.T) {
@@ -74,9 +74,9 @@ func TestBalanceSnapshotVersionTracksPlacementRules(t *testing.T) {
 	id := seedMetadataTestGroups(t, manager, []uint64{1})[0]
 	var rulesRevision uint64
 	manager.SetBalanceRuleRevision(func() uint64 { return rulesRevision })
-	initial := manager.GetBalanceSnapshot(id)
+	initial := manager.GetBalanceSnapshot(TableIDForGroup(id))
 	rulesRevision++
-	updated := manager.GetBalanceSnapshot(id)
+	updated := manager.GetBalanceSnapshot(TableIDForGroup(id))
 	require.NotEqual(t, initial.Version, updated.Version)
 	require.Equal(t, uint64(1), updated.Version.Rules)
 }
@@ -84,14 +84,14 @@ func TestBalanceSnapshotVersionTracksPlacementRules(t *testing.T) {
 func TestBalanceSnapshotRejectsSameIDRebuild(t *testing.T) {
 	manager := newMetadataTestManager(t)
 	ids := seedMetadataTestGroups(t, manager, []uint64{1})
-	old := manager.GetBalanceSnapshot(ids[0])
+	old := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
 	require.NoError(t, manager.DeleteAffinityGroups(ids, true))
-	require.Nil(t, manager.GetBalanceSnapshot(ids[0]))
+	require.Nil(t, manager.GetBalanceSnapshot(TableIDForGroup(ids[0])))
 	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: ids[0], KeyRanges: []keyutil.KeyRange{{StartKey: []byte{0}, EndKey: []byte{1}}}}}))
 	_, err := manager.UpdateAffinityGroupPeers(ids[0], 1, []uint64{1, 2, 3})
 	require.NoError(t, err)
 
-	current := manager.GetBalanceSnapshot(ids[0])
+	current := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
 	require.NotNil(t, current)
 	require.False(t, manager.BalanceSnapshotCurrent(old))
 	require.NotEqual(t, old.Version, current.Version)
@@ -135,14 +135,14 @@ func TestObserveBalanceRegionVersionTracksRelevantChanges(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			manager := newMetadataTestManager(t)
 			ids := seedMetadataTestGroups(t, manager, []uint64{1})
-			manager.GetBalanceSnapshot(ids[0])
-			before, ok := manager.GetBalanceVersion(ids[0])
+			manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
+			before, ok := manager.GetBalanceVersion(TableIDForGroup(ids[0]))
 			require.True(t, ok)
 			region := manager.regions[1].region
 
 			manager.ObserveBalanceRegion(tc.change(region))
 
-			after, ok := manager.GetBalanceVersion(ids[0])
+			after, ok := manager.GetBalanceVersion(TableIDForGroup(ids[0]))
 			require.True(t, ok)
 			if tc.invalidates {
 				require.Greater(t, after.Table, before.Table)

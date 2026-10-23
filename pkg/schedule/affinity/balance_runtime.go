@@ -40,7 +40,7 @@ type BalanceVersion struct {
 // conditions. The checker owns the search; Manager never retains its mutable
 // progress.
 type BalanceSnapshot struct {
-	TableID            string
+	TableID            TableID
 	Version            BalanceVersion
 	Groups             []*GroupState
 	Ranges             map[string]GroupKeyRanges
@@ -68,10 +68,10 @@ func (m *Manager) balanceVersionLocked(state *metadataTableState) BalanceVersion
 
 // GetBalanceVersion reads generations without taking the metadata mutex or
 // scanning ranges. It is suitable for the Region check's enqueue fast path.
-func (m *Manager) GetBalanceVersion(groupID string) (BalanceVersion, bool) {
+func (m *Manager) GetBalanceVersion(tableID TableID) (BalanceVersion, bool) {
 	m.RLock()
 	defer m.RUnlock()
-	state := m.metadataTables[TableGroupPrefix(groupID)]
+	state := m.metadataTables[tableID]
 	if state == nil {
 		return BalanceVersion{}, false
 	}
@@ -80,10 +80,10 @@ func (m *Manager) GetBalanceVersion(groupID string) (BalanceVersion, bool) {
 
 // IsBalanceTableEligible checks membership and policy before loading planning
 // inputs. A table needs multiple groups and at least one non-fixed group.
-func (m *Manager) IsBalanceTableEligible(groupID string) bool {
+func (m *Manager) IsBalanceTableEligible(tableID TableID) bool {
 	m.RLock()
 	defer m.RUnlock()
-	state := m.metadataTables[TableGroupPrefix(groupID)]
+	state := m.metadataTables[tableID]
 	if state == nil || len(state.groups) <= 1 {
 		return false
 	}
@@ -121,17 +121,17 @@ func (m *Manager) balanceGlobalCountsLocked() BalanceGlobalCounts {
 
 // GetBalanceSnapshot copies only this table and the supplied batch counts.
 // It performs no placement checks and starts no background work.
-func (m *Manager) GetBalanceSnapshot(groupID string) *BalanceSnapshot {
-	return m.GetBalanceSnapshotWithCounts(groupID, BalanceGlobalCounts{})
+func (m *Manager) GetBalanceSnapshot(tableID TableID) *BalanceSnapshot {
+	return m.GetBalanceSnapshotWithCounts(tableID, BalanceGlobalCounts{})
 }
 
 // GetBalanceSnapshotWithCounts is the batch-aware form used by the planner.
-func (m *Manager) GetBalanceSnapshotWithCounts(groupID string, counts BalanceGlobalCounts) *BalanceSnapshot {
+func (m *Manager) GetBalanceSnapshotWithCounts(tableID TableID, counts BalanceGlobalCounts) *BalanceSnapshot {
 	stores, fingerprint := m.loadBalanceStoreSnapshot()
 	m.metaMutex.Lock()
 	m.Lock()
 	m.updateBalanceStoreFingerprintLocked(fingerprint)
-	state := m.metadataTables[TableGroupPrefix(groupID)]
+	state := m.metadataTables[tableID]
 	if state == nil {
 		m.Unlock()
 		m.metaMutex.Unlock()
@@ -141,7 +141,7 @@ func (m *Manager) GetBalanceSnapshotWithCounts(groupID string, counts BalanceGlo
 		counts = m.balanceGlobalCountsLocked()
 	}
 	result := &BalanceSnapshot{
-		TableID: TableGroupPrefix(groupID), Version: m.balanceVersionLocked(state),
+		TableID: tableID, Version: m.balanceVersionLocked(state),
 		Groups: make([]*GroupState, 0, len(state.groups)), Ranges: make(map[string]GroupKeyRanges, len(state.groups)),
 		Stores:             balanceCandidateStores(stores),
 		GlobalLeaderCounts: counts.Leader, GlobalVoterCounts: counts.Voter,

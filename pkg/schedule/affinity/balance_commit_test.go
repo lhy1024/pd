@@ -36,7 +36,7 @@ import (
 
 func prepareBalanceCommit(t *testing.T, manager *Manager, groupID string) *BalanceSnapshot {
 	t.Helper()
-	snapshot := manager.GetBalanceSnapshot(groupID)
+	snapshot := manager.GetBalanceSnapshot(TableIDForGroup(groupID))
 	require.NotNil(t, snapshot)
 	require.NoError(t, manager.PrepareBalanceCommit(t.Context(), snapshot))
 	return snapshot
@@ -212,7 +212,7 @@ func TestPrepareBalanceCommitRejectsMissingPrimaryTerm(t *testing.T) {
 	manager.SetAffinityWriteGuard(func() ([]clientv3.Cmp, bool) {
 		return nil, false
 	})
-	snapshot := manager.GetBalanceSnapshot(ids[0])
+	snapshot := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
 	require.NotNil(t, snapshot)
 	require.True(t, errs.ErrEtcdTxnConflict.Equal(manager.PrepareBalanceCommit(t.Context(), snapshot)))
 }
@@ -232,7 +232,7 @@ func TestBalanceCommitRejectsRevokedPrimaryTerm(t *testing.T) {
 		return []clientv3.Cmp{expected}, true
 	})
 
-	snapshot := manager.GetBalanceSnapshot(ids[0])
+	snapshot := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
 	require.NotNil(t, snapshot)
 	require.NoError(t, manager.PrepareBalanceCommit(t.Context(), snapshot))
 

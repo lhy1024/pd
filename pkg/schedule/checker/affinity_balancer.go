@@ -19,7 +19,6 @@ import (
 	"cmp"
 	"context"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -37,7 +36,7 @@ import (
 type affinityBalancer struct {
 	checker *AffinityChecker
 	mu      sync.Mutex
-	tables  map[string]*affinityBalanceTask
+	tables  map[affinity.TableID]*affinityBalanceTask
 }
 
 type affinityBalanceTask struct {
@@ -53,17 +52,17 @@ type balanceCheckedRegion struct {
 }
 
 func newAffinityBalancer(ctx context.Context, checker *AffinityChecker) *affinityBalancer {
-	balancer := &affinityBalancer{checker: checker, tables: make(map[string]*affinityBalanceTask)}
+	balancer := &affinityBalancer{checker: checker, tables: make(map[affinity.TableID]*affinityBalanceTask)}
 	go balancer.run(ctx)
 	return balancer
 }
 
 func (b *affinityBalancer) enqueue(groupID string) {
-	_, exists := b.checker.affinityManager.GetBalanceVersion(groupID)
+	tableID := affinity.TableIDForGroup(groupID)
+	_, exists := b.checker.affinityManager.GetBalanceVersion(tableID)
 	if !exists {
 		return
 	}
-	tableID := affinity.TableGroupPrefix(groupID)
 	b.mu.Lock()
 	task := b.tables[tableID]
 	if task == nil {
@@ -105,7 +104,7 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 		return
 	}
 	b.mu.Lock()
-	ids := make([]string, 0, len(b.tables))
+	ids := make([]affinity.TableID, 0, len(b.tables))
 	for id, task := range b.tables {
 		if task.dirty {
 			ids = append(ids, id)
@@ -116,7 +115,7 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 	if len(ids) == 0 || ctx.Err() != nil {
 		return
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	planningIDs := ids[:0]
 	for _, id := range ids {
 		if b.checker.affinityManager.IsBalanceTableEligible(id) {
@@ -132,7 +131,7 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 	for _, id := range planningIDs {
 		err := b.stepWithCounts(ctx, id, counts)
 		if err != nil && !errs.ErrEtcdTxnConflict.Equal(err) && ctx.Err() == nil {
-			log.Warn("failed to balance affinity table", zap.String("table-id", id), zap.Error(err))
+			log.Warn("failed to balance affinity table", zap.String("table-id", string(id)), zap.Error(err))
 		}
 	}
 }
@@ -140,14 +139,14 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 // step completes one table search, including final review and one commit
 // attempt. The dirty-table worker retries with a fresh snapshot; no search progress is
 // retained between calls. Large tables occupy the worker until this call ends.
-func (b *affinityBalancer) step(ctx context.Context, id string) error {
+func (b *affinityBalancer) step(ctx context.Context, id affinity.TableID) error {
 	if !b.checker.balanceSchedulingAllowed() || !b.checker.affinityManager.IsBalanceTableEligible(id) {
 		return nil
 	}
 	return b.stepWithCounts(ctx, id, b.checker.affinityManager.GetBalanceGlobalCounts())
 }
 
-func (b *affinityBalancer) stepWithCounts(ctx context.Context, id string, counts affinity.BalanceGlobalCounts) error {
+func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.TableID, counts affinity.BalanceGlobalCounts) error {
 	c, manager := b.checker, b.checker.affinityManager
 	if !c.balanceSchedulingAllowed() || !manager.IsBalanceTableEligible(id) {
 		return nil

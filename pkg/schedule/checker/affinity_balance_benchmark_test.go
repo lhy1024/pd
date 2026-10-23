@@ -44,7 +44,7 @@ type affinityBalanceBenchmarkSetup struct {
 	cluster *mockcluster.Cluster
 	checker *AffinityChecker
 	manager *affinity.Manager
-	tableID string
+	tableID affinity.TableID
 	groups  []affinity.Group
 }
 
@@ -90,7 +90,7 @@ func newAffinityBalanceBenchmarkSetup(b *testing.B, tc affinityBalanceBenchmarkC
 		cluster: cluster,
 		checker: checker,
 		manager: manager,
-		tableID: "_tidb_pt_100",
+		tableID: affinity.TableIDForGroup("_tidb_pt_100_p0"),
 	}
 	rangeCount := max(1, tc.ranges)
 	if tc.regions%rangeCount != 0 {
@@ -101,7 +101,7 @@ func newAffinityBalanceBenchmarkSetup(b *testing.B, tc affinityBalanceBenchmarkC
 		b.Fatal("a rule boundary requires at least two Regions per range")
 	}
 	for groupIndex := range tc.groups {
-		groupID := fmt.Sprintf("%s_p%04d", setup.tableID, groupIndex)
+		groupID := fmt.Sprintf("_tidb_pt_100_p%04d", groupIndex)
 		leader := uint64(1)
 		if tc.constrained || tc.evenLeaders {
 			// Keep leader counts even, so the leader phase has no strict
@@ -289,7 +289,7 @@ func BenchmarkAffinityBalanceIdle(b *testing.B) {
 					}
 				}
 			}
-			balancer := &affinityBalancer{checker: setup.checker, tables: map[string]*affinityBalanceTask{setup.tableID: {}}}
+			balancer := &affinityBalancer{checker: setup.checker, tables: map[affinity.TableID]*affinityBalanceTask{setup.tableID: {}}}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {

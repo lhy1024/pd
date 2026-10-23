@@ -111,7 +111,7 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		ruleChecker:             NewRuleChecker(ctx, cluster, ruleManager, pendingProcessedRegions),
 		splitChecker:            NewSplitChecker(cluster, ruleManager, cluster.GetRegionLabeler()),
 		mergeChecker:            NewMergeChecker(ctx, cluster, conf),
-		affinityChecker:         NewAffinityChecker(ctx, cluster, conf),
+		affinityChecker:         NewAffinityChecker(ctx, cluster, conf, opController),
 		jointStateChecker:       NewJointStateChecker(cluster),
 		priorityInspector:       NewPriorityInspector(cluster, conf),
 		pendingProcessedRegions: pendingProcessedRegions,
@@ -122,7 +122,6 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		metrics:                 newCheckerControllerMetrics(),
 	}
 	c.splitScatter = newSplitScatterController(ctx, cluster, opController, c.AddPendingProcessedRegions)
-	c.affinityChecker.opController = opController
 	c.duration.Store(time.Duration(0))
 	return c
 }

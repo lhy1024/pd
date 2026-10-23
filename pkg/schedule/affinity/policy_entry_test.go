@@ -26,18 +26,20 @@ import (
 
 func TestCustomGroupsKeepIndependentMetadataTables(t *testing.T) {
 	manager := newMetadataTestManager(t)
-	for _, id := range []string{"_tidb_pt_orders_pmanual", "_tidb_pt_orders_p1", "_tidb_pt_10_pmanual", "_tidb_pt_10_p1", "_tidb_pt_10_p2"} {
+	for _, id := range []string{"_tidb_pt_orders_pmanual", "_tidb_pt_orders_p1", "_tidb_pt_10_pmanual", "_tidb_pt_10", "_tidb_pt_10_p1", "_tidb_pt_10_p2"} {
 		require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}))
 	}
-	require.Equal(t, "_tidb_pt_10", TableGroupPrefix("_tidb_pt_10_p1"))
-	require.Len(t, manager.metadataTables["_tidb_pt_10"].groups, 2)
-	for _, id := range []string{"_tidb_pt_orders_pmanual", "_tidb_pt_orders_p1", "_tidb_pt_10_pmanual"} {
-		require.Equal(t, id, TableGroupPrefix(id))
-		require.Len(t, manager.metadataTables[id].groups, 1)
-		version := manager.metadataTables[id].version
+	partitionTable := TableIDForGroup("_tidb_pt_10_p1")
+	require.Equal(t, partitionTable, TableIDForGroup("_tidb_pt_10_p2"))
+	require.Len(t, manager.metadataTables[partitionTable].groups, 2)
+	for _, id := range []string{"_tidb_pt_orders_pmanual", "_tidb_pt_orders_p1", "_tidb_pt_10_pmanual", "_tidb_pt_10"} {
+		tableID := TableIDForGroup(id)
+		require.NotEqual(t, partitionTable, tableID)
+		require.Len(t, manager.metadataTables[tableID].groups, 1)
+		version := manager.metadataTables[tableID].version
 		_, err := manager.UpdateAffinityGroupPolicy("_tidb_pt_10_p1", BalancePolicyFixed)
 		require.NoError(t, err)
-		require.Equal(t, version, manager.metadataTables[id].version)
+		require.Equal(t, version, manager.metadataTables[tableID].version)
 	}
 }
 
@@ -48,7 +50,7 @@ func TestUpdateAffinityGroupPolicyPersistsAndInvalidates(t *testing.T) {
 	require.NotNil(t, group)
 	require.Equal(t, PhaseStable, group.Phase)
 	affinityVersion := group.affinityVer
-	balanceVersion := manager.metadataTables[TableGroupPrefix(groupID)].version
+	balanceVersion := manager.metadataTables[TableIDForGroup(groupID)].version
 
 	updated, err := manager.UpdateAffinityGroupPolicy(groupID, BalancePolicyFixed)
 	require.NoError(t, err)
@@ -58,7 +60,7 @@ func TestUpdateAffinityGroupPolicyPersistsAndInvalidates(t *testing.T) {
 	require.Equal(t, group.AffinityRegionCount, current.AffinityRegionCount)
 	require.Equal(t, group.RegionCount, current.RegionCount)
 	require.Equal(t, affinityVersion, current.affinityVer)
-	require.Greater(t, manager.metadataTables[TableGroupPrefix(groupID)].version, balanceVersion)
+	require.Greater(t, manager.metadataTables[TableIDForGroup(groupID)].version, balanceVersion)
 
 	value, err := manager.storage.LoadAffinityGroup(groupID)
 	require.NoError(t, err)
@@ -67,11 +69,11 @@ func TestUpdateAffinityGroupPolicyPersistsAndInvalidates(t *testing.T) {
 	require.Equal(t, BalancePolicyFixed, persisted.BalancePolicy)
 
 	affinityVersion = current.affinityVer
-	balanceVersion = manager.metadataTables[TableGroupPrefix(groupID)].version
+	balanceVersion = manager.metadataTables[TableIDForGroup(groupID)].version
 	updated, err = manager.UpdateAffinityGroupPolicy(groupID, BalancePolicyFixed)
 	require.NoError(t, err)
 	require.Equal(t, affinityVersion, updated.affinityVer)
-	require.Equal(t, balanceVersion, manager.metadataTables[TableGroupPrefix(groupID)].version)
+	require.Equal(t, balanceVersion, manager.metadataTables[TableIDForGroup(groupID)].version)
 
 	updated, err = manager.UpdateAffinityGroupPolicy(groupID, "")
 	require.NoError(t, err)
@@ -81,7 +83,7 @@ func TestUpdateAffinityGroupPolicyPersistsAndInvalidates(t *testing.T) {
 
 	for _, policy := range []BalancePolicy{BalancePolicyFixed, BalancePolicyAuto} {
 		before := manager.GetAffinityGroupState(groupID)
-		balanceVersion = manager.metadataTables[TableGroupPrefix(groupID)].version
+		balanceVersion = manager.metadataTables[TableIDForGroup(groupID)].version
 		remote := before.Group
 		remote.BalancePolicy = policy
 		require.NoError(t, manager.storage.RunInTxn(t.Context(), func(txn kv.Txn) error {
@@ -94,7 +96,7 @@ func TestUpdateAffinityGroupPolicyPersistsAndInvalidates(t *testing.T) {
 		require.Equal(t, before.affinityVer, current.affinityVer)
 		require.Equal(t, before.AffinityRegionCount, current.AffinityRegionCount)
 		require.Equal(t, before.RegionCount, current.RegionCount)
-		require.Greater(t, manager.metadataTables[TableGroupPrefix(groupID)].version, balanceVersion)
+		require.Greater(t, manager.metadataTables[TableIDForGroup(groupID)].version, balanceVersion)
 	}
 
 	_, err = manager.UpdateAffinityGroupPolicy(groupID, BalancePolicy("manual"))

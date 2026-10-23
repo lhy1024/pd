@@ -101,7 +101,49 @@ func addBalanceRegion(t testing.TB, tc *mockcluster.Cluster, manager *affinity.M
 
 func runAffinityBalanceTask(t *testing.T, ctx context.Context, checker *AffinityChecker) {
 	t.Helper()
-	require.NoError(t, checker.balancer.step(ctx, "_tidb_pt_100"))
+	require.NoError(t, checker.balancer.step(ctx, affinity.TableIDForGroup("_tidb_pt_100_p0")))
+}
+
+func TestAffinityBalanceCustomGroupDoesNotJoinPartitionTable(t *testing.T) {
+	for _, withRanges := range []bool{false, true} {
+		t.Run(fmt.Sprintf("custom-ranges=%t", withRanges), func(t *testing.T) {
+			tc, checker := newAffinityBalanceTestCluster(t, 3)
+			manager := tc.GetAffinityManager()
+			ids := []string{"_tidb_pt_100_p0", "_tidb_pt_100_p1"}
+			keys := []string{"a", "b", "c"}
+			for i, id := range ids {
+				createBalanceGroup(t, manager, id, keys[i], keys[i+1], 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
+				addBalanceRegion(t, tc, manager, uint64(i+1), keys[i], keys[i+1], 1, 1, 2, 3)
+			}
+			customID := "_tidb_pt_100"
+			custom := &affinity.Group{ID: customID, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}
+			var start, end []byte
+			if withRanges {
+				start, end = []byte("x"), []byte("y")
+			}
+			require.NoError(t, createAffinityGroupForTest(manager, custom, start, end))
+			if withRanges {
+				addBalanceRegion(t, tc, manager, 3, "x", "y", 1, 1, 2, 3)
+			}
+
+			snapshot := manager.GetBalanceSnapshot(affinity.TableIDForGroup(ids[0]))
+			require.NotNil(t, snapshot)
+			require.Len(t, snapshot.Groups, 2)
+			require.NotContains(t, snapshot.Ranges, customID)
+			scorer, err := affinity.NewBalanceScorer([]*affinity.Group{&snapshot.Groups[0].Group, &snapshot.Groups[1].Group})
+			require.NoError(t, err)
+			require.Equal(t, 2, scorer.LeaderCount(1))
+			customSnapshot := manager.GetBalanceSnapshot(affinity.TableIDForGroup(customID))
+			require.NotNil(t, customSnapshot)
+			require.Len(t, customSnapshot.Groups, 1)
+			require.Equal(t, customID, customSnapshot.Groups[0].ID)
+
+			runAffinityBalanceTask(t, t.Context(), checker)
+			require.Equal(t, uint64(2), manager.GetAffinityGroupState(ids[0]).LeaderStoreID,
+				"the independent custom group must not block partition balancing")
+			require.Equal(t, uint64(1), manager.GetAffinityGroupState(customID).LeaderStoreID)
+		})
+	}
 }
 
 func TestAffinityBalanceLeaderConvergence(t *testing.T) {
@@ -199,7 +241,7 @@ func TestControllerObservesAffinityRegionBeforeRuleRepair(t *testing.T) {
 	createBalanceGroup(t, manager, "_tidb_pt_100_p0", "a", "b", 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
 	region := addBalanceRegion(t, tc, manager, 1, "a", "b", 1, 1, 2, 3)
 	controller := NewController(t.Context(), tc, tc.GetCheckerConfig(), operator.NewController(t.Context(), tc.GetBasicCluster(), tc.GetSharedConfig(), nil))
-	version, exists := manager.GetBalanceVersion("_tidb_pt_100")
+	version, exists := manager.GetBalanceVersion(affinity.TableIDForGroup("_tidb_pt_100_p0"))
 	require.True(t, exists)
 	heartbeat := region.Clone(core.SetPeers([]*metapb.Peer{region.GetStorePeer(1), region.GetStorePeer(2)}))
 	tc.PutRegion(heartbeat)
@@ -208,7 +250,7 @@ func TestControllerObservesAffinityRegionBeforeRuleRepair(t *testing.T) {
 
 	require.Len(t, ops, 1)
 	require.Equal(t, operator.OpReplica, ops[0].Kind()&operator.OpReplica)
-	current, exists := manager.GetBalanceVersion("_tidb_pt_100")
+	current, exists := manager.GetBalanceVersion(affinity.TableIDForGroup("_tidb_pt_100_p0"))
 	require.True(t, exists)
 	require.Greater(t, current.Table, version.Table)
 }
@@ -245,12 +287,10 @@ func TestAffinityBalancePendingRegionAndOperatorBlockOtherGroup(t *testing.T) {
 				tc.PutRegion(region)
 				manager.GetAndCacheRegionAffinityGroupState(tc.GetRegion(region.GetID()))
 			} else {
-				controller := operator.NewController(t.Context(), tc.GetBasicCluster(), tc.GetSharedConfig(), nil)
-				checker.opController = controller
 				op, err := operator.CreateTransferLeaderOperator("affinity-balance-test", tc, region, 2,
 					[]uint64{1, 2, 4}, operator.OpAffinity)
 				require.NoError(t, err)
-				require.Equal(t, 1, controller.AddWaitingOperator(op))
+				require.Equal(t, 1, checker.opController.AddWaitingOperator(op))
 			}
 
 			runAffinityBalanceTask(t, t.Context(), checker)
@@ -468,7 +508,7 @@ func TestAffinityBalanceAllLeaderLimitsRetryBeforeVoterMoves(t *testing.T) {
 	manager := setupLeaderLimitBalanceTable(t, tc)
 	exhaustLeaderTransferIn(t, tc, 2)
 	exhaustLeaderTransferIn(t, tc, 3)
-	err := checker.balancer.step(t.Context(), "_tidb_pt_100")
+	err := checker.balancer.step(t.Context(), affinity.TableIDForGroup("_tidb_pt_100_p0"))
 	require.NoError(t, err)
 	require.Equal(t, []uint64{1, 2, 3}, manager.GetAffinityGroupState("_tidb_pt_100_p0").VoterStoreIDs,
 		"temporarily blocked leader candidates must not fall through to voter replacements")
@@ -515,13 +555,13 @@ func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {
 	for _, id := range ids {
 		require.NotContains(t, manager.GetAffinityGroupState(id).VoterStoreIDs, uint64(4))
 	}
-	balancer := &affinityBalancer{checker: checker, tables: map[string]*affinityBalanceTask{"_tidb_pt_100": {}}}
+	balancer := &affinityBalancer{checker: checker, tables: map[affinity.TableID]*affinityBalanceTask{affinity.TableIDForGroup("_tidb_pt_100_p0"): {}}}
 	balancer.enqueue(ids[0])
-	require.True(t, balancer.tables["_tidb_pt_100"].dirty, "periodic retry should mark a completed table dirty")
+	require.True(t, balancer.tables[affinity.TableIDForGroup("_tidb_pt_100_p0")].dirty, "periodic retry should mark a completed table dirty")
 
 	tc.SetStoreUp(4)
 	balancer.enqueue(ids[0])
-	require.True(t, balancer.tables["_tidb_pt_100"].dirty, "repeated enqueue should remain one dirty marker")
+	require.True(t, balancer.tables[affinity.TableIDForGroup("_tidb_pt_100_p0")].dirty, "repeated enqueue should remain one dirty marker")
 	balancer.processDirty(t.Context())
 	require.Contains(t, manager.GetAffinityGroupState(ids[0]).VoterStoreIDs, uint64(4))
 }
@@ -537,7 +577,7 @@ func TestAffinityBalancePreservesDirtyWhileDisabled(t *testing.T) {
 				createBalanceGroup(t, manager, id, keys[i], keys[i+1], 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
 				addBalanceRegion(t, tc, manager, uint64(i+1), keys[i], keys[i+1], 1, 1, 2, 3)
 			}
-			balancer := &affinityBalancer{checker: checker, tables: make(map[string]*affinityBalanceTask)}
+			balancer := &affinityBalancer{checker: checker, tables: make(map[affinity.TableID]*affinityBalanceTask)}
 			balancer.enqueue(ids[0])
 			switch blocker {
 			case "paused":
@@ -548,7 +588,7 @@ func TestAffinityBalancePreservesDirtyWhileDisabled(t *testing.T) {
 				tc.SetAffinityScheduleLimit(0)
 			}
 			balancer.processDirty(t.Context())
-			require.True(t, balancer.tables["_tidb_pt_100"].dirty)
+			require.True(t, balancer.tables[affinity.TableIDForGroup("_tidb_pt_100_p0")].dirty)
 			require.Equal(t, uint64(1), manager.GetAffinityGroupState(ids[0]).LeaderStoreID)
 
 			checker.PauseOrResume(0)
@@ -580,7 +620,7 @@ func TestAffinityBalanceDefersDirtyDuringBatch(t *testing.T) {
 	checker.balancer.processDirty(t.Context())
 	// A heartbeat during this search is retained for the next periodic batch;
 	// processDirty must not immediately consume it in the same call.
-	require.True(t, checker.balancer.tables["_tidb_pt_100"].dirty)
+	require.True(t, checker.balancer.tables[affinity.TableIDForGroup("_tidb_pt_100_p0")].dirty)
 }
 
 func TestAffinityBalanceCancellationRestartsFromFreshSnapshot(t *testing.T) {
@@ -595,7 +635,7 @@ func TestAffinityBalanceCancellationRestartsFromFreshSnapshot(t *testing.T) {
 	defer cancel()
 	scanCluster := &affinityBalanceScanCluster{CheckerCluster: tc, beforeScan: cancel}
 	checker.cluster = scanCluster
-	err := checker.balancer.step(ctx, "_tidb_pt_100")
+	err := checker.balancer.step(ctx, affinity.TableIDForGroup("_tidb_pt_100_p0"))
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, uint64(1), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
 
