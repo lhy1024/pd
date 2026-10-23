@@ -228,20 +228,20 @@ func TestInternalPeerConflictSchedulesBaselineRefresh(t *testing.T) {
 	require.NoError(t, base.RunInTxn(m.ctx, func(txn kv.Txn) error {
 		return base.SaveAffinityGroup(txn, id, &persisted)
 	}))
-	version := m.GetAffinityGroupState(id).affinityVer
-	state, err := m.updateAffinityGroupPeersWithAffinityVer(id, version, 3, []uint64{1, 2, 3})
+	observed := m.GetAffinityGroupState(id)
+	state, err := m.saveGroupPeers(id, observed, 3, []uint64{1, 2, 3})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), state.LeaderStoreID)
 	require.True(t, m.metadataNeedsReload)
 	// The conflict above only reports the old state. The next internal retry
 	// must refresh the persisted target before comparing its baseline.
-	version = m.GetAffinityGroupState(id).affinityVer
-	state, err = m.updateAffinityGroupPeersWithAffinityVer(id, version, 3, []uint64{1, 2, 3})
+	observed = m.GetAffinityGroupState(id)
+	state, err = m.saveGroupPeers(id, observed, 3, []uint64{1, 2, 3})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), loadStoredGroup(t, m, id).LeaderStoreID)
 	require.Equal(t, uint64(2), state.LeaderStoreID)
-	version = m.GetAffinityGroupState(id).affinityVer
-	state, err = m.updateAffinityGroupPeersWithAffinityVer(id, version, 3, []uint64{1, 2, 3})
+	observed = m.GetAffinityGroupState(id)
+	state, err = m.saveGroupPeers(id, observed, 3, []uint64{1, 2, 3})
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), state.LeaderStoreID)
 }
@@ -252,13 +252,13 @@ func TestInternalPeerMissingGroupSchedulesBaselineRefresh(t *testing.T) {
 	require.NoError(t, m.storage.RunInTxn(t.Context(), func(txn kv.Txn) error {
 		return m.storage.DeleteAffinityGroup(txn, id)
 	}))
-	version := m.GetAffinityGroupState(id).affinityVer
-	_, err := m.updateAffinityGroupPeersWithAffinityVer(id, version, 2, []uint64{1, 2, 3})
+	observed := m.GetAffinityGroupState(id)
+	_, err := m.saveGroupPeers(id, observed, 2, []uint64{1, 2, 3})
 	require.ErrorIs(t, err, errs.ErrAffinityGroupNotFound)
 	require.True(t, m.metadataNeedsReload)
 	// The next explicit write refreshes the stale local group before checking
 	// it and reports the same not-found result from the authoritative state.
-	_, err = m.updateAffinityGroupPeersWithAffinityVer(id, version, 2, []uint64{1, 2, 3})
+	_, err = m.saveGroupPeers(id, observed, 2, []uint64{1, 2, 3})
 	require.ErrorIs(t, err, errs.ErrAffinityGroupNotFound)
 	require.Nil(t, m.GetAffinityGroupState(id))
 }
