@@ -128,7 +128,7 @@ func (m *Manager) ObserveAvailableRegion(region *core.RegionInfo, group *GroupSt
 	for i, voter := range region.GetVoters() {
 		voterStoreIDs[i] = voter.GetStoreId()
 	}
-	_, _ = m.updateAffinityGroupPeersWithAffinityVer(group.ID, group.affinityVer, leaderStoreID, voterStoreIDs)
+	_, _ = m.saveGroupPeers(group.ID, group, leaderStoreID, voterStoreIDs)
 }
 
 // startAvailabilityCheckLoop starts a goroutine to periodically check store availability and invalidate groups with unavailable stores.

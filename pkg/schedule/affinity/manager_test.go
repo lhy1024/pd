@@ -258,7 +258,7 @@ func TestSyncGroupFromEtcdUpdatesBalancePolicy(t *testing.T) {
 		manager.RUnlock()
 		re.Equal(1, count)
 	}
-	updated, err := manager.updateAffinityGroupPeersWithAffinityVer("policy", before.affinityVer, 2, before.VoterStoreIDs)
+	updated, err := manager.saveGroupPeers("policy", before, 2, before.VoterStoreIDs)
 	re.NoError(err)
 	re.Equal(uint64(2), updated.LeaderStoreID, "policy-only updates must not discard an in-flight peer update")
 }

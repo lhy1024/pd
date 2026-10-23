@@ -193,7 +193,7 @@ func TestAffinityPersistenceWithLabeler(t *testing.T) {
 	re.Equal(10, state.RangeCount)
 	re.NotNil(regionLabeler.GetLabelRule(GetLabelRuleID("persist")))
 
-	// Reload manager to verify persistence and loadRegionLabel integration.
+	// Reload manager to verify persistence and the rebuilt group-label mapping.
 	manager2, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
 	re.NoError(err)
 	state2 := manager2.GetAffinityGroupState("persist")

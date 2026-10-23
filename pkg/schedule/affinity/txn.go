@@ -452,7 +452,7 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 
 // UpdateAffinityGroupPeers updates the leader and voter stores of an affinity group and marks it available.
 func (m *Manager) UpdateAffinityGroupPeers(groupID string, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
-	return m.updateAffinityGroupPeersWithAffinityVer(groupID, 0, leaderStoreID, voterStoreIDs)
+	return m.saveGroupPeers(groupID, nil, leaderStoreID, voterStoreIDs)
 }
 
 // UpdateAffinityGroupPolicy updates the balance policy of an affinity group.
@@ -514,11 +514,10 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 	return newGroupState(groupInfo), nil
 }
 
-// updateAffinityGroupPeersWithAffinityVer updates the leader and voter stores of an affinity group and marks it available.
-// If affinityVer is non-zero (0 indicates an admin operation and is enforced)
-//   - Its equality will be checked.
-//   - Group must not change voterStoreIDs while it is not in the expired status.
-func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affinityVer uint64, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
+// saveGroupPeers saves an admin target (observed == nil) or a target
+// from a Region observation. Observations must match both the current runtime
+// instance and its affinity version under metaMutex, including after a reload.
+func (m *Manager) saveGroupPeers(groupID string, observed *GroupState, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
 	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
 		return nil, err
@@ -550,11 +549,11 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	}
 	voterStoreIDs = slices.Clone(voterStoreIDs)
 	slices.Sort(voterStoreIDs)
-	// When affinityVer is non-zero, it indicates a non-admin operation and triggers additional checks.
+	// Region observations receive additional checks; admin writes keep their existing semantics.
 	// Note: if the check fails, no changes are applied. The existing Group is returned as-is without error.
-	if affinityVer != 0 {
-		// If affinityVer is not equal, the update may come from stale statistics and will be ignored.
-		if group.affinityVer != affinityVer {
+	if observed != nil {
+		// A stale runtime instance or version must never initialize a new target.
+		if group.groupInfoPtr != observed.groupInfoPtr || group.affinityVer != observed.affinityVer {
 			return group, nil
 		}
 		// Group must not change voterStoreIDs while it is not in the expired status. Changing only leaderStoreID is allowed.
@@ -581,7 +580,7 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 		}
 		updated = *persisted
 		if updated.ID != original.ID || updated.CreateTimestamp != original.CreateTimestamp ||
-			(affinityVer != 0 && (updated.BalancePolicy != original.BalancePolicy || updated.LeaderStoreID != original.LeaderStoreID ||
+			(observed != nil && (updated.BalancePolicy != original.BalancePolicy || updated.LeaderStoreID != original.LeaderStoreID ||
 				!slices.Equal(normalizeVoters(updated.VoterStoreIDs), original.VoterStoreIDs))) {
 			// The scheduler observed a persisted target different from its
 			// local baseline. Keep the existing return contract, but make the
@@ -599,7 +598,7 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 		return m.storage.SaveAffinityGroup(txn, groupID, &updated)
 	})
 	if errs.ErrEtcdTxnConflict.Equal(err) {
-		if affinityVer == 0 {
+		if observed == nil {
 			return nil, err
 		}
 		return m.GetAffinityGroupState(groupID), nil
@@ -1018,65 +1017,6 @@ func validateNoOverlap(ranges []GroupKeyRanges) error {
 					allRanges[i].groupID + " and " + allRanges[i+1].groupID)
 		}
 	}
-
-	return nil
-}
-
-// loadRegionLabel rebuilds the mapping between groups and label rules after restart.
-// It should be called with the manager lock held.
-func (m *Manager) loadRegionLabel() error {
-	// Collect all key ranges from label rules and populate in-memory cache
-	var allRanges []GroupKeyRanges
-
-	m.regionLabeler.IterateLabelRules(func(rule *labeler.LabelRule) bool {
-		groupID, ok := parseAffinityGroupIDFromLabelRule(rule)
-		if !ok {
-			// Not an affinity label rule, skip
-			return true
-		}
-
-		if _, exists := m.groups[groupID]; !exists {
-			log.Debug("found label rule for unknown affinity group, skip rebuilding",
-				zap.String("group-id", groupID),
-				zap.String("rule-id", rule.ID))
-			return true
-		}
-
-		gkr, err := extractKeyRangesFromLabelRule(rule)
-		if err != nil {
-			log.Warn("failed to extract key ranges from label rule during rebuild",
-				zap.String("rule-id", rule.ID),
-				zap.String("group-id", groupID),
-				zap.Error(err))
-			return true
-		}
-
-		if len(gkr.KeyRanges) > 0 {
-			allRanges = append(allRanges, gkr)
-			// Populate in-memory key ranges cache
-			m.keyRanges[groupID] = gkr
-		}
-
-		// Associate the label rule with the group
-		m.updateGroupLabelRuleLocked(groupID, rule, false)
-
-		return true
-	})
-
-	// Validate that all key ranges are non-overlapping
-	if err := validateNoOverlap(allRanges); err != nil {
-		return err
-	}
-
-	log.Info("rebuilt group-label mapping",
-		zap.Int("total-groups", len(m.keyRanges)),
-		zap.Int("total-ranges", func() int {
-			total := 0
-			for _, gkr := range allRanges {
-				total += len(gkr.KeyRanges)
-			}
-			return total
-		}()))
 
 	return nil
 }

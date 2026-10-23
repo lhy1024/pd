@@ -17,6 +17,7 @@ package affinity
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 
@@ -171,12 +172,6 @@ func (m *Manager) IsAvailable() bool {
 	m.RLock()
 	defer m.RUnlock()
 	return len(m.groups) > 0
-}
-
-// GetRegionLabeler returns the label index used by this manager. Watchers use
-// it only to seed their bounded deletion reconciliation snapshot.
-func (m *Manager) GetRegionLabeler() *labeler.RegionLabeler {
-	return m.regionLabeler
 }
 
 func (m *Manager) initGroupLocked(group *Group) {
@@ -649,7 +644,9 @@ func (m *Manager) reloadAffinityMetadataUnconditionallyLocked(ctx context.Contex
 // the new primary conditions; ordinary initialization captures the current
 // primary conditions through reloadAffinityMetadataLocked.
 func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, conditions []clientv3.Cmp) error {
-	loaded := make([]Group, 0)
+	loaded := make(map[string]Group)
+	rules := make(map[string]*labeler.LabelRule)
+	ranges := make(map[string]GroupKeyRanges)
 	var rangeVersion uint64
 	plan := m.regionLabeler.NewPlan()
 	for _, rule := range m.regionLabeler.GetAllLabelRules() {
@@ -665,36 +662,68 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 		if err != nil {
 			return err
 		}
+		var parseErr error
 		if err := m.storage.LoadAllAffinityGroups(func(_, value string) {
-			var group Group
-			if json.Unmarshal([]byte(value), &group) == nil && validateBalancePolicy(group.BalancePolicy) == nil {
-				loaded = append(loaded, group)
-			}
-		}); err != nil {
-			return err
-		}
-		var labelErr error
-		if err := m.storage.LoadAllAffinityLabels(func(_, value string) {
-			if labelErr != nil {
+			if parseErr != nil {
 				return
 			}
-			var rule labeler.LabelRule
-			if json.Unmarshal([]byte(value), &rule) == nil {
-				labelErr = plan.SetLabelRule(&rule)
+			var group Group
+			if parseErr = json.Unmarshal([]byte(value), &group); parseErr != nil {
+				return
+			}
+			// Preserve the load/watch contract: invalid policies are isolated.
+			if validateBalancePolicy(group.BalancePolicy) != nil {
+				return
+			}
+			if parseErr = ValidateGroupID(group.ID); parseErr == nil {
+				loaded[group.ID] = group
 			}
 		}); err != nil {
 			return err
 		}
-		return labelErr
+		if parseErr != nil {
+			return parseErr
+		}
+		if err := m.storage.LoadAllAffinityLabels(func(_, value string) {
+			if parseErr != nil {
+				return
+			}
+			rule := &labeler.LabelRule{}
+			parseErr = json.Unmarshal([]byte(value), rule)
+			if parseErr != nil {
+				return
+			}
+			if parseErr = plan.SetLabelRule(rule); parseErr != nil {
+				return
+			}
+			id, ok := parseAffinityGroupIDFromLabelRule(rule)
+			if !ok {
+				parseErr = errs.ErrAffinityGroupContent.FastGenByArgs("invalid affinity label identity")
+				return
+			}
+			var gkr GroupKeyRanges
+			gkr, parseErr = extractKeyRangesFromLabelRule(rule)
+			if parseErr != nil {
+				return
+			}
+			rules[id] = rule
+			if _, exists := loaded[id]; exists && len(gkr.KeyRanges) > 0 {
+				ranges[id] = gkr
+			}
+		}); err != nil {
+			return err
+		}
+		return parseErr
 	})
 	if err != nil {
 		return err
 	}
-	// No persistence here: the transaction checks the captured authority, not
-	// the revisions of the separately loaded prefixes. Ordinary label rules
-	// keep their independent watcher/API path.
+	if err := validateNoOverlap(slices.Collect(maps.Values(ranges))); err != nil {
+		return err
+	}
+	// All fallible work is complete. Publish the full affinity view, preserving
+	// ordinary labels. The prefixes were read separately, not at one revision.
 	plan.Apply()
-
 	m.Lock()
 	defer m.Unlock()
 	m.affinityRangeVersion = rangeVersion
@@ -702,12 +731,15 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 	m.regions = make(map[uint64]regionCache)
 	m.metadataTables = make(map[TableID]*metadataTableState)
 	m.affinityRegionCount = 0
-	m.keyRanges = make(map[string]GroupKeyRanges)
+	m.keyRanges = ranges
 	m.labelRuleBuffer = make(map[string]*labeler.LabelRule)
-	for i := range loaded {
-		m.initGroupLocked(&loaded[i])
+	for _, group := range loaded {
+		m.initGroupLocked(&group)
+		if rule := rules[group.ID]; rule != nil {
+			m.updateGroupLabelRuleLocked(group.ID, rule, false)
+		}
 	}
-	return m.loadRegionLabel()
+	return nil
 }
 
 // SyncGroupDeleteFromEtcd synchronizes a group deletion from etcd.

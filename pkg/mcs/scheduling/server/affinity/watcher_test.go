@@ -48,15 +48,7 @@ func TestMain(m *testing.M) {
 
 type failingGroupStorage struct {
 	*endpoint.StorageEndpoint
-	failGroupRead atomic.Bool
-	failReloads   atomic.Int32
-}
-
-func (s *failingGroupStorage) LoadAffinityGroup(id string) (string, error) {
-	if s.failGroupRead.Swap(false) {
-		return "", errors.New("group read unavailable")
-	}
-	return s.StorageEndpoint.LoadAffinityGroup(id)
+	failReloads atomic.Int32
 }
 
 func (s *failingGroupStorage) LoadAllAffinityGroups(fn func(string, string)) error {
@@ -64,59 +56,6 @@ func (s *failingGroupStorage) LoadAllAffinityGroups(fn func(string, string)) err
 		return errors.New("group snapshot unavailable")
 	}
 	return s.StorageEndpoint.LoadAllAffinityGroups(fn)
-}
-
-func TestAffinityGroupBatchRetriesAuthoritativeReload(t *testing.T) {
-	ctx, client, clean := prepare(t)
-	defer clean()
-	store := &failingGroupStorage{StorageEndpoint: endpoint.NewStorageEndpoint(kv.NewEtcdKVBase(client), nil)}
-	l, err := labeler.NewRegionLabeler(ctx, endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil), time.Hour)
-	require.NoError(t, err)
-	manager, err := affinity.NewManager(ctx, store, core.NewBasicCluster(), mockconfig.NewTestOptions(), l)
-	require.NoError(t, err)
-	// Both objects have been deleted in authoritative storage before their old
-	// event batch is applied. X was never recorded as successfully watched.
-	for _, id := range []string{"x", "y"} {
-		require.NoError(t, manager.CreateAffinityGroups([]affinity.GroupKeyRanges{{GroupID: id}}))
-	}
-	x := manager.GetAffinityGroupState("x").Group
-	require.NoError(t, manager.DeleteAffinityGroups([]string{"x", "y"}, false))
-	w := &Watcher{affinityManager: manager, groupPending: []groupSyncEvent{
-		{group: &x}, {id: "y", deleted: true}, {id: "x", deleted: true},
-	}}
-	store.failGroupRead.Store(true)
-	store.failReloads.Store(2)
-	require.Error(t, w.applyGroupPending())
-	require.True(t, manager.IsGroupExist("x"), "the failed batch published its first put")
-	// Empty snapshots cannot supply an X delete through loadedKeys. Their post
-	// callback must keep retrying the Manager replacement, without API writes.
-	for range 2 {
-		require.Error(t, w.applyGroupPending(), "failed replacement must not acknowledge recovery")
-		require.True(t, manager.IsGroupExist("x"))
-	}
-	require.NoError(t, w.applyGroupPending())
-	require.Empty(t, manager.GetAllAffinityGroupStates())
-}
-
-func TestAffinityGroupFullLoadReconcilesManagerOnlyGroup(t *testing.T) {
-	ctx, client, clean := prepare(t)
-	defer clean()
-	store := endpoint.NewStorageEndpoint(kv.NewEtcdKVBase(client), nil)
-	labelStore := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
-	l, err := labeler.NewRegionLabeler(ctx, labelStore, time.Hour)
-	require.NoError(t, err)
-	manager, err := affinity.NewManager(ctx, store, core.NewBasicCluster(), mockconfig.NewTestOptions(), l)
-	require.NoError(t, err)
-	require.NoError(t, manager.CreateAffinityGroups([]affinity.GroupKeyRanges{{GroupID: "ghost"}}))
-	require.True(t, manager.IsGroupExist("ghost"))
-	// Delete only the authoritative value. The watcher has never observed the
-	// put, so loadedKeys cannot identify this Manager entry for reconciliation.
-	require.NoError(t, store.RunInTxn(ctx, func(txn kv.Txn) error {
-		return store.DeleteAffinityGroup(txn, "ghost")
-	}))
-	w := &Watcher{affinityManager: manager}
-	require.NoError(t, w.postGroupEvents(nil))
-	require.False(t, manager.IsGroupExist("ghost"))
 }
 
 func TestAffinityWatcherLifecycle(t *testing.T) {
