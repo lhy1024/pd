@@ -35,7 +35,7 @@ type metadataTableState struct {
 }
 
 func (m *Manager) invalidateMetadataLocked(groupID string) {
-	tableID := TableGroupPrefix(groupID)
+	tableID := TableIDForGroup(groupID)
 	state := m.metadataTables[tableID]
 	if state == nil {
 		state = &metadataTableState{groups: make(map[string]struct{})}
@@ -55,13 +55,17 @@ func affinityRangesEqual(a, b GroupKeyRanges) bool {
 
 var partitionGroupIDRegexp = regexp.MustCompile(`^_tidb_pt_[0-9]+_p[0-9]+$`)
 
-// TableGroupPrefix identifies the table for numeric TiDB partition group IDs.
-// Custom group IDs each identify their own table.
-func TableGroupPrefix(groupID string) string {
+// TableID identifies an internal metadata table, separate from user group IDs.
+type TableID string
+
+// TableIDForGroup groups numeric TiDB partitions by table. Every custom group
+// has a separate identity, even when its ID looks like a partition table prefix.
+// Convert a group ID once; APIs accepting TableID never parse it as a group ID.
+func TableIDForGroup(groupID string) TableID {
 	if partitionGroupIDRegexp.MatchString(groupID) {
-		return groupID[:strings.LastIndex(groupID, "_p")]
+		return TableID("partition:" + groupID[:strings.LastIndex(groupID, "_p")])
 	}
-	return groupID
+	return TableID("group:" + groupID)
 }
 
 // SetAffinityWriteGuard installs the authority provider for all metadata writes.

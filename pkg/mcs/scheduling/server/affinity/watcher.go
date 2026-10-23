@@ -54,6 +54,9 @@ type Watcher struct {
 	labelWatcher *etcdutil.LoopWatcher
 	groupPending []groupSyncEvent
 	labelPending []labelSyncEvent
+	// Only the group watch loop accesses this flag. Failed batches may have
+	// published keys that LoopWatcher's successful-key tracking does not know.
+	groupNeedsReload bool
 }
 
 type groupSyncEvent struct {
@@ -71,6 +74,13 @@ type labelSyncEvent struct {
 func (w *Watcher) applyGroupPending() error {
 	pending := w.groupPending
 	w.groupPending = nil
+	if w.groupNeedsReload {
+		// A full replacement must succeed before acknowledging recovery. Do
+		// not replay the staged snapshot over the newer authoritative view.
+		err := w.affinityManager.ReloadAffinityMetadataFromStorage()
+		w.groupNeedsReload = err != nil
+		return err
+	}
 	for _, event := range pending {
 		var err error
 		if event.deleted {
@@ -79,12 +89,9 @@ func (w *Watcher) applyGroupPending() error {
 			err = w.affinityManager.SyncGroupFromEtcd(event.group)
 		}
 		if err != nil {
-			// Events before the failed one may already be published. Reconcile
-			// the Manager before LoopWatcher retries the batch, otherwise a key
-			// absent from the snapshot can remain as a ghost group.
-			if reloadErr := w.affinityManager.ReloadAffinityMetadataFromStorage(); reloadErr != nil {
-				log.Warn("failed to reconcile affinity groups after a partial watcher batch", zap.Error(reloadErr))
-			}
+			// Keep requiring a full Manager replacement on LoopWatcher retries,
+			// including empty snapshots, until storage recovers.
+			w.groupNeedsReload = true
 			return err
 		}
 	}

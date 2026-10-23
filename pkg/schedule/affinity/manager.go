@@ -72,10 +72,10 @@ type Manager struct {
 
 	// The following members are protected by RWMutex.
 	affinityRegionCount int
-	groups              map[string]*runtimeGroupInfo   // {group_id} -> runtimeGroupInfo
-	regions             map[uint64]regionCache         // {region_id} -> regionCache
-	unavailableStores   map[uint64]storeCondition      // {store_id} -> storeCondition
-	metadataTables      map[string]*metadataTableState // {table_id} -> metadata generations
+	groups              map[string]*runtimeGroupInfo    // {group_id} -> runtimeGroupInfo
+	regions             map[uint64]regionCache          // {region_id} -> regionCache
+	unavailableStores   map[uint64]storeCondition       // {store_id} -> storeCondition
+	metadataTables      map[TableID]*metadataTableState // {table_id} -> metadata generations
 	metadataGeneration  uint64
 	affinityWriteTerm   func() ([]clientv3.Cmp, bool)
 
@@ -110,7 +110,7 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 		groups:              make(map[string]*runtimeGroupInfo),
 		regions:             make(map[uint64]regionCache),
 		unavailableStores:   make(map[uint64]storeCondition),
-		metadataTables:      make(map[string]*metadataTableState),
+		metadataTables:      make(map[TableID]*metadataTableState),
 		keyRanges:           make(map[string]GroupKeyRanges),
 		labelRuleBuffer:     make(map[string]*labeler.LabelRule),
 	}
@@ -312,7 +312,7 @@ func (m *Manager) updateGroupLabelRuleLockedWithCount(groupID string, labelRule 
 	// Set LabelRule
 	groupInfo.LabelRule = labelRule
 	groupInfo.RangeCount = rangeCount
-	if state := m.metadataTables[TableGroupPrefix(groupID)]; state != nil {
+	if state := m.metadataTables[TableIDForGroup(groupID)]; state != nil {
 		m.metadataGeneration++
 		state.version = m.metadataGeneration
 	}
@@ -342,10 +342,10 @@ func (m *Manager) clearGroupCacheLocked(groupID string) {
 func (m *Manager) deleteGroupLocked(groupID string) {
 	m.clearGroupCacheLocked(groupID)
 	delete(m.groups, groupID)
-	if state := m.metadataTables[TableGroupPrefix(groupID)]; state != nil {
+	if state := m.metadataTables[TableIDForGroup(groupID)]; state != nil {
 		delete(state.groups, groupID)
 		if len(state.groups) == 0 {
-			delete(m.metadataTables, TableGroupPrefix(groupID))
+			delete(m.metadataTables, TableIDForGroup(groupID))
 		}
 	}
 }
@@ -700,7 +700,7 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 	m.affinityRangeVersion = rangeVersion
 	m.groups = make(map[string]*runtimeGroupInfo, len(loaded))
 	m.regions = make(map[uint64]regionCache)
-	m.metadataTables = make(map[string]*metadataTableState)
+	m.metadataTables = make(map[TableID]*metadataTableState)
 	m.affinityRegionCount = 0
 	m.keyRanges = make(map[string]GroupKeyRanges)
 	m.labelRuleBuffer = make(map[string]*labeler.LabelRule)
