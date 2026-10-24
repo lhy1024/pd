@@ -560,10 +560,8 @@ func (rw *Watcher) initializeRuleWatcher() error {
 
 func (rw *Watcher) initializeRegionLabelWatcher() error {
 	suspectKeyRanges := make([]*labeler.KeyRangeRule, 0)
-	var eventErr error
 	// TODO: use txn in region labeler.
-	preEventsFn := func(_ []*clientv3.Event) error {
-		eventErr = nil
+	preEventsFn := func([]*clientv3.Event) error {
 		// It will be locked until the postEventsFn is finished.
 		rw.regionLabeler.Lock()
 		for i := range suspectKeyRanges {
@@ -572,12 +570,7 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 		suspectKeyRanges = suspectKeyRanges[:0]
 		return nil
 	}
-	putFn := func(kv *mvccpb.KeyValue) (err error) {
-		defer func() {
-			if err != nil {
-				eventErr = err
-			}
-		}()
+	putFn := func(kv *mvccpb.KeyValue) error {
 		log.Debug("update region label rule", zap.String("key", string(kv.Key)), zap.String("value", string(kv.Value)))
 		if strings.HasPrefix(string(kv.Key), keypath.RegionLabelKeyPath(affinity.LabelRuleIDPrefix)) {
 			// The affinity watcher publishes these through Manager under
@@ -597,12 +590,7 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 		}
 		return err
 	}
-	deleteFn := func(kv *mvccpb.KeyValue) (err error) {
-		defer func() {
-			if err != nil {
-				eventErr = err
-			}
-		}()
+	deleteFn := func(kv *mvccpb.KeyValue) error {
 		key := string(kv.Key)
 		log.Debug("delete region label rule", zap.String("key", key))
 		id := strings.TrimPrefix(key, rw.regionLabelPathPrefix)
@@ -610,7 +598,7 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 			return nil
 		}
 		rule := rw.regionLabeler.GetLabelRuleLocked(id)
-		err = rw.regionLabeler.DeleteLabelRuleLocked(id)
+		err := rw.regionLabeler.DeleteLabelRuleLocked(id)
 		if err == nil && rule != nil {
 			krs := rule.GetKeyRanges()
 			if krs != nil {
@@ -629,7 +617,7 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 		for _, kr := range suspectKeyRanges {
 			rw.checkerController.AddSuspectKeyRange(kr.StartKey, kr.EndKey)
 		}
-		return eventErr
+		return nil
 	}
 	rw.labelWatcher = etcdutil.NewLoopWatcher(
 		rw.ctx, &rw.wg,
