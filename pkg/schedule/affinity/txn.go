@@ -621,6 +621,7 @@ func (m *Manager) keyRangesOrEmpty(groupID string) GroupKeyRanges {
 // Note: Validates add and remove operations separately, then applies both atomically in a single transaction.
 // Currently migration (removing a range from group A and adding the same range to group B in one request)
 // is not supported because add validation checks overlaps against existing ranges before removals are applied.
+// TiDB currently creates one fixed range per table or partition and has no such migration requirement.
 func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRanges) error {
 	conditions, err := m.captureAffinityWriteConditions()
 	if err != nil {
