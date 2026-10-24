@@ -523,6 +523,10 @@ func (m *Manager) syncGroupFromEtcdLocked(group *Group) error {
 	if group == nil {
 		return nil
 	}
+	if err := ValidateGroupID(group.ID); err != nil {
+		log.Warn("invalid affinity group ID from etcd, skipping", zap.String("group-id", group.ID), zap.Error(err))
+		return nil
+	}
 	if err := validateBalancePolicy(group.BalancePolicy); err != nil {
 		log.Warn("invalid affinity group balance policy from etcd, skipping",
 			zap.String("group-id", group.ID),
@@ -685,9 +689,11 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 			if validateBalancePolicy(group.BalancePolicy) != nil {
 				return
 			}
-			if parseErr = ValidateGroupID(group.ID); parseErr == nil {
-				loaded[group.ID] = group
+			if err := ValidateGroupID(group.ID); err != nil {
+				log.Warn("invalid affinity group ID from etcd, skipping", zap.String("group-id", group.ID), zap.Error(err))
+				return
 			}
+			loaded[group.ID] = group
 		}); err != nil {
 			return err
 		}
@@ -698,25 +704,34 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 			if parseErr != nil {
 				return
 			}
-			rule := &labeler.LabelRule{}
-			parseErr = json.Unmarshal([]byte(value), rule)
-			if parseErr != nil {
+			var rawRule labeler.LabelRule
+			if parseErr = json.Unmarshal([]byte(value), &rawRule); parseErr != nil {
 				return
 			}
-			if parseErr = plan.SetLabelRule(rule); parseErr != nil {
+			validated, err := labeler.NewLabelRuleFromJSON([]byte(value))
+			if err != nil {
+				log.Warn("invalid affinity label from etcd, skipping", zap.String("rule-id", rawRule.ID), zap.Error(err))
 				return
 			}
-			id, ok := parseAffinityGroupIDFromLabelRule(rule)
+			id, ok := parseAffinityGroupIDFromLabelRule(validated)
 			if !ok {
-				parseErr = errs.ErrAffinityGroupContent.FastGenByArgs("invalid affinity label identity")
+				log.Warn("invalid affinity label identity from etcd, skipping", zap.String("rule-id", validated.ID))
 				return
 			}
-			var gkr GroupKeyRanges
-			gkr, parseErr = extractKeyRangesFromLabelRule(rule)
-			if parseErr != nil {
+			if err := ValidateGroupID(id); err != nil {
+				log.Warn("invalid affinity group ID in label rule, skipping", zap.String("group-id", id), zap.Error(err))
 				return
 			}
-			rules[id] = rule
+			rule := rawRule
+			if parseErr = plan.SetLabelRule(&rule); parseErr != nil {
+				return
+			}
+			gkr, err := extractKeyRangesFromLabelRule(validated)
+			if err != nil {
+				log.Warn("invalid affinity label ranges from etcd, skipping", zap.String("group-id", id), zap.Error(err))
+				return
+			}
+			rules[id] = &rule
 			if _, exists := loaded[id]; exists && len(gkr.KeyRanges) > 0 {
 				ranges[id] = gkr
 			}
@@ -832,6 +847,10 @@ func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule) erro
 	if !isAffinity {
 		return nil
 	}
+	if err := ValidateGroupID(groupID); err != nil {
+		log.Warn("invalid affinity group ID in label rule, skipping", zap.String("group-id", groupID), zap.Error(err))
+		return nil
+	}
 	// Extract key ranges from label rule
 	gkr, err := extractKeyRangesFromLabelRule(labelRule)
 	if err != nil {
@@ -896,6 +915,10 @@ func (m *Manager) SyncKeyRangesDeleteFromEtcdEvent(ruleID string) error {
 func (m *Manager) syncKeyRangesDeleteFromEtcdLocked(ruleID string) error {
 	groupID := strings.TrimPrefix(ruleID, LabelRuleIDPrefix)
 	if groupID == "" || groupID == ruleID {
+		return nil
+	}
+	if err := ValidateGroupID(groupID); err != nil {
+		log.Warn("invalid affinity group ID in label rule delete, skipping", zap.String("group-id", groupID), zap.Error(err))
 		return nil
 	}
 	// Clear keyRanges cache (needs metaMutex)
