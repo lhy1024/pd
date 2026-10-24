@@ -642,7 +642,6 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 		postEventsFn,
 		true, /* withPrefix */
 	)
-	rw.labelWatcher.SetRetryOnPostEventError()
 	rw.labelWatcher.SetReconcileDeletedKeys()
 	rw.labelWatcher.StartWatchLoop()
 	return rw.labelWatcher.WaitLoad()

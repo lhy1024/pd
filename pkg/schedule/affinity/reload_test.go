@@ -15,6 +15,7 @@
 package affinity
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,33 @@ import (
 	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 )
+
+func TestReloadAndWatchSkipInvalidAffinityIDs(t *testing.T) {
+	m := newMetadataTestManager(t)
+	valid := Group{ID: "valid"}
+	invalid := Group{ID: "bad/id"}
+	invalidRule := MakeLabelRule(GroupKeyRanges{GroupID: invalid.ID, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{1}, EndKey: []byte{2}}}})
+	require.NoError(t, m.storage.RunInTxn(t.Context(), func(txn kv.Txn) error {
+		if err := m.storage.SaveAffinityGroup(txn, valid.ID, &valid); err != nil {
+			return err
+		}
+		if err := m.storage.SaveAffinityGroup(txn, invalid.ID, &invalid); err != nil {
+			return err
+		}
+		value, err := json.Marshal(invalidRule)
+		if err != nil {
+			return err
+		}
+		return txn.Save(keypath.RegionLabelKeyPath(invalidRule.ID), string(value))
+	}))
+	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
+	require.NotNil(t, m.GetAffinityGroupState(valid.ID))
+	require.Nil(t, m.GetAffinityGroupState(invalid.ID))
+	require.NoError(t, m.SyncGroupFromEtcd(&invalid))
+	require.Nil(t, m.GetAffinityGroupState(invalid.ID))
+	require.NoError(t, m.SyncKeyRangesFromEtcd(invalidRule))
+	require.Nil(t, m.regionLabeler.GetLabelRule(invalidRule.ID))
+}
 
 func TestReloadRejectsStaleRegionObservation(t *testing.T) {
 	m := newMetadataTestManager(t)

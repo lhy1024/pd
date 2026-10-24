@@ -154,6 +154,33 @@ func TestSharedWatcherLeavesAffinityLabelsToManager(t *testing.T) {
 	require.Equal(t, rule, l.GetLabelRule(rule.ID))
 }
 
+func TestRegionLabelWatcherAdvancesPastInvalidEvent(t *testing.T) {
+	ctx, client, clean := prepare(t, false)
+	defer clean()
+	fixture := newRuleWatcherTestFixture(ctx, t)
+	regionLabeler, err := labeler.NewRegionLabeler(ctx, fixture.storage, time.Hour)
+	require.NoError(t, err)
+	watchCtx, cancel := context.WithCancel(ctx)
+	rw := &Watcher{
+		ctx: watchCtx, cancel: cancel, etcdClient: client,
+		regionLabelPathPrefix: keypath.RegionLabelPathPrefix(),
+		checkerController:     fixture.checkerController, regionLabeler: regionLabeler,
+	}
+	defer rw.Close()
+	require.NoError(t, rw.initializeRegionLabelWatcher())
+
+	_, err = client.Put(ctx, keypath.RegionLabelKeyPath("invalid"), "not-json")
+	require.NoError(t, err)
+	valid := &labeler.LabelRule{ID: "valid", Labels: []labeler.RegionLabel{{Key: "zone", Value: "z1"}}, RuleType: labeler.KeyRange, Data: labeler.MakeKeyRanges("00", "01")}
+	value, err := json.Marshal(valid)
+	require.NoError(t, err)
+	_, err = client.Put(ctx, keypath.RegionLabelKeyPath(valid.ID), string(value))
+	require.NoError(t, err)
+	testutil.Eventually(require.New(t), func() bool {
+		return regionLabeler.GetLabelRule(valid.ID) != nil
+	})
+}
+
 func BenchmarkLoadLargeRules(b *testing.B) {
 	re := require.New(b)
 	ctx, client, clean := prepare(b, true)
