@@ -451,6 +451,7 @@ func (c *RaftCluster) Start(s Server, bootstrap bool) (err error) {
 		}
 		return conditions, ok
 	})
+	c.affinityManager.SetBalanceRuleRevision(c.ruleManager.GetRevision)
 
 	if !c.IsServiceIndependent(constant.SchedulingServiceName) {
 		observeSlowStoreStart := time.Now()

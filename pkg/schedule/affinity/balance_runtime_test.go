@@ -1,0 +1,154 @@
+// Copyright 2026 TiKV Project Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package affinity
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/pingcap/kvproto/pkg/metapb"
+
+	"github.com/tikv/pd/pkg/core"
+	"github.com/tikv/pd/pkg/utils/keyutil"
+)
+
+func TestGetBalanceSnapshotScopesAndCopiesTableState(t *testing.T) {
+	manager := newMetadataTestManager(t)
+	ids := seedMetadataTestGroups(t, manager, []uint64{1, 2, 3})
+	otherTableID := "_tidb_pt_20_p1"
+	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: otherTableID, KeyRanges: []keyutil.KeyRange{{StartKey: []byte{10}, EndKey: []byte{11}}}}}))
+	_, err := manager.UpdateAffinityGroupPeers(otherTableID, 4, []uint64{2, 3, 4})
+	require.NoError(t, err)
+
+	snapshot := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
+	require.NotNil(t, snapshot)
+	require.Equal(t, TableIDForGroup(ids[0]), snapshot.TableID)
+	require.Len(t, snapshot.Groups, len(ids))
+	require.ElementsMatch(t, ids, []string{snapshot.Groups[0].ID, snapshot.Groups[1].ID, snapshot.Groups[2].ID})
+	require.NotContains(t, snapshot.Ranges, otherTableID)
+	require.ElementsMatch(t, []uint64{1, 2, 3, 4}, snapshot.Stores)
+
+	snapshot.Groups[0].LeaderStoreID = 4
+	ranges := snapshot.Ranges[ids[0]]
+	ranges.KeyRanges[0].StartKey[0] = 9
+	snapshot.Ranges[ids[0]] = ranges
+
+	fresh := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
+	require.Equal(t, uint64(1), fresh.Groups[0].LeaderStoreID)
+	require.Equal(t, byte(0), fresh.Ranges[ids[0]].KeyRanges[0].StartKey[0])
+}
+
+func TestBalanceTableEligibilityTracksPolicy(t *testing.T) {
+	manager := newMetadataTestManager(t)
+	require.False(t, manager.IsBalanceTableEligible(TableIDForGroup("_tidb_pt_10_p1")))
+	ids := seedMetadataTestGroups(t, manager, []uint64{1})
+	require.False(t, manager.IsBalanceTableEligible(TableIDForGroup(ids[0])))
+	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "_tidb_pt_10_p2"}}))
+	require.True(t, manager.IsBalanceTableEligible(TableIDForGroup(ids[0])))
+
+	for _, id := range []string{ids[0], "_tidb_pt_10_p2"} {
+		_, err := manager.UpdateAffinityGroupPolicy(id, BalancePolicyFixed)
+		require.NoError(t, err)
+	}
+	require.False(t, manager.IsBalanceTableEligible(TableIDForGroup(ids[0])))
+	_, err := manager.UpdateAffinityGroupPolicy(ids[0], BalancePolicyAuto)
+	require.NoError(t, err)
+	require.True(t, manager.IsBalanceTableEligible(TableIDForGroup(ids[0])), "one auto group is sufficient when the table has other fixed groups")
+}
+
+func TestBalanceSnapshotVersionTracksPlacementRules(t *testing.T) {
+	manager := newMetadataTestManager(t)
+	id := seedMetadataTestGroups(t, manager, []uint64{1})[0]
+	var rulesRevision uint64
+	manager.SetBalanceRuleRevision(func() uint64 { return rulesRevision })
+	initial := manager.GetBalanceSnapshot(TableIDForGroup(id))
+	rulesRevision++
+	updated := manager.GetBalanceSnapshot(TableIDForGroup(id))
+	require.NotEqual(t, initial.Version, updated.Version)
+	require.Equal(t, uint64(1), updated.Version.Rules)
+}
+
+func TestBalanceSnapshotRejectsSameIDRebuild(t *testing.T) {
+	manager := newMetadataTestManager(t)
+	ids := seedMetadataTestGroups(t, manager, []uint64{1})
+	old := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
+	require.NoError(t, manager.DeleteAffinityGroups(ids, true))
+	require.Nil(t, manager.GetBalanceSnapshot(TableIDForGroup(ids[0])))
+	require.NoError(t, manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: ids[0], KeyRanges: []keyutil.KeyRange{{StartKey: []byte{0}, EndKey: []byte{1}}}}}))
+	_, err := manager.UpdateAffinityGroupPeers(ids[0], 1, []uint64{1, 2, 3})
+	require.NoError(t, err)
+
+	current := manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
+	require.NotNil(t, current)
+	require.False(t, manager.BalanceSnapshotCurrent(old))
+	require.NotEqual(t, old.Version, current.Version)
+	require.Greater(t, current.Version.Table, old.Version.Table)
+}
+
+func TestObserveBalanceRegionVersionTracksRelevantChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		change      func(*core.RegionInfo) *core.RegionInfo
+		invalidates bool
+	}{
+		{
+			name: "approximate size",
+			change: func(region *core.RegionInfo) *core.RegionInfo {
+				return region.Clone(core.SetApproximateSize(100))
+			},
+		},
+		{
+			name:        "peers",
+			invalidates: true,
+			change: func(region *core.RegionInfo) *core.RegionInfo {
+				return region.Clone(core.SetPeers([]*metapb.Peer{{Id: 1, StoreId: 1}, {Id: 2, StoreId: 2}, {Id: 3, StoreId: 4}}))
+			},
+		},
+		{
+			name:        "leader",
+			invalidates: true,
+			change: func(region *core.RegionInfo) *core.RegionInfo {
+				return region.Clone(core.WithLeader(&metapb.Peer{Id: 2, StoreId: 2}))
+			},
+		},
+		{
+			name:        "ranges",
+			invalidates: true,
+			change: func(region *core.RegionInfo) *core.RegionInfo {
+				return region.Clone(core.WithStartKey([]byte{9}))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := newMetadataTestManager(t)
+			ids := seedMetadataTestGroups(t, manager, []uint64{1})
+			manager.GetBalanceSnapshot(TableIDForGroup(ids[0]))
+			before, ok := manager.GetBalanceVersion(TableIDForGroup(ids[0]))
+			require.True(t, ok)
+			region := manager.regions[1].region
+
+			manager.ObserveBalanceRegion(tc.change(region))
+
+			after, ok := manager.GetBalanceVersion(TableIDForGroup(ids[0]))
+			require.True(t, ok)
+			if tc.invalidates {
+				require.Greater(t, after.Table, before.Table)
+			} else {
+				require.Equal(t, before, after)
+			}
+		})
+	}
+}

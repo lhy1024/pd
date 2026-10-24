@@ -97,7 +97,7 @@ func affinityConflict() error { return errs.ErrEtcdTxnConflict.FastGenByArgs() }
 // metadata write contract; ambiguous errors are reconciled by a reload and
 // do not create a second durable write-fencing protocol.
 //
-//nolint:unused // consumed by the planner integration that builds on PR2A.
+//nolint:unused // consumed by the planner integration in this branch.
 func (m *Manager) commitGroupTarget(ctx context.Context, original, target Group, ranges GroupKeyRanges, conditions []clientv3.Cmp, current func() bool) (bool, error) {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()

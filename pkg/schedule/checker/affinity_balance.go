@@ -1,0 +1,321 @@
+// Copyright 2026 TiKV Project Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package checker
+
+import (
+	"bytes"
+	"slices"
+
+	"github.com/tikv/pd/pkg/core"
+	"github.com/tikv/pd/pkg/schedule/affinity"
+	sche "github.com/tikv/pd/pkg/schedule/core"
+	"github.com/tikv/pd/pkg/schedule/filter"
+	"github.com/tikv/pd/pkg/schedule/operator"
+	"github.com/tikv/pd/pkg/schedule/placement"
+	"github.com/tikv/pd/pkg/utils/keyutil"
+)
+
+type balanceStatus uint8
+
+const (
+	balanceAllowed balanceStatus = iota
+	balanceRejected
+	balanceTemporarilyBlocked
+	balanceUnready
+)
+
+// This cursor belongs to one checker search. It stops only between complete
+// Region checks; placement and store selection never carry resumable state.
+type balanceRegionScan struct {
+	ranges     []*keyutil.KeyRange
+	rangeIndex int
+	nextKey    []byte
+	started    bool
+	lastRegion uint64
+}
+
+func newBalanceRegionScan(ranges affinity.GroupKeyRanges) balanceRegionScan {
+	merged := keyutil.NewKeyRanges(ranges.KeyRanges)
+	slices.SortFunc(merged.Ranges(), func(a, b *keyutil.KeyRange) int { return bytes.Compare(a.StartKey, b.StartKey) })
+	merged.Merge()
+	return balanceRegionScan{ranges: merged.Ranges()}
+}
+
+func (p *balanceRegionScan) next(cluster sche.CheckerCluster) (region *core.RegionInfo, covered, done bool) {
+	for p.rangeIndex < len(p.ranges) {
+		keyRange := p.ranges[p.rangeIndex]
+		if !p.started {
+			p.nextKey, p.started = slices.Clone(keyRange.StartKey), true
+		}
+		regions := cluster.ScanRegions(p.nextKey, keyRange.EndKey, 1)
+		if len(regions) == 0 || !balanceRegionCoversKeyRange(regions[0], p.nextKey, keyRange.EndKey) {
+			return nil, false, false
+		}
+		region = regions[0]
+		p.nextKey = slices.Clone(region.GetEndKey())
+		if len(p.nextKey) == 0 || len(keyRange.EndKey) > 0 && bytes.Compare(p.nextKey, keyRange.EndKey) >= 0 {
+			p.rangeIndex++
+			p.started = false
+		}
+		if p.lastRegion == region.GetID() {
+			continue
+		}
+		p.lastRegion = region.GetID()
+		return region, true, false
+	}
+	return nil, true, true
+}
+
+func balanceRegionCoversKeyRange(region *core.RegionInfo, startKey, endKey []byte) bool {
+	if region == nil || len(region.GetEndKey()) > 0 && bytes.Compare(region.GetEndKey(), startKey) <= 0 ||
+		len(region.GetStartKey()) > 0 && bytes.Compare(region.GetStartKey(), startKey) > 0 {
+		return false
+	}
+	return len(endKey) == 0 || len(region.GetStartKey()) == 0 || bytes.Compare(region.GetStartKey(), endKey) < 0
+}
+
+func (c *AffinityChecker) waitingAffinityRegions() map[uint64]struct{} {
+	waiting := make(map[uint64]struct{})
+	if c.opController != nil {
+		for _, op := range c.opController.GetWaitingOperators() {
+			waiting[op.RegionID()] = struct{}{}
+		}
+	}
+	return waiting
+}
+
+func (c *AffinityChecker) balanceRegionReady(group *affinity.GroupState, region *core.RegionInfo, waiting map[uint64]struct{}) bool {
+	if region == nil || region.GetLeader() == nil || !filter.IsRegionHealthy(region) || len(region.GetWitnesses()) != 0 {
+		return false
+	}
+	if labeler := c.cluster.GetRegionLabeler(); labeler != nil && labeler.ScheduleDisabled(region) {
+		return false
+	}
+	current, aligned := c.affinityManager.GetRegionAffinityGroupState(region)
+	if current == nil || current.ID != group.ID || !aligned {
+		return false
+	}
+	if _, ok := waiting[region.GetID()]; ok {
+		return false
+	}
+	if c.opController != nil {
+		if c.opController.GetOperator(region.GetID()) != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// validateBalanceCurrentRegion checks convergence and current placement once
+// per search. The fit is reused only while Region, store and rule inputs match.
+func (c *AffinityChecker) validateBalanceCurrentRegion(actual *affinity.GroupState,
+	region *core.RegionInfo, waiting map[uint64]struct{}) (*placement.RegionFit, balanceStatus) {
+	if !c.balanceRegionReady(actual, region, waiting) {
+		return nil, balanceUnready
+	}
+	currentFit := c.ruleManager.FitRegion(c.cluster, region)
+	if c.regionPlacementBestLocation(region, currentFit) != bestLocationSatisfied {
+		return nil, balanceUnready
+	}
+	return currentFit, balanceAllowed
+}
+
+func (c *AffinityChecker) validateBalanceTarget(target *affinity.Group, region *core.RegionInfo, currentFit *placement.RegionFit) balanceStatus {
+	virtual := cloneRegionWithReplacePeerStores(region, target.LeaderStoreID, target.VoterStoreIDs...)
+	if virtual == nil {
+		return balanceRejected
+	}
+	fit := c.ruleManager.FitRegionWithoutCache(c.cluster, virtual)
+	if fit == nil || !fit.IsSatisfied() || !placementNotWorse(currentFit, fit) {
+		return balanceRejected
+	}
+	switch c.regionPlacementBestLocation(virtual, fit) {
+	case bestLocationRejected:
+		return balanceRejected
+	case bestLocationTemporarilyBlocked:
+		return balanceTemporarilyBlocked
+	default:
+		return balanceAllowed
+	}
+}
+
+// balanceTargetMaySatisfyPlacement is a conservative candidate-level filter.
+// It only rejects a target when one of its stores cannot match any placement
+// rule applicable to the group's first range for the peer role it would have.
+// Counts, isolation, existing peers, and Region-specific state still require
+// the full virtual Region fit in validateBalanceTarget.
+func (c *AffinityChecker) balanceTargetMaySatisfyPlacement(target *affinity.Group, ranges affinity.GroupKeyRanges) bool {
+	return c.newBalanceTargetPlacementFilter(ranges, target.VoterStoreIDs).maySatisfy(target)
+}
+
+// balanceTargetPlacementFilter caches the necessary label checks shared by all
+// candidate moves for one group's range. It intentionally does not model rule
+// counts, isolation, or Region-specific peer assignment; those still belong to
+// the full virtual Region fit.
+type balanceTargetPlacementFilter struct {
+	leader, follower map[uint64]struct{}
+	mayReject        bool
+}
+
+func (f balanceTargetPlacementFilter) maySatisfy(target *affinity.Group) bool {
+	if !f.mayReject {
+		return true
+	}
+	for _, id := range target.VoterStoreIDs {
+		eligible := f.follower
+		if id == target.LeaderStoreID {
+			eligible = f.leader
+		}
+		if _, ok := eligible[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *AffinityChecker) newBalanceTargetPlacementFilter(ranges affinity.GroupKeyRanges, storeIDs []uint64) balanceTargetPlacementFilter {
+	if !c.cluster.GetSharedConfig().IsPlacementRulesEnabled() || len(ranges.KeyRanges) == 0 {
+		return balanceTargetPlacementFilter{}
+	}
+	keyRange := ranges.KeyRanges[0]
+	rules := c.ruleManager.GetRulesForApplyRange(keyRange.StartKey, keyRange.EndKey)
+	if len(rules) == 0 {
+		// A group range can span rule boundaries even when every Region is
+		// aligned. Leave this candidate to the full per-Region validation.
+		return balanceTargetPlacementFilter{}
+	}
+	filter := balanceTargetPlacementFilter{
+		leader:   make(map[uint64]struct{}, len(storeIDs)),
+		follower: make(map[uint64]struct{}, len(storeIDs)),
+	}
+	for _, id := range storeIDs {
+		info := c.cluster.GetStore(id)
+		if info == nil {
+			filter.mayReject = true
+			continue
+		}
+		for _, rule := range rules {
+			if (rule.Role == placement.Voter || rule.Role == placement.Leader) &&
+				placement.MatchLabelConstraints(info, rule.LabelConstraints) {
+				filter.leader[id] = struct{}{}
+			}
+			if (rule.Role == placement.Voter || rule.Role == placement.Follower) &&
+				placement.MatchLabelConstraints(info, rule.LabelConstraints) {
+				filter.follower[id] = struct{}{}
+			}
+		}
+		if _, ok := filter.leader[id]; !ok {
+			filter.mayReject = true
+		}
+		if _, ok := filter.follower[id]; !ok {
+			filter.mayReject = true
+		}
+	}
+	return filter
+}
+
+func (c *AffinityChecker) balanceTargetExecutionStatus(actual, target *affinity.Group) balanceStatus {
+	type storeAction struct {
+		id             uint64
+		leader, source bool
+	}
+	var actions []storeAction
+	if actual.LeaderStoreID != target.LeaderStoreID {
+		actions = append(actions, storeAction{actual.LeaderStoreID, true, true}, storeAction{target.LeaderStoreID, true, false})
+	}
+	for _, id := range actual.VoterStoreIDs {
+		if !slices.Contains(target.VoterStoreIDs, id) {
+			actions = append(actions, storeAction{id, false, true})
+		}
+	}
+	for _, id := range target.VoterStoreIDs {
+		if !slices.Contains(actual.VoterStoreIDs, id) {
+			actions = append(actions, storeAction{id, false, false})
+		}
+	}
+	status := balanceAllowed
+	for _, action := range actions {
+		result := c.balanceStoreActionStatus(action.id, action.leader, action.source)
+		if result == balanceRejected {
+			return result
+		}
+		if result == balanceTemporarilyBlocked {
+			status = result
+		}
+	}
+	return status
+}
+
+func (c *AffinityChecker) balanceStoreActionStatus(id uint64, leader, source bool) balanceStatus {
+	store := c.cluster.GetStore(id)
+	if store == nil || !source && (!store.IsUp() || !store.IsTiKV()) {
+		return balanceRejected
+	}
+	conf := c.cluster.GetSharedConfig()
+	if !leader && !source && (!filter.NewSpecialUseFilter(c.Name()).Target(conf, store).IsOK() ||
+		!filter.NewStorageThresholdFilter(c.Name()).Target(conf, store).IsOK()) {
+		return balanceRejected
+	}
+	state := filter.StoreStateFilter{ActionScope: c.Name(), TransferLeader: leader, MoveRegion: !leader}
+	check := func() bool {
+		if source {
+			return state.Source(conf, store).IsOK()
+		}
+		return state.Target(conf, store).IsOK()
+	}
+	if check() {
+		return balanceAllowed
+	}
+	state.AllowTemporaryStates = true
+	if check() {
+		return balanceTemporarilyBlocked
+	}
+	return balanceRejected
+}
+
+func (c *AffinityChecker) balanceTargetSubmissionAllowed() bool {
+	if c.cluster == nil || c.conf == nil || c.affinityManager == nil || c.IsPaused() || c.cluster.IsSchedulingHalted() ||
+		!c.cluster.GetSharedConfig().IsPlacementRulesEnabled() {
+		return false
+	}
+	return c.conf.GetAffinityScheduleLimit() > 0
+}
+
+func (c *AffinityChecker) balanceSchedulingAllowed() bool {
+	return c.balanceTargetSubmissionAllowed() &&
+		(c.opController == nil || c.opController.OperatorCount(operator.OpAffinity) < c.conf.GetAffinityScheduleLimit())
+}
+
+func placementNotWorse(oldFit, newFit *placement.RegionFit) bool {
+	if oldFit == nil || newFit == nil {
+		return false
+	}
+	for _, oldRule := range oldFit.RuleFits {
+		matched := false
+		for _, newRule := range newFit.RuleFits {
+			if oldRule.Rule.GroupID == newRule.Rule.GroupID && oldRule.Rule.ID == newRule.Rule.ID {
+				matched = true
+				if newRule.IsolationScore < oldRule.IsolationScore {
+					return false
+				}
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}

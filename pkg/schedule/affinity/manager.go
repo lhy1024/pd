@@ -72,13 +72,16 @@ type Manager struct {
 	regionLabeler    *labeler.RegionLabeler // region labeler for syncing key ranges
 
 	// The following members are protected by RWMutex.
-	affinityRegionCount int
-	groups              map[string]*runtimeGroupInfo    // {group_id} -> runtimeGroupInfo
-	regions             map[uint64]regionCache          // {region_id} -> regionCache
-	unavailableStores   map[uint64]storeCondition       // {store_id} -> storeCondition
-	metadataTables      map[TableID]*metadataTableState // {table_id} -> metadata generations
-	metadataGeneration  uint64
-	affinityWriteTerm   func() ([]clientv3.Cmp, bool)
+	affinityRegionCount     int
+	groups                  map[string]*runtimeGroupInfo    // {group_id} -> runtimeGroupInfo
+	regions                 map[uint64]regionCache          // {region_id} -> regionCache
+	unavailableStores       map[uint64]storeCondition       // {store_id} -> storeCondition
+	metadataTables          map[TableID]*metadataTableState // {table_id} -> metadata generations
+	metadataGeneration      uint64
+	balanceRuleRevision     func() uint64
+	affinityWriteTerm       func() ([]clientv3.Cmp, bool)
+	balanceStoreRevision    uint64
+	balanceStoreFingerprint uint64
 
 	// The following members are protected by metaMutex only, not protected by RWMutex.
 	// keyRanges cached in memory to reduce labeler lock contention
@@ -373,6 +376,10 @@ func (m *Manager) saveCache(cache *regionCache) {
 	// If the Group has changed, update it but do not save it afterward.
 	groupInfo, ok := m.groups[cache.groupInfo.ID]
 	if ok && groupInfo == cache.groupInfo && groupInfo.AffinityVer == cache.affinityVer {
+		old, exists := m.regions[regionID]
+		if !exists || balanceRegionChanged(old.region, cache.region) {
+			m.invalidateMetadataLocked(groupInfo.ID)
+		}
 		m.deleteCacheLocked(regionID)
 		m.regions[regionID] = *cache
 		groupInfo.Regions[regionID] = *cache
@@ -395,6 +402,9 @@ func (m *Manager) InvalidCache(regionID uint64) {
 
 	m.Lock()
 	defer m.Unlock()
+	if cached, ok := m.regions[regionID]; ok {
+		m.invalidateMetadataLocked(cached.groupInfo.ID)
+	}
 	m.deleteCacheLocked(regionID)
 }
 
