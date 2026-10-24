@@ -439,6 +439,18 @@ func (c *RaftCluster) Start(s Server, bootstrap bool) (err error) {
 	if err != nil {
 		return err
 	}
+	c.affinityManager.SetAffinityWriteGuard(func() ([]clientv3.Cmp, bool) {
+		term, ok := c.member.GetLeadership().CaptureTerm()
+		conditions := term.Comparisons()
+		if c.isKeyspaceGroupEnabled {
+			// Discovery and routing cannot cancel an in-flight fallback write.
+			// Only the election key proves scheduling has no current authority.
+			conditions = append(conditions, clientv3.Compare(clientv3.CreateRevision(
+				keypath.ElectionPath(&keypath.MsParam{ServiceName: constant.SchedulingServiceName})), "=", 0))
+			ok = ok && c.opt.GetMicroserviceConfig().IsSchedulingFallbackEnabled()
+		}
+		return conditions, ok
+	})
 
 	if !c.IsServiceIndependent(constant.SchedulingServiceName) {
 		observeSlowStoreStart := time.Now()
@@ -509,7 +521,24 @@ func (c *RaftCluster) Start(s Server, bootstrap bool) (err error) {
 func (c *RaftCluster) checkSchedulingService() {
 	if c.isKeyspaceGroupEnabled {
 		servers, err := discovery.Discover(c.etcdClient, constant.SchedulingServiceName)
-		if c.opt.GetMicroserviceConfig().IsSchedulingFallbackEnabled() && (err != nil || len(servers) == 0) {
+		fallback := c.opt.GetMicroserviceConfig().IsSchedulingFallbackEnabled() && (err != nil || len(servers) == 0)
+		if fallback {
+			primary, err := etcdutil.EtcdKVGetWithContext(c.ctx, c.etcdClient,
+				keypath.ElectionPath(&keypath.MsParam{ServiceName: constant.SchedulingServiceName}))
+			if err != nil {
+				log.Warn("failed to verify scheduling authority before fallback", errs.ZapError(err))
+				return
+			}
+			fallback = len(primary.Kvs) == 0
+		}
+		if fallback {
+			wasIndependent := c.IsServiceIndependent(constant.SchedulingServiceName)
+			if wasIndependent && c.affinityManager != nil {
+				if reloadErr := c.affinityManager.ReloadAffinityMetadataFromStorage(); reloadErr != nil {
+					log.Error("failed to reload affinity metadata before scheduling fallback", errs.ZapError(reloadErr))
+					return
+				}
+			}
 			c.startSchedulingJobs(c, c.hbstreams)
 			c.UnsetServiceIndependent(constant.SchedulingServiceName)
 		} else {

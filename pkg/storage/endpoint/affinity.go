@@ -27,6 +27,8 @@ type AffinityStorage interface {
 	LoadAffinityGroup(groupID string) (string, error)
 	// LoadAllAffinityGroups loads all affinity groups, passing raw key/value strings to the callback.
 	LoadAllAffinityGroups(f func(k, v string)) error
+	// LoadAllAffinityLabels loads only the label rules owned by affinity.
+	LoadAllAffinityLabels(f func(k, v string)) error
 
 	// SaveAffinityGroup saves an affinity group within a transaction.
 	SaveAffinityGroup(txn kv.Txn, groupID string, group any) error
@@ -59,4 +61,9 @@ func (se *StorageEndpoint) LoadAffinityGroup(groupID string) (string, error) {
 // It uses loadRangeByPrefix and passes raw key/value strings to the callback function 'f'.
 func (se *StorageEndpoint) LoadAllAffinityGroups(f func(k, v string)) error {
 	return se.loadRangeByPrefix(keypath.AffinityGroupsPrefix(), f)
+}
+
+// LoadAllAffinityLabels loads affinity range rules without scanning ordinary labels.
+func (se *StorageEndpoint) LoadAllAffinityLabels(f func(k, v string)) error {
+	return se.loadRangeByPrefix(keypath.RegionLabelKeyPath(keypath.AffinityLabelPrefix), f)
 }

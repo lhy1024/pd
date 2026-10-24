@@ -65,23 +65,16 @@ func (suite *affinityHandlerTestSuite) TearDownTest() {
 	suite.env.RunFuncInStartedEnvs(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
-		manager, err := leader.GetServer().GetAffinityManager()
-		if err != nil {
-			// If affinity manager is not available, skip cleanup
-			// This can happen during test teardown
-			return
-		}
-
-		allGroups := manager.GetAllAffinityGroupStates()
-		groupIDs := make([]string, 0, len(allGroups))
-		for _, group := range allGroups {
-			groupIDs = append(groupIDs, group.ID)
+		// Use the same primary routing as the tests. PD's local Manager is not
+		// the writer (or the current cache) while scheduling is independent.
+		groups := mustGetAllAffinityGroups(re, leader.GetAddr()).AffinityGroups
+		groupIDs := make([]string, 0, len(groups))
+		for id := range groups {
+			groupIDs = append(groupIDs, id)
 		}
 
 		if len(groupIDs) > 0 {
-			err = manager.DeleteAffinityGroups(groupIDs, true)
-			// Use NoError to ensure cleanup succeeds and catch state pollution issues
-			re.NoError(err, "failed to cleanup affinity groups in TearDownTest")
+			mustBatchDeleteAffinityGroups(re, leader.GetAddr(), &handlers.BatchDeleteAffinityGroupsRequest{IDs: groupIDs, Force: true})
 		}
 
 		testutil.Eventually(re, func() bool {
@@ -671,7 +664,7 @@ func (suite *affinityHandlerTestSuite) TestAffinityGroupDuplicateErrorMessage() 
 
 // TestAffinityGroupCreateSkipExistCheck verifies skip_exist_check ignores existing groups.
 func (suite *affinityHandlerTestSuite) TestAffinityGroupCreateSkipExistCheck() {
-	suite.env.RunTest(func(cluster *tests.TestCluster) {
+	test := func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		leader := cluster.GetLeaderServer()
 		serverAddr := leader.GetAddr()
@@ -701,7 +694,26 @@ func (suite *affinityHandlerTestSuite) TestAffinityGroupCreateSkipExistCheck() {
 		re.Contains(result.AffinityGroups, "new")
 
 		waitForAffinityGroups(re, getAffinityGroupURL(serverAddr), "existing", "new")
-	})
+
+		// Skip validation only for groups that the Manager confirms still exist.
+		for _, ranges := range [][]handlers.AffinityKeyRange{
+			nil,
+			{{StartKey: []byte{0x10}, EndKey: []byte{0x01}}},
+			{{StartKey: []byte{0x01}}},
+		} {
+			createReq.AffinityGroups = map[string]handlers.CreateAffinityGroupInput{"existing": {Ranges: ranges}}
+			data, err = json.Marshal(createReq)
+			re.NoError(err)
+			re.NoError(testutil.CheckPostJSON(tests.TestDialClient, getAffinityGroupURL(serverAddr)+"?skip_exist_check=true", data, testutil.StatusOK(re)))
+			createReq.AffinityGroups = map[string]handlers.CreateAffinityGroupInput{"absent": {Ranges: ranges}}
+			data, err = json.Marshal(createReq)
+			re.NoError(err)
+			re.NoError(testutil.CheckPostJSON(tests.TestDialClient, getAffinityGroupURL(serverAddr)+"?skip_exist_check=true", data, testutil.Status(re, http.StatusBadRequest)))
+		}
+		mustBatchDeleteAffinityGroups(re, serverAddr, &handlers.BatchDeleteAffinityGroupsRequest{IDs: []string{"existing", "new"}, Force: true})
+	}
+	suite.env.RunTestInNonMicroserviceEnv(test)
+	suite.env.RunTestInMicroserviceEnv(test)
 }
 
 // TestAffinityGroupCreateSkipExistCheckInvalidBool verifies invalid bool value is rejected.

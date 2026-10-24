@@ -207,7 +207,7 @@ func TestSyncLabelRuleBeforeGroup(t *testing.T) {
 	re.NoError(manager.SyncKeyRangesFromEtcd(parsedRule))
 
 	// Group arrives after label rule.
-	manager.SyncGroupFromEtcd(&Group{ID: gkr.GroupID})
+	re.NoError(manager.SyncGroupFromEtcd(&Group{ID: gkr.GroupID}))
 
 	state := manager.GetAffinityGroupState(gkr.GroupID)
 	re.NotNil(state)
@@ -239,14 +239,14 @@ func TestSyncGroupFromEtcdUpdatesBalancePolicy(t *testing.T) {
 	re.Equal(PhaseStable, before.Phase)
 
 	input := &Group{ID: "policy", CreateTimestamp: before.CreateTimestamp, BalancePolicy: BalancePolicyFixed, LeaderStoreID: 1, VoterStoreIDs: []uint64{3, 1, 2}}
-	manager.SyncGroupFromEtcd(input)
+	re.NoError(manager.SyncGroupFromEtcd(input))
 	re.Equal(BalancePolicyFixed, manager.GetAffinityGroupState("policy").BalancePolicy)
 	re.Equal([]uint64{1, 2, 3}, manager.GetAffinityGroupState("policy").VoterStoreIDs)
 	re.Equal([]uint64{3, 1, 2}, input.VoterStoreIDs, "watcher input must not be mutated")
 	for _, policy := range []BalancePolicy{BalancePolicyFixed, BalancePolicyAuto} {
 		updated := *input
 		updated.BalancePolicy = policy
-		manager.SyncGroupFromEtcd(&updated)
+		re.NoError(manager.SyncGroupFromEtcd(&updated))
 		after := manager.GetAffinityGroupState("policy")
 		re.Equal(policy, after.BalancePolicy)
 		re.Equal(PhaseStable, after.Phase)
@@ -258,7 +258,7 @@ func TestSyncGroupFromEtcdUpdatesBalancePolicy(t *testing.T) {
 		manager.RUnlock()
 		re.Equal(1, count)
 	}
-	updated, err := manager.updateAffinityGroupPeersWithAffinityVer("policy", before.affinityVer, 2, before.VoterStoreIDs)
+	updated, err := manager.saveGroupPeers("policy", before, 2, before.VoterStoreIDs)
 	re.NoError(err)
 	re.Equal(uint64(2), updated.LeaderStoreID, "policy-only updates must not discard an in-flight peer update")
 }
@@ -286,15 +286,15 @@ func TestBalancePolicyValidationAtMetadataEntrypoints(t *testing.T) {
 	for _, policy := range []BalancePolicy{"", BalancePolicyAuto, BalancePolicyFixed} {
 		group := &Group{ID: "watch", BalancePolicy: policy}
 		re.NoError(manager.AdjustGroup(group))
-		manager.SyncGroupFromEtcd(group)
+		re.NoError(manager.SyncGroupFromEtcd(group))
 		re.Equal(policy, manager.GetAffinityGroupState("watch").BalancePolicy)
 	}
 	invalid := &Group{ID: "invalid", BalancePolicy: BalancePolicy("manual")}
 	re.ErrorIs(manager.AdjustGroup(invalid), errs.ErrAffinityGroupContent)
-	manager.SyncGroupFromEtcd(invalid)
+	re.NoError(manager.SyncGroupFromEtcd(invalid))
 	re.Nil(manager.GetAffinityGroupState("invalid"))
 	invalid.ID = "watch"
-	manager.SyncGroupFromEtcd(invalid)
+	re.NoError(manager.SyncGroupFromEtcd(invalid))
 	re.Equal(BalancePolicyFixed, manager.GetAffinityGroupState("watch").BalancePolicy)
 }
 

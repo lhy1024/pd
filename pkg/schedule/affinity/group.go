@@ -167,7 +167,6 @@ type runtimeGroupInfo struct {
 	AffinityVer uint64
 	// AffinityRegionCount indicates how many Regions have all Voter and Leader peers in the correct stores. (AffinityVer equals).
 	AffinityRegionCount int
-
 	// Regions represents the cache of Regions.
 	Regions map[uint64]regionCache
 	// LabelRule using label's internal multiple keyrange mechanism.

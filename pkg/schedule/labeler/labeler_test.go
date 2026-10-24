@@ -161,6 +161,33 @@ func TestGetSetRule(t *testing.T) {
 	assertLabelerCounts(0, 0)
 }
 
+func TestApplyLabelRuleDoesNotWriteStorage(t *testing.T) {
+	ctx := t.Context()
+	store := endpoint.NewStorageEndpoint(kv.NewMemoryKV(), nil)
+	l, err := NewRegionLabeler(ctx, store, time.Hour)
+	require.NoError(t, err)
+
+	newRule := func(value string) *LabelRule {
+		return &LabelRule{
+			ID:       "watcher-rule",
+			Labels:   []RegionLabel{{Key: "k", Value: value}},
+			RuleType: KeyRange,
+			Data:     MakeKeyRanges("1234", "5678"),
+		}
+	}
+
+	newValue := newRule("new")
+	require.NoError(t, newValue.checkAndAdjust())
+	l.ApplyLabelRule(newValue.ID, newValue)
+	require.Equal(t, "new", l.GetLabelRule("watcher-rule").Labels[0].Value)
+	value, err := store.LoadRegionRule("watcher-rule")
+	require.NoError(t, err)
+	require.Empty(t, value)
+
+	l.ApplyLabelRule(newValue.ID, nil)
+	require.Nil(t, l.GetLabelRule("watcher-rule"))
+}
+
 func TestTxnWithEtcd(t *testing.T) {
 	re := require.New(t)
 	_, client, clean := etcdutil.NewTestEtcdCluster(t, 1, nil)

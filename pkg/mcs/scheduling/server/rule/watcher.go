@@ -30,6 +30,7 @@ import (
 
 	"github.com/pingcap/log"
 
+	"github.com/tikv/pd/pkg/schedule/affinity"
 	"github.com/tikv/pd/pkg/schedule/checker"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/placement"
@@ -571,6 +572,11 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 	}
 	putFn := func(kv *mvccpb.KeyValue) error {
 		log.Debug("update region label rule", zap.String("key", string(kv.Key)), zap.String("value", string(kv.Value)))
+		if strings.HasPrefix(string(kv.Key), keypath.RegionLabelKeyPath(affinity.LabelRuleIDPrefix)) {
+			// The affinity watcher publishes these through Manager under
+			// metaMutex, together with its revision and range cache.
+			return nil
+		}
 		rule, err := labeler.NewLabelRuleFromJSON(kv.Value)
 		if err != nil {
 			return err
@@ -588,6 +594,9 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 		key := string(kv.Key)
 		log.Debug("delete region label rule", zap.String("key", key))
 		id := strings.TrimPrefix(key, rw.regionLabelPathPrefix)
+		if strings.HasPrefix(id, affinity.LabelRuleIDPrefix) {
+			return nil
+		}
 		rule := rw.regionLabeler.GetLabelRuleLocked(id)
 		err := rw.regionLabeler.DeleteLabelRuleLocked(id)
 		if err == nil && rule != nil {
@@ -599,7 +608,9 @@ func (rw *Watcher) initializeRegionLabelWatcher() error {
 		return err
 	}
 	postEventsFn := func([]*clientv3.Event) error {
-		defer rw.regionLabeler.Unlock()
+		defer func() {
+			rw.regionLabeler.Unlock()
+		}()
 		if rw.checkerController == nil {
 			return errors.New("checker controller is nil")
 		}

@@ -16,30 +16,113 @@ package affinity
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
 	"time"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
+	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 )
 
 const (
 	// LabelRuleIDPrefix is the prefix for affinity group label rules.
 	// This is exposed publicly to allow other packages (like watcher) to use it.
-	LabelRuleIDPrefix = "affinity_group/"
+	LabelRuleIDPrefix = keypath.AffinityLabelPrefix
 )
+
+func checkAffinityTxnCapacity(operationCount int) error {
+	if operationCount > endpoint.MaxAffinityTxnBatchOps {
+		return errs.ErrExceedMaxEtcdTxnOps.GenWithStackByArgs()
+	}
+	return nil
+}
+
+// captureAffinityWriteConditions pins the authority before validation. A new
+// primary term must not authorize an old observation.
+func (m *Manager) captureAffinityWriteConditions() ([]clientv3.Cmp, error) {
+	m.RLock()
+	term := m.affinityWriteTerm
+	m.RUnlock()
+	if term == nil {
+		return nil, nil
+	}
+	conditions, ok := term()
+	if !ok {
+		return nil, affinityConflict()
+	}
+	return slices.Clone(conditions), nil
+}
+
+// runAffinityTxn is also used by takeover reload and deliberately bypasses
+// mutation tracking because a reload must not create a second write admission.
+func (m *Manager) runAffinityTxn(ctx context.Context, conditions []clientv3.Cmp, f func(kv.Txn) error) error {
+	if len(conditions) == 0 {
+		return m.storage.RunInTxn(ctx, f)
+	}
+	runner, ok := m.storage.(kv.ConditionalTxnRunner)
+	if !ok {
+		return affinityConflict()
+	}
+	return runner.RunInTxnWithConditions(ctx, conditions, f)
+}
+
+func loadAffinityValue(txn kv.Txn, key string) (string, error) {
+	if revisionTxn, ok := txn.(kv.RevisionTxn); ok {
+		return revisionTxn.LoadWithRevision(key)
+	}
+	return txn.Load(key)
+}
+
+func loadAffinityGroupInTxn(txn kv.Txn, groupID string) (*Group, error) {
+	value, err := loadAffinityValue(txn, keypath.AffinityGroupPath(groupID))
+	if err != nil || value == "" {
+		return nil, err
+	}
+	var group Group
+	if err := json.Unmarshal([]byte(value), &group); err != nil {
+		return nil, err
+	}
+	return &group, nil
+}
+
+// guardAffinityLabelRevision adds the original label revision to the same
+// transaction that rewrites the range rule. This prevents a stale local range
+// read from overwriting a newer range update made by another primary.
+func guardAffinityLabelRevision(txn kv.Txn, expected GroupKeyRanges) error {
+	value, err := loadAffinityValue(txn, keypath.RegionLabelKeyPath(GetLabelRuleID(expected.GroupID)))
+	if err != nil {
+		return err
+	}
+	actual := GroupKeyRanges{GroupID: expected.GroupID}
+	if value != "" {
+		rule, err := labeler.NewLabelRuleFromJSON([]byte(value))
+		if err != nil {
+			return err
+		}
+		actual, err = extractKeyRangesFromLabelRule(rule)
+		if err != nil {
+			return err
+		}
+	}
+	if !affinityRangesEqual(expected, actual) {
+		return affinityConflict()
+	}
+	return nil
+}
 
 // GetLabelRuleID returns the label rule ID for an affinity group.
 // This ensures consistent naming between label creation and deletion.
@@ -97,11 +180,16 @@ func (m *Manager) CreateAffinityGroups(changes []GroupKeyRanges) error {
 }
 
 // CreateAffinityGroupsIfNotExists adds multiple affinity groups, skipping those that already exist.
+// Only groups still absent after the admission gate require valid, nonempty ranges.
 func (m *Manager) CreateAffinityGroupsIfNotExists(changes []GroupKeyRanges) error {
 	return m.createGroupsWithSkipExisting(changes, true)
 }
 
 func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExisting bool) error {
+	conditions, err := m.captureAffinityWriteConditions()
+	if err != nil {
+		return err
+	}
 	// Step 0: Validate all groups first (without lock)
 	groups := make([]*Group, 0, len(changes))
 	for _, change := range changes {
@@ -110,6 +198,7 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 			CreateTimestamp: uint64(time.Now().Unix()),
 			LeaderStoreID:   0,
 			VoterStoreIDs:   nil,
+			BalancePolicy:   BalancePolicyAuto,
 		}
 		if err := m.AdjustGroup(group); err != nil {
 			return err
@@ -119,6 +208,9 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return err
+	}
 
 	filteredGroups := groups
 	filteredChanges := changes
@@ -136,6 +228,21 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 		m.RUnlock()
 		if len(filteredGroups) == 0 {
 			return nil
+		}
+		// The API must preserve each request until the Manager decides whether it
+		// still exists. Validate only the groups that will actually be created.
+		for _, change := range filteredChanges {
+			if len(change.KeyRanges) == 0 {
+				return errs.ErrAffinityGroupContent.FastGenByArgs("no key ranges provided for group " + change.GroupID)
+			}
+			for _, kr := range change.KeyRanges {
+				if (len(kr.StartKey) == 0) != (len(kr.EndKey) == 0) {
+					return errs.ErrAffinityGroupContent.FastGenByArgs("key range must have both start_key and end_key, or both empty for entire key space")
+				}
+				if len(kr.StartKey) > 0 && bytes.Compare(kr.StartKey, kr.EndKey) >= 0 {
+					return errs.ErrAffinityGroupContent.FastGenByArgs("start_key must be less than end_key")
+				}
+			}
 		}
 	} else {
 		// Step 1: Check whether the Group exists.
@@ -174,9 +281,34 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 			return m.storage.SaveAffinityGroup(txn, group.ID, group)
 		})
 	}
+	if err := checkAffinityTxnCapacity(len(saveOps)); err != nil {
+		return err
+	}
 
-	// Step 5: Save the Group and Label information in storage.
-	if err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, saveOps); err != nil {
+	err = m.runAffinityRangeMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
+		for _, group := range filteredGroups {
+			persisted, err := loadAffinityGroupInTxn(txn, group.ID)
+			if err != nil {
+				return err
+			}
+			if persisted != nil {
+				return affinityConflict()
+			}
+			if err := guardAffinityLabelRevision(txn, GroupKeyRanges{GroupID: group.ID}); err != nil {
+				return err
+			}
+		}
+		for _, op := range saveOps {
+			if err := op(txn); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if errs.ErrEtcdTxnConflict.Equal(err) {
+			m.metadataNeedsReload = true
+		}
 		log.Error("failed to add affinity groups",
 			zap.Int("total-groups", len(filteredChanges)),
 			zap.Error(err))
@@ -216,12 +348,19 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 	if len(groupIDs) == 0 {
 		return errs.ErrAffinityGroupContent.FastGenByArgs("no group ids provided")
 	}
+	conditions, err := m.captureAffinityWriteConditions()
+	if err != nil {
+		return err
+	}
 
 	seen := make(map[string]struct{}, len(groupIDs))
 	toDelete := make([]string, 0, len(groupIDs))
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return err
+	}
 
 	// Step 1: Check if group has key ranges when force is false
 	for _, groupID := range groupIDs {
@@ -267,9 +406,32 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 			return m.storage.DeleteAffinityGroup(txn, groupID)
 		})
 	}
+	if err := checkAffinityTxnCapacity(len(saveOps)); err != nil {
+		return err
+	}
 
-	// Step 5: Save the Group and Label information in storage.
-	if err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, saveOps); err != nil {
+	// Pin existing group/label revisions so an old delete cannot remove a
+	// recreated group. Capacity was checked before this single transaction.
+	err = m.runAffinityRangeMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
+		for _, id := range toDelete {
+			if _, err := loadAffinityValue(txn, keypath.AffinityGroupPath(id)); err != nil {
+				return err
+			}
+			if err := guardAffinityLabelRevision(txn, m.keyRangesOrEmpty(id)); err != nil {
+				return err
+			}
+		}
+		for _, op := range saveOps {
+			if err := op(txn); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if errs.ErrEtcdTxnConflict.Equal(err) {
+			m.metadataNeedsReload = true
+		}
 		log.Error("failed to delete affinity groups",
 			zap.Int("total-groups", len(toDelete)),
 			zap.Error(err))
@@ -290,14 +452,76 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 
 // UpdateAffinityGroupPeers updates the leader and voter stores of an affinity group and marks it available.
 func (m *Manager) UpdateAffinityGroupPeers(groupID string, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
-	return m.updateAffinityGroupPeersWithAffinityVer(groupID, 0, leaderStoreID, voterStoreIDs)
+	return m.saveGroupPeers(groupID, nil, leaderStoreID, voterStoreIDs)
 }
 
-// updateAffinityGroupPeersWithAffinityVer updates the leader and voter stores of an affinity group and marks it available.
-// If affinityVer is non-zero (0 indicates an admin operation and is enforced)
-//   - Its equality will be checked.
-//   - Group must not change voterStoreIDs while it is not in the expired status.
-func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affinityVer uint64, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
+// UpdateAffinityGroupPolicy updates the balance policy of an affinity group.
+func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy) (*GroupState, error) {
+	if err := ValidateGroupID(groupID); err != nil {
+		return nil, err
+	}
+	if policy == "" {
+		policy = BalancePolicyAuto
+	}
+	if err := validateBalancePolicy(policy); err != nil {
+		return nil, err
+	}
+	conditions, err := m.captureAffinityWriteConditions()
+	if err != nil {
+		return nil, err
+	}
+
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return nil, err
+	}
+
+	group := m.GetAffinityGroupState(groupID)
+	if group == nil {
+		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
+	}
+	original := group.Group
+	updated := original
+	updated.BalancePolicy = policy
+	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
+		if err := checkOriginalGroup(txn, &original); err != nil {
+			return err
+		}
+		if original.BalancePolicy == policy {
+			return nil
+		}
+		return m.storage.SaveAffinityGroup(txn, groupID, &updated)
+	})
+	if err != nil {
+		if errs.ErrEtcdTxnConflict.Equal(err) {
+			m.metadataNeedsReload = true
+		}
+		return nil, err
+	}
+	if group.BalancePolicy == policy {
+		return group, nil
+	}
+
+	m.Lock()
+	defer m.Unlock()
+	groupInfo, ok := m.groups[groupID]
+	if !ok {
+		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
+	}
+	groupInfo.BalancePolicy = policy
+	m.invalidateMetadataLocked(groupID)
+	return newGroupState(groupInfo), nil
+}
+
+// saveGroupPeers saves an admin target (observed == nil) or a target
+// from a Region observation. Observations must match both the current runtime
+// instance and its affinity version under metaMutex, including after a reload.
+func (m *Manager) saveGroupPeers(groupID string, observed *GroupState, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
+	conditions, err := m.captureAffinityWriteConditions()
+	if err != nil {
+		return nil, err
+	}
 	// Step 0: Validate the correctness of leaderStoreID and voterStoreIDs.
 	if leaderStoreID == 0 || len(voterStoreIDs) == 0 {
 		return nil, errs.ErrAffinityGroupContent.FastGenByArgs("leader store ID and voter store IDs must be provided")
@@ -316,18 +540,20 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	// Step 1: Check whether the Group exists and validate.
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return nil, err
+	}
 	group := m.GetAffinityGroupState(groupID)
 	if group == nil {
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
 	}
-
 	voterStoreIDs = slices.Clone(voterStoreIDs)
 	slices.Sort(voterStoreIDs)
-	// When affinityVer is non-zero, it indicates a non-admin operation and triggers additional checks.
+	// Region observations receive additional checks; admin writes keep their existing semantics.
 	// Note: if the check fails, no changes are applied. The existing Group is returned as-is without error.
-	if affinityVer != 0 {
-		// If affinityVer is not equal, the update may come from stale statistics and will be ignored.
-		if group.affinityVer != affinityVer {
+	if observed != nil {
+		// A stale runtime instance or version must never initialize a new target.
+		if group.groupInfoPtr != observed.groupInfoPtr || group.affinityVer != observed.affinityVer {
 			return group, nil
 		}
 		// Group must not change voterStoreIDs while it is not in the expired status. Changing only leaderStoreID is allowed.
@@ -339,23 +565,68 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	}
 
 	// Step 2: Save the Group in storage.
-	group.LeaderStoreID = leaderStoreID
-	group.VoterStoreIDs = slices.Clone(voterStoreIDs)
-	if err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
-		return m.storage.SaveAffinityGroup(txn, groupID, &group.Group)
-	}); err != nil {
+	original := group.Group
+	var updated Group
+	// Balance submissions use CommitBalanceTarget. Safety repair only compares
+	// this group's persisted target and never holds checker locks across IO.
+	err = m.runAffinityMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
+		persisted, loadErr := loadAffinityGroupInTxn(txn, groupID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if persisted == nil {
+			m.metadataNeedsReload = true
+			return errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
+		}
+		updated = *persisted
+		if updated.ID != original.ID || updated.CreateTimestamp != original.CreateTimestamp ||
+			(observed != nil && (updated.BalancePolicy != original.BalancePolicy || updated.LeaderStoreID != original.LeaderStoreID ||
+				!slices.Equal(normalizeVoters(updated.VoterStoreIDs), original.VoterStoreIDs))) {
+			// The scheduler observed a persisted target different from its
+			// local baseline. Keep the existing return contract, but make the
+			// next call refresh the authoritative group before retrying.
+			m.metadataNeedsReload = true
+			return errs.ErrEtcdTxnConflict.FastGenByArgs()
+		}
+		// PD's admin cache can lag behind scheduling's policy updates. Change
+		// only the requested peers and retain the authoritative policy.
+		updated.LeaderStoreID = leaderStoreID
+		updated.VoterStoreIDs = slices.Clone(voterStoreIDs)
+		if err := validateBalancePolicy(updated.BalancePolicy); err != nil {
+			return err
+		}
+		return m.storage.SaveAffinityGroup(txn, groupID, &updated)
+	})
+	if errs.ErrEtcdTxnConflict.Equal(err) {
+		if observed == nil {
+			return nil, err
+		}
+		return m.GetAffinityGroupState(groupID), nil
+	}
+	if err != nil {
 		return nil, err
 	}
-
 	// Step 3: Save the information in memory.
-	return m.updateGroupPeers(groupID, leaderStoreID, voterStoreIDs)
+	return m.updateGroupTarget(updated)
+}
+
+func (m *Manager) keyRangesOrEmpty(groupID string) GroupKeyRanges {
+	if ranges, ok := m.keyRanges[groupID]; ok {
+		return ranges
+	}
+	return GroupKeyRanges{GroupID: groupID}
 }
 
 // UpdateAffinityGroupKeyRanges batch modifies key ranges for multiple affinity groups.
 // Note: Validates add and remove operations separately, then applies both atomically in a single transaction.
 // Currently migration (removing a range from group A and adding the same range to group B in one request)
 // is not supported because add validation checks overlaps against existing ranges before removals are applied.
+// TiDB currently creates one fixed range per table or partition and has no such migration requirement.
 func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRanges) error {
+	conditions, err := m.captureAffinityWriteConditions()
+	if err != nil {
+		return err
+	}
 	toAdd := make(map[string]GroupKeyRanges, len(addOps))
 	toRemove := make(map[string]GroupKeyRanges, len(removeOps))
 	newAddedLabelRules := make(map[string]*labeler.LabelRule, len(addOps))
@@ -388,13 +659,18 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	if err := m.refreshMetadataBeforeWriteLocked(); err != nil {
+		return err
+	}
 
 	// Step 1: Validate the added KeyRanges.
+	originalRanges := make(map[string]GroupKeyRanges, len(addOps)+len(removeOps))
 	for _, op := range addOps {
 		currentRanges, err := m.getCurrentRanges(op.GroupID)
 		if err != nil {
 			return err
 		}
+		originalRanges[op.GroupID] = currentRanges
 
 		// Merge current ranges with new ranges to add
 		toAdd[op.GroupID] = GroupKeyRanges{
@@ -415,6 +691,7 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 		if err != nil {
 			return err
 		}
+		originalRanges[op.GroupID] = currentRanges
 		currentRanges, err = applyRemoveOps(currentRanges, op)
 		if err != nil {
 			return err
@@ -463,9 +740,52 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 		}
 		newRemovedLabelRules[op.GroupID] = labelRule
 	}
+	labelOps := plan.CommitOps()
+	if err := checkAffinityTxnCapacity(len(labelOps)); err != nil {
+		return err
+	}
 
 	// Step 4: Save the Label information in storage.
-	if err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, plan.CommitOps()); err != nil {
+	affectedIDs := make([]string, 0, len(toAdd)+len(toRemove))
+	for groupID := range toAdd {
+		affectedIDs = append(affectedIDs, groupID)
+	}
+	for groupID := range toRemove {
+		affectedIDs = append(affectedIDs, groupID)
+	}
+	slices.Sort(affectedIDs)
+	affectedIDs = slices.Compact(affectedIDs)
+	// Each range write reads both the group and label before saving/deleting
+	// its label. Include these comparisons in the single-transaction budget.
+	if len(labelOps)+2*len(affectedIDs) > 2*endpoint.MaxAffinityTxnBatchOps {
+		return errs.ErrExceedMaxEtcdTxnOps.GenWithStackByArgs()
+	}
+	err = m.runAffinityRangeMutationLocked(m.ctx, conditions, func(txn kv.Txn) error {
+		for _, groupID := range affectedIDs {
+			// Existing group revision also fences range transactions which
+			// delete their label, leaving no label key to rewrite in recovery.
+			group, err := loadAffinityGroupInTxn(txn, groupID)
+			if err != nil {
+				return err
+			}
+			if group == nil {
+				return affinityConflict()
+			}
+			if err := guardAffinityLabelRevision(txn, originalRanges[groupID]); err != nil {
+				return err
+			}
+		}
+		for _, op := range labelOps {
+			if err := op(txn); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if errs.ErrEtcdTxnConflict.Equal(err) {
+			m.metadataNeedsReload = true
+		}
 		log.Error("failed to update affinity group ranges",
 			zap.Int("total-groups", len(addOps)+len(removeOps)),
 			zap.Error(err))
@@ -491,6 +811,9 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 
 // getCurrentRanges retrieves the current key ranges for a group.
 func (m *Manager) getCurrentRanges(groupID string) (GroupKeyRanges, error) {
+	if !m.IsGroupExist(groupID) {
+		return GroupKeyRanges{}, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
+	}
 	// Try cache first
 	if gkr, ok := m.keyRanges[groupID]; ok {
 		return gkr, nil
@@ -500,13 +823,7 @@ func (m *Manager) getCurrentRanges(groupID string) (GroupKeyRanges, error) {
 	labelRule := m.regionLabeler.GetLabelRule(GetLabelRuleID(groupID))
 	if labelRule == nil {
 		// Allow starting from empty when the group exists but has no ranges yet.
-		m.RLock()
-		_, exists := m.groups[groupID]
-		m.RUnlock()
-		if exists {
-			return GroupKeyRanges{GroupID: groupID}, nil
-		}
-		return GroupKeyRanges{}, errors.Errorf("label rule not found for group %s", groupID)
+		return GroupKeyRanges{GroupID: groupID}, nil
 	}
 
 	return extractKeyRangesFromLabelRule(labelRule)
@@ -701,65 +1018,6 @@ func validateNoOverlap(ranges []GroupKeyRanges) error {
 					allRanges[i].groupID + " and " + allRanges[i+1].groupID)
 		}
 	}
-
-	return nil
-}
-
-// loadRegionLabel rebuilds the mapping between groups and label rules after restart.
-// It should be called with the manager lock held.
-func (m *Manager) loadRegionLabel() error {
-	// Collect all key ranges from label rules and populate in-memory cache
-	var allRanges []GroupKeyRanges
-
-	m.regionLabeler.IterateLabelRules(func(rule *labeler.LabelRule) bool {
-		groupID, ok := parseAffinityGroupIDFromLabelRule(rule)
-		if !ok {
-			// Not an affinity label rule, skip
-			return true
-		}
-
-		if _, exists := m.groups[groupID]; !exists {
-			log.Debug("found label rule for unknown affinity group, skip rebuilding",
-				zap.String("group-id", groupID),
-				zap.String("rule-id", rule.ID))
-			return true
-		}
-
-		gkr, err := extractKeyRangesFromLabelRule(rule)
-		if err != nil {
-			log.Warn("failed to extract key ranges from label rule during rebuild",
-				zap.String("rule-id", rule.ID),
-				zap.String("group-id", groupID),
-				zap.Error(err))
-			return true
-		}
-
-		if len(gkr.KeyRanges) > 0 {
-			allRanges = append(allRanges, gkr)
-			// Populate in-memory key ranges cache
-			m.keyRanges[groupID] = gkr
-		}
-
-		// Associate the label rule with the group
-		m.updateGroupLabelRuleLocked(groupID, rule, false)
-
-		return true
-	})
-
-	// Validate that all key ranges are non-overlapping
-	if err := validateNoOverlap(allRanges); err != nil {
-		return err
-	}
-
-	log.Info("rebuilt group-label mapping",
-		zap.Int("total-groups", len(m.keyRanges)),
-		zap.Int("total-ranges", func() int {
-			total := 0
-			for _, gkr := range allRanges {
-				total += len(gkr.KeyRanges)
-			}
-			return total
-		}()))
 
 	return nil
 }

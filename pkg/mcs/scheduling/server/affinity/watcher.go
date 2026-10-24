@@ -22,9 +22,6 @@ import (
 
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.uber.org/zap"
-
-	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/schedule/affinity"
 	"github.com/tikv/pd/pkg/schedule/labeler"
@@ -54,6 +51,19 @@ type Watcher struct {
 	labelWatcher *etcdutil.LoopWatcher
 }
 
+// reconcile captures the watch position before reading metadata. Events committed
+// during the load will be replayed, rather than skipped by a later revision.
+func (w *Watcher) reconcile(ctx context.Context) (int64, error) {
+	resp, err := etcdutil.EtcdKVGetWithContext(ctx, w.etcdClient, keypath.AffinityRangeVersionPath())
+	if err != nil {
+		return 0, err
+	}
+	if err := w.affinityManager.ReloadAffinityMetadataFromStorage(); err != nil {
+		return 0, err
+	}
+	return resp.Header.Revision + 1, nil
+}
+
 // NewWatcher creates a new watcher to watch the affinity changes from PD.
 func NewWatcher(
 	ctx context.Context,
@@ -80,79 +90,74 @@ func NewWatcher(
 	return w, nil
 }
 
-// initializeGroupWatcher initializes the watcher for affinity group changes.
+// newLoopWatcher shares the same recovery contract for both metadata streams.
+// The first default load discards its values and reconciles in postEventsFn;
+// subsequent recovery uses reconcile directly, without a second prefix scan.
+func (w *Watcher) newLoopWatcher(ctx context.Context, name, prefix string, apply func([]*clientv3.Event) error) *etcdutil.LoopWatcher {
+	ignoreKV := func(*mvccpb.KeyValue) error { return nil }
+	lw := etcdutil.NewLoopWatcher(ctx, w.wg, w.etcdClient, name, strings.TrimSuffix(prefix, "/"),
+		func([]*clientv3.Event) error { return nil }, ignoreKV, ignoreKV,
+		func(events []*clientv3.Event) error {
+			if len(events) == 0 {
+				_, err := w.reconcile(ctx)
+				return err
+			}
+			return apply(events)
+		}, true)
+	lw.SetConsistentLoad()
+	lw.SetAtomicLoadCallbacks()
+	lw.SetInitialLoadRetryFn(w.reconcile)
+	lw.SetCompactionReloadFn(w.reconcile)
+	lw.SetRetryOnPostEventError()
+	lw.StartWatchLoop()
+	return lw
+}
+
 func (w *Watcher) initializeGroupWatcher(ctx context.Context) error {
-	putFn := func(kv *mvccpb.KeyValue) error {
-		log.Info("update affinity group", zap.String("key", string(kv.Key)), zap.String("value", string(kv.Value)))
-		group := &affinity.Group{}
-		if err := json.Unmarshal(kv.Value, group); err != nil {
-			log.Warn("failed to unmarshal affinity group", zap.String("key", string(kv.Key)), zap.Error(err))
-			return err
-		}
-		w.affinityManager.SyncGroupFromEtcd(group)
-		return nil
-	}
-
-	deleteFn := func(kv *mvccpb.KeyValue) error {
-		key := string(kv.Key)
-		log.Info("delete affinity group", zap.String("key", key))
-		groupID := strings.TrimPrefix(key, keypath.AffinityGroupsPrefix())
-		w.affinityManager.SyncGroupDeleteFromEtcd(groupID)
-		return nil
-	}
-
-	w.groupWatcher = etcdutil.NewLoopWatcher(
-		ctx, w.wg,
-		w.etcdClient,
-		"scheduling-affinity-group-watcher",
-		strings.TrimSuffix(keypath.AffinityGroupsPrefix(), "/"),
-		func([]*clientv3.Event) error { return nil },
-		putFn, deleteFn,
-		func([]*clientv3.Event) error { return nil },
-		true, /* withPrefix */
-	)
-	w.groupWatcher.SetReconcileDeletedKeys()
-	w.groupWatcher.StartWatchLoop()
+	w.groupWatcher = w.newLoopWatcher(ctx, "scheduling-affinity-group-watcher", keypath.AffinityGroupsPrefix(),
+		func(events []*clientv3.Event) error {
+			for _, event := range events {
+				if event.Type == clientv3.EventTypeDelete {
+					id := strings.TrimPrefix(string(event.Kv.Key), keypath.AffinityGroupsPrefix())
+					if err := w.affinityManager.SyncGroupDeleteFromEtcd(id); err != nil {
+						return err
+					}
+				} else {
+					var group affinity.Group
+					if err := json.Unmarshal(event.Kv.Value, &group); err != nil {
+						return err
+					}
+					if err := w.affinityManager.SyncGroupFromEtcd(&group); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
 	return w.groupWatcher.WaitLoad()
 }
 
-// initializeAffinityLabelWatcher initializes the watcher for affinity label rule changes.
-// It watches the region_label path but only processes rules with affinity group prefix.
 func (w *Watcher) initializeAffinityLabelWatcher(ctx context.Context) error {
-	// Note: labelWatcher does not need preEventsFn/postEventsFn locking
-	// because the sync methods will handle locking internally
-
-	putFn := func(kv *mvccpb.KeyValue) error {
-		key := string(kv.Key)
-		log.Info("update affinity label rule", zap.String("key", key), zap.String("value", string(kv.Value)))
-		rule, err := labeler.NewLabelRuleFromJSON(kv.Value)
-		if err != nil {
-			log.Warn("failed to unmarshal affinity label rule", zap.String("key", key), zap.Error(err))
-			return err
-		}
-		return w.affinityManager.SyncKeyRangesFromEtcd(rule)
-	}
-
-	deleteFn := func(kv *mvccpb.KeyValue) error {
-		key := string(kv.Key)
-		log.Info("delete affinity label rule", zap.String("key", key))
-		ruleID := strings.TrimPrefix(key, keypath.RegionLabelPathPrefix())
-		w.affinityManager.SyncKeyRangesDeleteFromEtcd(ruleID)
-		return nil
-	}
-
-	w.labelWatcher = etcdutil.NewLoopWatcher(
-		ctx, w.wg,
-		w.etcdClient,
-		"scheduling-affinity-label-watcher",
-		strings.TrimSuffix(keypath.RegionLabelKeyPath(affinity.LabelRuleIDPrefix), "/"), // Filter: only process affinity group label rules
-		func([]*clientv3.Event) error { return nil },
-		putFn, deleteFn,
-		func([]*clientv3.Event) error { return nil },
-		true, /* withPrefix */
-	)
-	w.labelWatcher.SetReconcileDeletedKeys()
-	w.labelWatcher.StartWatchLoop()
+	w.labelWatcher = w.newLoopWatcher(ctx, "scheduling-affinity-label-watcher", keypath.RegionLabelKeyPath(affinity.LabelRuleIDPrefix),
+		func(events []*clientv3.Event) error {
+			for _, event := range events {
+				if event.Type == clientv3.EventTypeDelete {
+					id := strings.TrimPrefix(string(event.Kv.Key), keypath.RegionLabelPathPrefix())
+					if err := w.affinityManager.SyncKeyRangesDeleteFromEtcdEvent(id); err != nil {
+						return err
+					}
+				} else {
+					rule, err := labeler.NewLabelRuleFromJSON(event.Kv.Value)
+					if err != nil {
+						return err
+					}
+					if err := w.affinityManager.SyncKeyRangesFromEtcdEvent(rule); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
 	return w.labelWatcher.WaitLoad()
 }
 

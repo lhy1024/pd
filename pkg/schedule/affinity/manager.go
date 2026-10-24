@@ -17,9 +17,11 @@ package affinity
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/pingcap/log"
@@ -29,12 +31,15 @@ import (
 	"github.com/tikv/pd/pkg/schedule/config"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/storage/endpoint"
+	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 )
 
 const (
 	// labelKey is the key for affinity group id in region label.
 	labelKey = "affinity_group"
+	// AffinityLabelKey is the reserved region-label key used by affinity ranges.
+	AffinityLabelKey = labelKey
 	// defaultDegradedExpirationSeconds is the default expiration time for a degraded group.
 	// After a group becomes degraded , it will automatically
 	// expire after this duration if the stores don't recover.
@@ -68,16 +73,27 @@ type Manager struct {
 
 	// The following members are protected by RWMutex.
 	affinityRegionCount int
-	groups              map[string]*runtimeGroupInfo // {group_id} -> runtimeGroupInfo
-	regions             map[uint64]regionCache       // {region_id} -> regionCache
-	unavailableStores   map[uint64]storeCondition    // {store_id} -> storeCondition
+	groups              map[string]*runtimeGroupInfo    // {group_id} -> runtimeGroupInfo
+	regions             map[uint64]regionCache          // {region_id} -> regionCache
+	unavailableStores   map[uint64]storeCondition       // {store_id} -> storeCondition
+	metadataTables      map[TableID]*metadataTableState // {table_id} -> metadata generations
+	metadataGeneration  uint64
+	affinityWriteTerm   func() ([]clientv3.Cmp, bool)
 
 	// The following members are protected by metaMutex only, not protected by RWMutex.
 	// keyRanges cached in memory to reduce labeler lock contention
 	keyRanges map[string]GroupKeyRanges // {group_id} -> key ranges
+	// affinityRangeVersion is the last globally fenced range-write version
+	// observed by this Manager. It is protected by metaMutex and is compared
+	// before every range mutation.
+	affinityRangeVersion uint64
 	// labelRuleBuffer is a buffer used during etcd synchronization.
 	// When synchronizing via etcd, LabelRule information may arrive earlier than group information.
 	labelRuleBuffer map[string]*labeler.LabelRule // {group_id} -> labelRule
+	// metadataNeedsReload is set when a write's local baseline may be stale.
+	// The next explicit write refreshes the authoritative baseline before
+	// validating its request.
+	metadataNeedsReload bool
 }
 
 // NewManager creates a new affinity Manager.
@@ -95,6 +111,7 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 		groups:              make(map[string]*runtimeGroupInfo),
 		regions:             make(map[uint64]regionCache),
 		unavailableStores:   make(map[uint64]storeCondition),
+		metadataTables:      make(map[TableID]*metadataTableState),
 		keyRanges:           make(map[string]GroupKeyRanges),
 		labelRuleBuffer:     make(map[string]*labeler.LabelRule),
 	}
@@ -106,41 +123,48 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 
 // initialize loads affinity groups from storage and rebuilds the group-label mapping.
 func (m *Manager) initialize() error {
-	// metaMutex must be locked, because loadRegionLabel will acquire RWMutex to protect keyRanges
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	m.Lock()
-	defer m.Unlock()
-
-	// load groups' info
-	err := m.storage.LoadAllAffinityGroups(func(k, v string) {
-		group := &Group{}
-		if err := json.Unmarshal([]byte(v), group); err != nil {
-			log.Error("failed to unmarshal affinity group, skipping",
-				zap.String("key", k),
-				zap.Error(errs.ErrLoadRule.Wrap(err)))
-			return
-		}
-		if err := validateBalancePolicy(group.BalancePolicy); err != nil {
-			log.Warn("invalid affinity group balance policy from storage, skipping",
-				zap.String("key", k), zap.Error(err))
-			return
-		}
-		m.initGroupLocked(group)
-	})
-	if err != nil {
-		return err
-	}
-
-	// load region labels
-	if err = m.loadRegionLabel(); err != nil {
-		log.Error("failed to rebuild group-label mapping", zap.Error(err))
+	if err := m.reloadAffinityMetadataLocked(m.ctx); err != nil {
 		return err
 	}
 
 	m.startAvailabilityCheckLoop()
 	log.Info("affinity manager initialized", zap.Int("group-count", len(m.groups)))
 	return nil
+}
+
+// refreshMetadataBeforeWriteLocked refreshes a stale authoritative baseline.
+// The caller must hold metaMutex and keep it through validation and commit.
+func (m *Manager) refreshMetadataBeforeWriteLocked() error {
+	if !m.metadataNeedsReload {
+		return nil
+	}
+	m.metadataNeedsReload = false
+	if err := m.reloadAffinityMetadataUnconditionallyLocked(m.ctx); err != nil {
+		m.metadataNeedsReload = true
+		return err
+	}
+	return nil
+}
+
+// loadAffinityLabelRule reads one affinity label from the authoritative
+// storage. AffinityStorage deliberately exposes only the affinity operations;
+// production storage also implements RuleStorage, while the fallback keeps
+// lightweight test/storage implementations compatible.
+func (m *Manager) loadAffinityLabelRule(ruleID string) (string, error) {
+	if loader, ok := m.storage.(interface {
+		LoadRegionRule(string) (string, error)
+	}); ok {
+		return loader.LoadRegionRule(ruleID)
+	}
+	var value string
+	err := m.storage.LoadAllAffinityLabels(func(key, candidate string) {
+		if key == ruleID || strings.HasSuffix(key, "/"+ruleID) {
+			value = candidate
+		}
+	})
+	return value, err
 }
 
 // IsAvailable checks that the Manager contains at least one Group.
@@ -171,6 +195,7 @@ func (m *Manager) initGroupLocked(group *Group) {
 		LabelRule:           nil,
 		RangeCount:          0,
 	}
+	m.invalidateMetadataLocked(group.ID)
 }
 
 func (m *Manager) noGroupsExist(groups []*Group) error {
@@ -208,20 +233,21 @@ func (m *Manager) resetCountLocked(groupInfo *runtimeGroupInfo) {
 	m.affinityRegionCount -= groupInfo.AffinityRegionCount
 	groupInfo.AffinityRegionCount = 0
 	groupInfo.AffinityVer++
+	m.invalidateMetadataLocked(groupInfo.ID)
 }
 
-func (m *Manager) updateGroupPeers(groupID string, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
+func (m *Manager) updateGroupTarget(group Group) (*GroupState, error) {
 	m.Lock()
 	defer m.Unlock()
 
-	groupInfo, ok := m.groups[groupID]
+	groupInfo, ok := m.groups[group.ID]
 	if !ok {
-		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
+		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(group.ID)
 	}
 
 	groupInfo.SetAvailability(groupAvailable)
-	groupInfo.LeaderStoreID = leaderStoreID
-	groupInfo.VoterStoreIDs = slices.Clone(voterStoreIDs)
+	groupInfo.Group = group
+	groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
 	m.resetCountLocked(groupInfo)
 
 	return newGroupState(groupInfo), nil
@@ -281,6 +307,10 @@ func (m *Manager) updateGroupLabelRuleLockedWithCount(groupID string, labelRule 
 	// Set LabelRule
 	groupInfo.LabelRule = labelRule
 	groupInfo.RangeCount = rangeCount
+	if state := m.metadataTables[TableIDForGroup(groupID)]; state != nil {
+		m.metadataGeneration++
+		state.version = m.metadataGeneration
+	}
 }
 
 func (m *Manager) updateGroupLabelRules(labels map[string]*labeler.LabelRule, needClear bool) {
@@ -307,6 +337,12 @@ func (m *Manager) clearGroupCacheLocked(groupID string) {
 func (m *Manager) deleteGroupLocked(groupID string) {
 	m.clearGroupCacheLocked(groupID)
 	delete(m.groups, groupID)
+	if state := m.metadataTables[TableIDForGroup(groupID)]; state != nil {
+		delete(state.groups, groupID)
+		if len(state.groups) == 0 {
+			delete(m.metadataTables, TableIDForGroup(groupID))
+		}
+	}
 }
 
 func (m *Manager) deleteGroups(groupIDs []string) {
@@ -467,18 +503,30 @@ func (m *Manager) GetAllAffinityGroupStates() []*GroupState {
 // They are called by the watcher when it receives events from etcd.
 
 // SyncGroupFromEtcd synchronizes a group from etcd to the in-memory state.
-func (m *Manager) SyncGroupFromEtcd(group *Group) {
+func (m *Manager) SyncGroupFromEtcd(group *Group) error {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	return m.syncGroupFromEtcdLocked(group)
+}
+
+func (m *Manager) syncGroupFromEtcdLocked(group *Group) error {
+	if group == nil {
+		return nil
+	}
+	if err := ValidateGroupID(group.ID); err != nil {
+		log.Warn("invalid affinity group ID from etcd, skipping", zap.String("group-id", group.ID), zap.Error(err))
+		return nil
+	}
 	if err := validateBalancePolicy(group.BalancePolicy); err != nil {
 		log.Warn("invalid affinity group balance policy from etcd, skipping",
-			zap.String("group-id", group.ID), zap.Error(err))
-		return
+			zap.String("group-id", group.ID),
+			zap.Error(err))
+		return nil
 	}
 	// Voter order has no meaning, but affinity comparisons use canonical order.
 	clonedGroup := *group
 	clonedGroup.VoterStoreIDs = normalizeVoters(group.VoterStoreIDs)
 	group = &clonedGroup
-	m.metaMutex.Lock()
-	defer m.metaMutex.Unlock()
 
 	// Fast path: avoid taking write lock if nothing changes.
 	m.RLock()
@@ -486,9 +534,10 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 	if exists &&
 		existingGroup.LeaderStoreID == group.LeaderStoreID &&
 		slices.Equal(existingGroup.VoterStoreIDs, group.VoterStoreIDs) &&
-		existingGroup.BalancePolicy == group.BalancePolicy {
+		existingGroup.BalancePolicy == group.BalancePolicy &&
+		existingGroup.CreateTimestamp == group.CreateTimestamp {
 		m.RUnlock()
-		return
+		return nil
 	}
 	m.RUnlock()
 
@@ -523,7 +572,7 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 					zap.String("group-id", group.ID),
 					zap.Error(labelErr))
 				delete(m.labelRuleBuffer, group.ID)
-				return
+				return nil
 			}
 			// Attach only non-empty label rules to avoid marking the group as having ranges when it does not.
 			if len(gkr.KeyRanges) > 0 {
@@ -547,19 +596,198 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 		}
 		if groupInfo.BalancePolicy != group.BalancePolicy {
 			groupInfo.BalancePolicy = group.BalancePolicy
+			// Policy changes invalidate planning inputs, not Region affinity.
+			m.invalidateMetadataLocked(group.ID)
+		}
+		if groupInfo.CreateTimestamp != group.CreateTimestamp {
+			groupInfo.CreateTimestamp = group.CreateTimestamp
+			changed = true
 		}
 
 		if changed {
 			m.resetCountLocked(groupInfo)
 		}
 	}
+	return nil
+}
+
+// ReloadAffinityMetadataFromStorage replaces the local group/range view with
+// an authoritative snapshot before this process takes over scheduling. It
+// intentionally drops cached Region associations; the checker will rebuild
+// them from current Region state after the new primary starts.
+func (m *Manager) ReloadAffinityMetadataFromStorage() error {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	conditions, err := m.captureAffinityWriteConditions()
+	if err != nil {
+		return err
+	}
+	return m.reloadAffinityMetadataWithConditions(m.ctx, conditions)
+}
+
+// reloadAffinityMetadataLocked checks the captured authority before publishing
+// the loaded group/range metadata.
+func (m *Manager) reloadAffinityMetadataLocked(ctx context.Context) error {
+	conditions, err := m.captureAffinityWriteConditions()
+	if err != nil {
+		return err
+	}
+	return m.reloadAffinityMetadataWithConditions(ctx, conditions)
+}
+
+// reloadAffinityMetadataUnconditionallyLocked refreshes the local metadata
+// after an ambiguous write. This read does not authorize a write and is not
+// rejected merely because the caller's primary term is stale. The group and
+// label prefixes are loaded separately, without a cross-prefix revision fence.
+func (m *Manager) reloadAffinityMetadataUnconditionallyLocked(ctx context.Context) error {
+	return m.reloadAffinityMetadataWithConditions(ctx, nil)
+}
+
+// reloadAffinityMetadataWithConditions stages and publishes one authoritative
+// affinity snapshot under the supplied authority conditions. Takeover passes
+// the new primary conditions; ordinary initialization captures the current
+// primary conditions through reloadAffinityMetadataLocked.
+func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, conditions []clientv3.Cmp) error {
+	loaded := make(map[string]Group)
+	rules := make(map[string]*labeler.LabelRule)
+	ranges := make(map[string]GroupKeyRanges)
+	var rangeVersion uint64
+	plan := m.regionLabeler.NewPlan()
+	for _, rule := range m.regionLabeler.GetAllLabelRules() {
+		if strings.HasPrefix(rule.ID, LabelRuleIDPrefix) {
+			if err := plan.DeleteLabelRule(rule.ID); err != nil {
+				return err
+			}
+		}
+	}
+	err := m.runAffinityTxn(ctx, conditions, func(txn kv.Txn) error {
+		var err error
+		rangeVersion, err = loadAffinityRangeVersion(txn)
+		if err != nil {
+			return err
+		}
+		var parseErr error
+		if err := m.storage.LoadAllAffinityGroups(func(_, value string) {
+			if parseErr != nil {
+				return
+			}
+			var group Group
+			if parseErr = json.Unmarshal([]byte(value), &group); parseErr != nil {
+				return
+			}
+			// Preserve the load/watch contract: invalid policies are isolated.
+			if validateBalancePolicy(group.BalancePolicy) != nil {
+				return
+			}
+			if err := ValidateGroupID(group.ID); err != nil {
+				log.Warn("invalid affinity group ID from etcd, skipping", zap.String("group-id", group.ID), zap.Error(err))
+				return
+			}
+			loaded[group.ID] = group
+		}); err != nil {
+			return err
+		}
+		if parseErr != nil {
+			return parseErr
+		}
+		if err := m.storage.LoadAllAffinityLabels(func(_, value string) {
+			if parseErr != nil {
+				return
+			}
+			var rawRule labeler.LabelRule
+			if parseErr = json.Unmarshal([]byte(value), &rawRule); parseErr != nil {
+				return
+			}
+			validated, err := labeler.NewLabelRuleFromJSON([]byte(value))
+			if err != nil {
+				// Invalid identities are isolated for compatibility with the
+				// watcher path. A valid affinity identity with malformed rule
+				// content remains a load error, preserving the atomic reload
+				// contract for known metadata.
+				id, ok := parseAffinityGroupIDFromLabelRule(&rawRule)
+				if !ok {
+					log.Warn("invalid affinity label identity from etcd, skipping", zap.String("rule-id", rawRule.ID), zap.Error(err))
+					return
+				}
+				if idErr := ValidateGroupID(id); idErr != nil {
+					log.Warn("invalid affinity group ID in label rule, skipping", zap.String("group-id", id), zap.Error(idErr))
+					return
+				}
+				parseErr = err
+				return
+			}
+			id, ok := parseAffinityGroupIDFromLabelRule(validated)
+			if !ok {
+				log.Warn("invalid affinity label identity from etcd, skipping", zap.String("rule-id", validated.ID))
+				return
+			}
+			if err := ValidateGroupID(id); err != nil {
+				log.Warn("invalid affinity group ID in label rule, skipping", zap.String("group-id", id), zap.Error(err))
+				return
+			}
+			rule := rawRule
+			if parseErr = plan.SetLabelRule(&rule); parseErr != nil {
+				return
+			}
+			gkr, err := extractKeyRangesFromLabelRule(validated)
+			if err != nil {
+				log.Warn("invalid affinity label ranges from etcd, skipping", zap.String("group-id", id), zap.Error(err))
+				return
+			}
+			rules[id] = &rule
+			if _, exists := loaded[id]; exists && len(gkr.KeyRanges) > 0 {
+				ranges[id] = gkr
+			}
+		}); err != nil {
+			return err
+		}
+		return parseErr
+	})
+	if err != nil {
+		return err
+	}
+	if err := validateNoOverlap(slices.Collect(maps.Values(ranges))); err != nil {
+		return err
+	}
+	// All fallible work is complete. Publish the full affinity view, preserving
+	// ordinary labels. The prefixes were read separately, not at one revision.
+	plan.Apply()
+	m.Lock()
+	defer m.Unlock()
+	m.affinityRangeVersion = rangeVersion
+	m.groups = make(map[string]*runtimeGroupInfo, len(loaded))
+	m.regions = make(map[uint64]regionCache)
+	m.metadataTables = make(map[TableID]*metadataTableState)
+	m.affinityRegionCount = 0
+	m.keyRanges = ranges
+	m.labelRuleBuffer = make(map[string]*labeler.LabelRule)
+	for _, group := range loaded {
+		m.initGroupLocked(&group)
+		if rule := rules[group.ID]; rule != nil {
+			m.updateGroupLabelRuleLocked(group.ID, rule, false)
+		}
+	}
+	return nil
 }
 
 // SyncGroupDeleteFromEtcd synchronizes a group deletion from etcd.
-func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) {
+func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	return m.syncGroupDeleteFromEtcdLocked(groupID)
+}
 
+func (m *Manager) syncGroupDeleteFromEtcdLocked(groupID string) error {
+	// A delayed delete event must not remove a group that was recreated under
+	// the same ID after the event's revision. Read the current authoritative
+	// value while holding the same metadata lock used by range validation.
+	value, err := m.storage.LoadAffinityGroup(groupID)
+	if err != nil {
+		return err
+	}
+	if value != "" {
+		return nil
+	}
 	delete(m.keyRanges, groupID)
 	delete(m.labelRuleBuffer, groupID)
 
@@ -567,19 +795,65 @@ func (m *Manager) SyncGroupDeleteFromEtcd(groupID string) {
 	defer m.Unlock()
 	if _, exists := m.groups[groupID]; !exists {
 		log.Warn("affinity group not found during etcd sync delete", zap.String("group-id", groupID))
-		return
+		return nil
 	}
 
 	m.deleteGroupLocked(groupID)
+	return nil
 }
 
 // SyncKeyRangesFromEtcd synchronizes key ranges from a label rule.
 func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	return m.syncKeyRangesFromEtcdLocked(labelRule)
+}
+
+// SyncKeyRangesFromEtcdEvent applies a watcher event only when its value still
+// matches storage. This prevents a delayed old event from replacing a newer
+// local API range view used by cross-group overlap validation.
+func (m *Manager) SyncKeyRangesFromEtcdEvent(labelRule *labeler.LabelRule) error {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	// A watcher event can be delayed after a local API commit. Read the
+	// authoritative label before publishing it; an old event must never replace
+	// the range view used by the next cross-group overlap check.
+	if labelRule != nil {
+		value, err := m.loadAffinityLabelRule(labelRule.ID)
+		if err != nil {
+			return err
+		}
+		if value == "" {
+			return nil
+		}
+		current, err := labeler.NewLabelRuleFromJSON([]byte(value))
+		if err != nil {
+			return err
+		}
+		currentRanges, err := extractKeyRangesFromLabelRule(current)
+		if err != nil {
+			return err
+		}
+		eventRanges, err := extractKeyRangesFromLabelRule(labelRule)
+		if err != nil {
+			return err
+		}
+		if !affinityRangesEqual(currentRanges, eventRanges) {
+			return nil
+		}
+	}
+	return m.syncKeyRangesFromEtcdLocked(labelRule)
+}
+
+func (m *Manager) syncKeyRangesFromEtcdLocked(labelRule *labeler.LabelRule) error {
 	groupID, isAffinity := parseAffinityGroupIDFromLabelRule(labelRule)
 	if !isAffinity {
 		return nil
 	}
-
+	if err := ValidateGroupID(groupID); err != nil {
+		log.Warn("invalid affinity group ID in label rule, skipping", zap.String("group-id", groupID), zap.Error(err))
+		return nil
+	}
 	// Extract key ranges from label rule
 	gkr, err := extractKeyRangesFromLabelRule(labelRule)
 	if err != nil {
@@ -588,9 +862,7 @@ func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
 			zap.Error(err))
 		return err
 	}
-
-	m.metaMutex.Lock()
-	defer m.metaMutex.Unlock()
+	m.regionLabeler.ApplyLabelRule(labelRule.ID, labelRule)
 	m.Lock()
 	defer m.Unlock()
 
@@ -622,15 +894,38 @@ func (m *Manager) SyncKeyRangesFromEtcd(labelRule *labeler.LabelRule) error {
 }
 
 // SyncKeyRangesDeleteFromEtcd synchronizes key ranges deletion.
-func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) {
-	groupID := strings.TrimPrefix(ruleID, LabelRuleIDPrefix)
-	if groupID == "" || groupID == ruleID {
-		return
-	}
-
-	// Clear keyRanges cache (needs metaMutex)
+func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) error {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	return m.syncKeyRangesDeleteFromEtcdLocked(ruleID)
+}
+
+// SyncKeyRangesDeleteFromEtcdEvent ignores a delayed delete when the rule has
+// already been recreated or replaced by a newer API write.
+func (m *Manager) SyncKeyRangesDeleteFromEtcdEvent(ruleID string) error {
+	m.metaMutex.Lock()
+	defer m.metaMutex.Unlock()
+	// Ignore a delayed delete event when the rule has already been recreated or
+	// replaced by a newer API write.
+	if value, err := m.loadAffinityLabelRule(ruleID); err != nil {
+		return err
+	} else if value != "" {
+		return nil
+	}
+	return m.syncKeyRangesDeleteFromEtcdLocked(ruleID)
+}
+
+func (m *Manager) syncKeyRangesDeleteFromEtcdLocked(ruleID string) error {
+	groupID := strings.TrimPrefix(ruleID, LabelRuleIDPrefix)
+	if groupID == "" || groupID == ruleID {
+		return nil
+	}
+	if err := ValidateGroupID(groupID); err != nil {
+		log.Warn("invalid affinity group ID in label rule delete, skipping", zap.String("group-id", groupID), zap.Error(err))
+		return nil
+	}
+	// Clear keyRanges cache (needs metaMutex)
+	m.regionLabeler.ApplyLabelRule(ruleID, nil)
 
 	delete(m.keyRanges, groupID)
 	delete(m.labelRuleBuffer, groupID)
@@ -641,4 +936,5 @@ func (m *Manager) SyncKeyRangesDeleteFromEtcd(ruleID string) {
 	if _, exists := m.groups[groupID]; exists {
 		m.updateGroupLabelRuleLocked(groupID, nil, true)
 	}
+	return nil
 }

@@ -17,8 +17,10 @@ package affinity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +44,18 @@ import (
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(testutil.WaitForEtcdConnections(m), testutil.LeakOptions...)
+}
+
+type failingGroupStorage struct {
+	*endpoint.StorageEndpoint
+	failReloads atomic.Int32
+}
+
+func (s *failingGroupStorage) LoadAllAffinityGroups(fn func(string, string)) error {
+	if s.failReloads.Add(-1) >= 0 {
+		return errors.New("group snapshot unavailable")
+	}
+	return s.StorageEndpoint.LoadAllAffinityGroups(fn)
 }
 
 func TestAffinityWatcherLifecycle(t *testing.T) {
@@ -454,7 +468,8 @@ func setupAffinityManagerWithComponents(ctx context.Context, client *clientv3.Cl
 	}
 
 	conf := mockconfig.NewTestOptions()
-	affinityManager, err := affinity.NewManager(ctx, storage, basicCluster, conf, labelerManager)
+	authoritativeStorage := endpoint.NewStorageEndpoint(kv.NewEtcdKVBase(client), nil)
+	affinityManager, err := affinity.NewManager(ctx, authoritativeStorage, basicCluster, conf, labelerManager)
 	if err != nil {
 		return nil, nil, nil, err
 	}

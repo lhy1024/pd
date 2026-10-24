@@ -287,6 +287,19 @@ func (l *RegionLabeler) SetLabelRuleLocked(rule *LabelRule) error {
 	return nil
 }
 
+// ApplyLabelRule publishes an already validated, persisted rule without a
+// storage write. A nil rule removes the ID. Affinity Manager serializes this
+// publication with its API writes.
+func (l *RegionLabeler) ApplyLabelRule(id string, rule *LabelRule) {
+	l.Lock()
+	defer l.Unlock()
+	if rule == nil {
+		l.ruleIndex.delete(id)
+	} else {
+		l.ruleIndex.set(rule)
+	}
+}
+
 // DeleteLabelRule removes a LabelRule.
 func (l *RegionLabeler) DeleteLabelRule(id string) error {
 	if err := l.storage.RunInTxn(l.ctx, func(txn kv.Txn) error {

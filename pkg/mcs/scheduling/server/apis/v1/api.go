@@ -88,9 +88,7 @@ type server struct {
 }
 
 // AffinityGroupsResponse defines the response payload for listing affinity groups.
-type AffinityGroupsResponse struct {
-	AffinityGroups map[string]*affinity.GroupState `json:"affinity_groups"`
-}
+type AffinityGroupsResponse = handler.AffinityGroupsResponse
 
 // GetCluster returns the cluster.
 func (s *server) GetCluster() sche.SchedulerCluster {
@@ -276,8 +274,13 @@ func (s *Service) RegisterAffinityRouter() {
 	redirector := multiservicesapi.ServiceRedirector()
 	router := s.root.Group("affinity-groups")
 	router.Use(redirector)
+	router.POST("", affinityHandler.PostAffinityGroups)
+	router.PATCH("", affinityHandler.BatchModifyAffinityGroups)
 	router.GET("", getAllAffinityGroups)
 	router.GET("/:group_id", getAffinityGroup)
+	router.PATCH("/:group_id/policy", updateAffinityGroupPolicy)
+	router.PUT("/:group_id", affinityHandler.UpdateAffinityGroupPeers)
+	router.DELETE("/:group_id", affinityHandler.DeleteAffinityGroup)
 }
 
 // getHealth returns the health status of the TSO service.
@@ -1708,30 +1711,7 @@ func getBasicCluster(c *gin.Context, svr *scheserver.Server) (*pdcore.BasicClust
 // @Failure  500  {string}  string  "PD server failed to proceed the request."
 // @Router   /affinity-groups [get]
 func getAllAffinityGroups(c *gin.Context) {
-	manager, ok := getAffinityManager(c)
-	if !ok {
-		return
-	}
-
-	rawIDs := c.QueryArray("ids")
-	var (
-		groupStates map[string]*affinity.GroupState
-		err         error
-	)
-	if len(rawIDs) == 0 {
-		groupStates = affinity.CollectAllGroupStates(manager)
-	} else {
-		groupStates, err = affinity.CollectGroupStates(manager, rawIDs)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-
-	resp := AffinityGroupsResponse{
-		AffinityGroups: groupStates,
-	}
-	c.IndentedJSON(http.StatusOK, resp)
+	affinityHandler.GetAllAffinityGroups(c)
 }
 
 // @Tags     affinity-groups
@@ -1743,22 +1723,22 @@ func getAllAffinityGroups(c *gin.Context) {
 // @Failure  500  {string}  string  "PD server failed to proceed the request."
 // @Router   /affinity-groups/{group_id} [get]
 func getAffinityGroup(c *gin.Context) {
-	manager, ok := getAffinityManager(c)
-	if !ok {
-		return
-	}
-	groupID := c.Param("group_id")
-	groupState, err := manager.CheckAndGetAffinityGroupState(groupID)
-	if err != nil {
-		switch {
-		case errs.ErrInvalidGroupID.Equal(err):
-			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-		case errs.ErrAffinityGroupNotFound.Equal(err):
-			c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
-		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
-		}
-		return
-	}
-	c.IndentedJSON(http.StatusOK, groupState)
+	affinityHandler.GetAffinityGroup(c)
+}
+
+var affinityHandler = handler.AffinityHandler{GetManager: getAffinityManager}
+
+// @Tags     affinity-groups
+// @Summary  Update the balance policy of an affinity group.
+// @Param    group_id  path  string  true  "The group id of the affinity group"
+// @Param    body      body  updateAffinityGroupPolicyRequest  true  "New balance policy: auto or fixed"
+// @Produce  json
+// @Success  200  {object}  *affinity.GroupState
+// @Failure  400  {string}  string  "The input is invalid."
+// @Failure  404  {string}  string  "Affinity group not found."
+// @Failure  409  {string}  string  "Affinity group changed during the update."
+// @Failure  500  {string}  string  "Scheduling service failed to proceed the request."
+// @Router   /affinity-groups/{group_id}/policy [patch]
+func updateAffinityGroupPolicy(c *gin.Context) {
+	affinityHandler.UpdateAffinityGroupPolicy(c)
 }
