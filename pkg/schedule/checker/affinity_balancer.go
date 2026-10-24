@@ -164,6 +164,22 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 		}
 		return nil
 	}
+	placementFilters := make(map[string]balanceTargetPlacementFilter, len(snapshot.Groups))
+	placementFilterMayReject := false
+	for _, group := range snapshot.Groups {
+		storeIDs := slices.Clone(snapshot.Stores)
+		storeIDs = append(storeIDs, group.VoterStoreIDs...)
+		filter := c.newBalanceTargetPlacementFilter(snapshot.Ranges[group.ID], storeIDs)
+		placementFilters[group.ID] = filter
+		placementFilterMayReject = placementFilterMayReject || filter.mayReject
+	}
+	// If the conservative placement gate rejects every improving candidate,
+	// avoid scanning every Region only to rediscover that no target can fit.
+	// A filter that accepts a candidate still falls through to the complete
+	// Region-level fit and final review below.
+	if placementFilterMayReject && !hasPotentialBalanceCandidate(snapshot, scorer, placementFilters) {
+		return checkInput()
+	}
 	waiting := c.waitingAffinityRegions()
 	checked := make(map[uint64]balanceCheckedRegion)
 	for _, group := range snapshot.Groups {
@@ -209,12 +225,8 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 				continue
 			}
 			group := snapshot.Groups[candidates.group]
-			target := group.Group
-			target.LeaderStoreID, target.VoterStoreIDs = move.LeaderStoreID, slices.Clone(group.VoterStoreIDs)
-			if move.FromStoreID != 0 {
-				target.VoterStoreIDs[slices.Index(target.VoterStoreIDs, move.FromStoreID)] = move.ToStoreID
-			}
-			if !c.balanceTargetMaySatisfyPlacement(&target, snapshot.Ranges[group.ID]) {
+			target := balanceTargetForMove(group, move)
+			if !placementFilters[group.ID].maySatisfy(&target) {
 				continue
 			}
 			scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
@@ -268,6 +280,36 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 		}
 	}
 	return nil
+}
+
+func balanceTargetForMove(group *affinity.GroupState, move affinity.BalanceMove) affinity.Group {
+	target := group.Group
+	target.LeaderStoreID, target.VoterStoreIDs = move.LeaderStoreID, slices.Clone(group.VoterStoreIDs)
+	if move.FromStoreID != 0 {
+		target.VoterStoreIDs[slices.Index(target.VoterStoreIDs, move.FromStoreID)] = move.ToStoreID
+	}
+	return target
+}
+
+func hasPotentialBalanceCandidate(snapshot *affinity.BalanceSnapshot, scorer *affinity.BalanceScorer, filters map[string]balanceTargetPlacementFilter) bool {
+	for _, replace := range []bool{false, true} {
+		candidates := newBalanceCandidates(snapshot, scorer, replace)
+		for {
+			move, found := candidates.next()
+			if !found {
+				break
+			}
+			if _, improves := scorer.Evaluate(move); !improves {
+				continue
+			}
+			group := snapshot.Groups[candidates.group]
+			target := balanceTargetForMove(group, move)
+			if filters[group.ID].maySatisfy(&target) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func sameBalanceRegionInput(a, b *core.RegionInfo) bool {

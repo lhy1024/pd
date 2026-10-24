@@ -157,38 +157,73 @@ func (c *AffinityChecker) validateBalanceTarget(target *affinity.Group, region *
 // Counts, isolation, existing peers, and Region-specific state still require
 // the full virtual Region fit in validateBalanceTarget.
 func (c *AffinityChecker) balanceTargetMaySatisfyPlacement(target *affinity.Group, ranges affinity.GroupKeyRanges) bool {
-	if !c.cluster.GetSharedConfig().IsPlacementRulesEnabled() || len(ranges.KeyRanges) == 0 {
-		return true
-	}
+	return c.newBalanceTargetPlacementFilter(ranges, target.VoterStoreIDs).maySatisfy(target)
+}
 
-	keyRange := ranges.KeyRanges[0]
-	rules := c.ruleManager.GetRulesForApplyRange(keyRange.StartKey, keyRange.EndKey)
-	if len(rules) == 0 {
-		// A group range can span rule boundaries even when every Region
-		// is aligned. Leave this candidate to the full per-Region validation.
+// balanceTargetPlacementFilter caches the necessary label checks shared by all
+// candidate moves for one group's range. It intentionally does not model rule
+// counts, isolation, or Region-specific peer assignment; those still belong to
+// the full virtual Region fit.
+type balanceTargetPlacementFilter struct {
+	leader, follower map[uint64]struct{}
+	mayReject        bool
+}
+
+func (f balanceTargetPlacementFilter) maySatisfy(target *affinity.Group) bool {
+	if !f.mayReject {
 		return true
 	}
 	for _, id := range target.VoterStoreIDs {
-		info := c.cluster.GetStore(id)
-		if info == nil {
-			return false
+		eligible := f.follower
+		if id == target.LeaderStoreID {
+			eligible = f.leader
 		}
-		leader := id == target.LeaderStoreID
-		matched := false
-		for _, rule := range rules {
-			roleMatches := rule.Role == placement.Voter ||
-				(leader && rule.Role == placement.Leader) ||
-				(!leader && rule.Role == placement.Follower)
-			if roleMatches && placement.MatchLabelConstraints(info, rule.LabelConstraints) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		if _, ok := eligible[id]; !ok {
 			return false
 		}
 	}
 	return true
+}
+
+func (c *AffinityChecker) newBalanceTargetPlacementFilter(ranges affinity.GroupKeyRanges, storeIDs []uint64) balanceTargetPlacementFilter {
+	if !c.cluster.GetSharedConfig().IsPlacementRulesEnabled() || len(ranges.KeyRanges) == 0 {
+		return balanceTargetPlacementFilter{}
+	}
+	keyRange := ranges.KeyRanges[0]
+	rules := c.ruleManager.GetRulesForApplyRange(keyRange.StartKey, keyRange.EndKey)
+	if len(rules) == 0 {
+		// A group range can span rule boundaries even when every Region is
+		// aligned. Leave this candidate to the full per-Region validation.
+		return balanceTargetPlacementFilter{}
+	}
+	filter := balanceTargetPlacementFilter{
+		leader:   make(map[uint64]struct{}, len(storeIDs)),
+		follower: make(map[uint64]struct{}, len(storeIDs)),
+	}
+	for _, id := range storeIDs {
+		info := c.cluster.GetStore(id)
+		if info == nil {
+			filter.mayReject = true
+			continue
+		}
+		for _, rule := range rules {
+			if (rule.Role == placement.Voter || rule.Role == placement.Leader) &&
+				placement.MatchLabelConstraints(info, rule.LabelConstraints) {
+				filter.leader[id] = struct{}{}
+			}
+			if (rule.Role == placement.Voter || rule.Role == placement.Follower) &&
+				placement.MatchLabelConstraints(info, rule.LabelConstraints) {
+				filter.follower[id] = struct{}{}
+			}
+		}
+		if _, ok := filter.leader[id]; !ok {
+			filter.mayReject = true
+		}
+		if _, ok := filter.follower[id]; !ok {
+			filter.mayReject = true
+		}
+	}
+	return filter
 }
 
 func (c *AffinityChecker) balanceTargetExecutionStatus(actual, target *affinity.Group) balanceStatus {
