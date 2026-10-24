@@ -557,11 +557,10 @@ func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {
 	}
 	balancer := &affinityBalancer{checker: checker, tables: map[affinity.TableID]*affinityBalanceTask{affinity.TableIDForGroup("_tidb_pt_100_p0"): {}}}
 	balancer.enqueue(ids[0])
-	require.True(t, balancer.tables[affinity.TableIDForGroup("_tidb_pt_100_p0")].dirty, "periodic retry should mark a completed table dirty")
+	require.Contains(t, balancer.tables, affinity.TableIDForGroup("_tidb_pt_100_p0"))
 
 	tc.SetStoreUp(4)
 	balancer.enqueue(ids[0])
-	require.True(t, balancer.tables[affinity.TableIDForGroup("_tidb_pt_100_p0")].dirty, "repeated enqueue should remain one dirty marker")
 	balancer.processDirty(t.Context())
 	require.Contains(t, manager.GetAffinityGroupState(ids[0]).VoterStoreIDs, uint64(4))
 }
@@ -588,7 +587,7 @@ func TestAffinityBalancePreservesDirtyWhileDisabled(t *testing.T) {
 				tc.SetAffinityScheduleLimit(0)
 			}
 			balancer.processDirty(t.Context())
-			require.True(t, balancer.tables[affinity.TableIDForGroup("_tidb_pt_100_p0")].dirty)
+			require.Contains(t, balancer.tables, affinity.TableIDForGroup("_tidb_pt_100_p0"))
 			require.Equal(t, uint64(1), manager.GetAffinityGroupState(ids[0]).LeaderStoreID)
 
 			checker.PauseOrResume(0)
@@ -598,29 +597,6 @@ func TestAffinityBalancePreservesDirtyWhileDisabled(t *testing.T) {
 			require.NotEqual(t, uint64(1), manager.GetAffinityGroupState(ids[0]).LeaderStoreID)
 		})
 	}
-}
-
-func TestAffinityBalanceDefersDirtyDuringBatch(t *testing.T) {
-	tc, checker := newAffinityBalanceTestCluster(t, 3)
-	manager := tc.GetAffinityManager()
-	ids := []string{"_tidb_pt_100_p1", "_tidb_pt_100_p2", "_tidb_pt_100_p3"}
-	keys := []string{"a", "b", "c", "d"}
-	for i, id := range ids {
-		createBalanceGroup(t, manager, id, keys[i], keys[i+1], 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
-		addBalanceRegion(t, tc, manager, uint64(i+1), keys[i], keys[i+1], 1, 1, 2, 3)
-	}
-	queued := false
-	checker.cluster = &affinityBalanceScanCluster{CheckerCluster: tc, beforeScan: func() {
-		if !queued {
-			queued = true
-			checker.balancer.enqueue(ids[0])
-		}
-	}}
-	checker.balancer.enqueue(ids[0])
-	checker.balancer.processDirty(t.Context())
-	// A heartbeat during this search is retained for the next periodic batch;
-	// processDirty must not immediately consume it in the same call.
-	require.True(t, checker.balancer.tables[affinity.TableIDForGroup("_tidb_pt_100_p0")].dirty)
 }
 
 func TestAffinityBalanceCancellationRestartsFromFreshSnapshot(t *testing.T) {

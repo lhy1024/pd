@@ -40,9 +40,6 @@ type affinityBalancer struct {
 }
 
 type affinityBalanceTask struct {
-	// Dirty admission is protected by balancer.mu. Completed searches are
-	// retried by the periodic ticker; no permanent stable cache is retained.
-	dirty bool
 }
 
 type balanceCheckedRegion struct {
@@ -69,33 +66,25 @@ func (b *affinityBalancer) enqueue(groupID string) {
 		task = &affinityBalanceTask{}
 		b.tables[tableID] = task
 	}
-	task.dirty = true
 	b.mu.Unlock()
 }
 
+const affinityBalanceRetryInterval = time.Second
+
 func (b *affinityBalancer) run(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(affinityBalanceRetryInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			b.markAllDirty()
+		case <-timer.C:
 			b.processDirty(ctx)
+			// Start the next interval after the whole batch finishes. A long
+			// placement search therefore cannot immediately trigger another full
+			// scan from a tick buffered while the worker was busy.
+			timer.Reset(affinityBalanceRetryInterval)
 		}
-	}
-}
-
-func (b *affinityBalancer) markAllDirty() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for id, task := range b.tables {
-		if _, exists := b.checker.affinityManager.GetBalanceVersion(id); !exists {
-			delete(b.tables, id)
-			continue
-		}
-		task.dirty = true
 	}
 }
 
@@ -105,11 +94,12 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 	}
 	b.mu.Lock()
 	ids := make([]affinity.TableID, 0, len(b.tables))
-	for id, task := range b.tables {
-		if task.dirty {
-			ids = append(ids, id)
-			task.dirty = false
+	for id := range b.tables {
+		if _, exists := b.checker.affinityManager.GetBalanceVersion(id); !exists {
+			delete(b.tables, id)
+			continue
 		}
+		ids = append(ids, id)
 	}
 	b.mu.Unlock()
 	if len(ids) == 0 || ctx.Err() != nil {

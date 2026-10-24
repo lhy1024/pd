@@ -258,8 +258,8 @@ func BenchmarkAffinityBalance(b *testing.B) {
 }
 
 // BenchmarkAffinityBalanceIdle measures one periodic batch for a registered
-// table, including dirty marking and admission. It uses a local balancer with
-// no goroutine so a background worker cannot consume the measured batch.
+// table. It uses a local balancer with no goroutine so a background worker
+// cannot consume the measured batch.
 func BenchmarkAffinityBalanceIdle(b *testing.B) {
 	for _, tc := range []struct {
 		state          string
@@ -293,7 +293,6 @@ func BenchmarkAffinityBalanceIdle(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				balancer.markAllDirty()
 				balancer.processDirty(setup.ctx)
 			}
 			b.StopTimer()
