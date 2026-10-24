@@ -36,10 +36,7 @@ import (
 type affinityBalancer struct {
 	checker *AffinityChecker
 	mu      sync.Mutex
-	tables  map[affinity.TableID]*affinityBalanceTask
-}
-
-type affinityBalanceTask struct {
+	tables  map[affinity.TableID]struct{}
 }
 
 type balanceCheckedRegion struct {
@@ -49,7 +46,7 @@ type balanceCheckedRegion struct {
 }
 
 func newAffinityBalancer(ctx context.Context, checker *AffinityChecker) *affinityBalancer {
-	balancer := &affinityBalancer{checker: checker, tables: make(map[affinity.TableID]*affinityBalanceTask)}
+	balancer := &affinityBalancer{checker: checker, tables: make(map[affinity.TableID]struct{})}
 	go balancer.run(ctx)
 	return balancer
 }
@@ -61,11 +58,7 @@ func (b *affinityBalancer) enqueue(groupID string) {
 		return
 	}
 	b.mu.Lock()
-	task := b.tables[tableID]
-	if task == nil {
-		task = &affinityBalanceTask{}
-		b.tables[tableID] = task
-	}
+	b.tables[tableID] = struct{}{}
 	b.mu.Unlock()
 }
 
@@ -127,7 +120,7 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 }
 
 // step completes one table search, including final review and one commit
-// attempt. The dirty-table worker retries with a fresh snapshot; no search progress is
+// attempt. The periodic worker retries with a fresh snapshot; no search progress is
 // retained between calls. Large tables occupy the worker until this call ends.
 func (b *affinityBalancer) step(ctx context.Context, id affinity.TableID) error {
 	if !b.checker.balanceSchedulingAllowed() || !b.checker.affinityManager.IsBalanceTableEligible(id) {

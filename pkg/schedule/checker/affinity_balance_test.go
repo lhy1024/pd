@@ -555,7 +555,7 @@ func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {
 	for _, id := range ids {
 		require.NotContains(t, manager.GetAffinityGroupState(id).VoterStoreIDs, uint64(4))
 	}
-	balancer := &affinityBalancer{checker: checker, tables: map[affinity.TableID]*affinityBalanceTask{affinity.TableIDForGroup("_tidb_pt_100_p0"): {}}}
+	balancer := &affinityBalancer{checker: checker, tables: map[affinity.TableID]struct{}{affinity.TableIDForGroup("_tidb_pt_100_p0"): {}}}
 	balancer.enqueue(ids[0])
 	require.Contains(t, balancer.tables, affinity.TableIDForGroup("_tidb_pt_100_p0"))
 
@@ -576,7 +576,7 @@ func TestAffinityBalancePreservesDirtyWhileDisabled(t *testing.T) {
 				createBalanceGroup(t, manager, id, keys[i], keys[i+1], 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
 				addBalanceRegion(t, tc, manager, uint64(i+1), keys[i], keys[i+1], 1, 1, 2, 3)
 			}
-			balancer := &affinityBalancer{checker: checker, tables: make(map[affinity.TableID]*affinityBalanceTask)}
+			balancer := &affinityBalancer{checker: checker, tables: make(map[affinity.TableID]struct{})}
 			balancer.enqueue(ids[0])
 			switch blocker {
 			case "paused":

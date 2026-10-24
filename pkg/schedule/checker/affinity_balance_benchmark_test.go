@@ -289,7 +289,7 @@ func BenchmarkAffinityBalanceIdle(b *testing.B) {
 					}
 				}
 			}
-			balancer := &affinityBalancer{checker: setup.checker, tables: map[affinity.TableID]*affinityBalanceTask{setup.tableID: {}}}
+			balancer := &affinityBalancer{checker: setup.checker, tables: map[affinity.TableID]struct{}{setup.tableID: {}}}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
