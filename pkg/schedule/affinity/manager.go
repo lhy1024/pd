@@ -710,7 +710,20 @@ func (m *Manager) reloadAffinityMetadataWithConditions(ctx context.Context, cond
 			}
 			validated, err := labeler.NewLabelRuleFromJSON([]byte(value))
 			if err != nil {
-				log.Warn("invalid affinity label from etcd, skipping", zap.String("rule-id", rawRule.ID), zap.Error(err))
+				// Invalid identities are isolated for compatibility with the
+				// watcher path. A valid affinity identity with malformed rule
+				// content remains a load error, preserving the atomic reload
+				// contract for known metadata.
+				id, ok := parseAffinityGroupIDFromLabelRule(&rawRule)
+				if !ok {
+					log.Warn("invalid affinity label identity from etcd, skipping", zap.String("rule-id", rawRule.ID), zap.Error(err))
+					return
+				}
+				if idErr := ValidateGroupID(id); idErr != nil {
+					log.Warn("invalid affinity group ID in label rule, skipping", zap.String("group-id", id), zap.Error(idErr))
+					return
+				}
+				parseErr = err
 				return
 			}
 			id, ok := parseAffinityGroupIDFromLabelRule(validated)

@@ -108,7 +108,13 @@ func TestReloadValidationFailurePreservesPublishedState(t *testing.T) {
 				case "label-json":
 					return txn.Save(keypath.RegionLabelKeyPath(GetLabelRuleID(ids[1])), "{")
 				case "label-data":
-					return txn.Save(keypath.RegionLabelKeyPath(GetLabelRuleID(ids[1])), `{"id":"affinity_group/bad","rule_type":"invalid"}`)
+					badRule, err := json.Marshal(&labeler.LabelRule{
+						ID: GetLabelRuleID(ids[1]), Labels: []labeler.RegionLabel{{Key: labelKey, Value: ids[1]}}, RuleType: "invalid",
+					})
+					if err != nil {
+						return err
+					}
+					return txn.Save(keypath.RegionLabelKeyPath(GetLabelRuleID(ids[1])), string(badRule))
 				default:
 					rule := MakeLabelRule(GroupKeyRanges{GroupID: ids[1], KeyRanges: m.keyRanges[ids[0]].KeyRanges})
 					return m.storage.(endpoint.RuleStorage).SaveRegionRule(txn, rule.ID, rule)
