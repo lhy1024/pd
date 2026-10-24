@@ -97,7 +97,7 @@ func PostAffinityGroups(c *gin.Context) {
 // BatchModifyAffinityGroups batch modifies key ranges for multiple affinity groups.
 //
 //	@Tags		affinity-groups
-//	@Summary	Batch modify key ranges for affinity groups. Remove operations are executed before add operations.
+//	@Summary	Batch modify key ranges for affinity groups. Add and remove ranges are validated against the current view; moving an overlapping range between groups requires separate requests.
 //	@Param		body	body	BatchModifyAffinityGroupsRequest	true	"Batch modify request with add and remove operations"
 //	@Produce	json
 //	@Success	200	{object}	AffinityGroupsResponse	"Updated affinity groups"
