@@ -530,12 +530,31 @@ func TestAffinityBalanceBusyVoterDestinationRetries(t *testing.T) {
 	addBalanceRegion(t, tc, manager, 1, "a", "b", 1, 1, 2, 3)
 	addBalanceRegion(t, tc, manager, 2, "b", "c", 2, 1, 2, 3)
 	tc.SetStoreBusy(4, true)
+	scans := 0
+	checker.cluster = &affinityBalanceScanCluster{CheckerCluster: tc, beforeScan: func() { scans++ }}
 	runAffinityBalanceTask(t, t.Context(), checker)
 	require.NotContains(t, manager.GetAffinityGroupState("_tidb_pt_100_p0").VoterStoreIDs, uint64(4))
+	require.Zero(t, scans, "unexecutable candidates must be rejected before scanning the table")
 
 	tc.SetStoreBusy(4, false)
 	runAffinityBalanceTask(t, t.Context(), checker)
 	require.Contains(t, manager.GetAffinityGroupState("_tidb_pt_100_p0").VoterStoreIDs, uint64(4))
+}
+
+func TestAffinityBalanceRechecksExecutionAtSubmission(t *testing.T) {
+	tc, checker := newAffinityBalanceTestCluster(t, 6)
+	manager := setupLeaderLimitBalanceTable(t, tc)
+	checker.cluster = &affinityBalanceScanCluster{CheckerCluster: tc, beforeFinal: func() {
+		tc.SetStoreBusy(2, true)
+		tc.SetStoreBusy(3, true)
+	}}
+	runAffinityBalanceTask(t, t.Context(), checker)
+	require.Equal(t, uint64(1), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID,
+		"search-local store results must not authorize a stale submission")
+	tc.SetStoreBusy(2, false)
+	checker.cluster = tc
+	runAffinityBalanceTask(t, t.Context(), checker)
+	require.Equal(t, uint64(2), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
 }
 
 func TestAffinityBalanceUsesRecoveredDestination(t *testing.T) {

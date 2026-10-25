@@ -62,28 +62,36 @@ func (b *affinityBalancer) enqueue(groupID string) {
 	b.mu.Unlock()
 }
 
-const affinityBalanceRetryInterval = time.Second
+const (
+	affinityBalanceRetryInterval    = time.Second
+	affinityBalanceMaxRetryInterval = 30 * time.Second
+)
 
 func (b *affinityBalancer) run(ctx context.Context) {
 	timer := time.NewTimer(affinityBalanceRetryInterval)
 	defer timer.Stop()
+	interval := affinityBalanceRetryInterval
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			b.processDirty(ctx)
+			if b.processDirty(ctx) {
+				interval = affinityBalanceRetryInterval
+			} else {
+				interval = min(2*interval, affinityBalanceMaxRetryInterval)
+			}
 			// Start the next interval after the whole batch finishes. A long
 			// placement search therefore cannot immediately trigger another full
 			// scan from a tick buffered while the worker was busy.
-			timer.Reset(affinityBalanceRetryInterval)
+			timer.Reset(interval)
 		}
 	}
 }
 
-func (b *affinityBalancer) processDirty(ctx context.Context) {
+func (b *affinityBalancer) processDirty(ctx context.Context) bool {
 	if ctx.Err() != nil || !b.checker.balanceSchedulingAllowed() {
-		return
+		return false
 	}
 	b.mu.Lock()
 	ids := make([]affinity.TableID, 0, len(b.tables))
@@ -96,7 +104,7 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 	}
 	b.mu.Unlock()
 	if len(ids) == 0 || ctx.Err() != nil {
-		return
+		return false
 	}
 	slices.Sort(ids)
 	planningIDs := ids[:0]
@@ -106,17 +114,22 @@ func (b *affinityBalancer) processDirty(ctx context.Context) {
 		}
 	}
 	if len(planningIDs) == 0 || ctx.Err() != nil {
-		return
+		return false
 	}
 	// Global counts only order candidate stores. Capture them once for this
 	// batch so a stable set of tables does not rescan every group per table.
 	counts := b.checker.affinityManager.GetBalanceGlobalCounts()
+	changed := false
 	for _, id := range planningIDs {
+		before, _ := b.checker.affinityManager.GetBalanceVersion(id)
 		err := b.stepWithCounts(ctx, id, counts)
+		after, _ := b.checker.affinityManager.GetBalanceVersion(id)
+		changed = changed || before != after
 		if err != nil && !errs.ErrEtcdTxnConflict.Equal(err) && ctx.Err() == nil {
 			log.Warn("failed to balance affinity table", zap.String("table-id", string(id)), zap.Error(err))
 		}
 	}
+	return changed
 }
 
 // step completes one table search, including final review and one commit
@@ -165,19 +178,18 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 		return nil
 	}
 	placementFilters := make(map[string]balanceTargetPlacementFilter, len(snapshot.Groups))
-	placementFilterMayReject := false
 	for _, group := range snapshot.Groups {
 		storeIDs := slices.Clone(snapshot.Stores)
 		storeIDs = append(storeIDs, group.VoterStoreIDs...)
 		filter := c.newBalanceTargetPlacementFilter(snapshot.Ranges[group.ID], storeIDs)
 		placementFilters[group.ID] = filter
-		placementFilterMayReject = placementFilterMayReject || filter.mayReject
 	}
 	// If the conservative placement gate rejects every improving candidate,
 	// avoid scanning every Region only to rediscover that no target can fit.
 	// A filter that accepts a candidate still falls through to the complete
 	// Region-level fit and final review below.
-	if placementFilterMayReject && !hasPotentialBalanceCandidate(snapshot, scorer, placementFilters) {
+	checkAction := c.balanceStoreActionChecker()
+	if !hasPotentialBalanceCandidate(snapshot, scorer, placementFilters, checkAction) {
 		return checkInput()
 	}
 	waiting := c.waitingAffinityRegions()
@@ -229,15 +241,15 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 			if !placementFilters[group.ID].maySatisfy(&target) {
 				continue
 			}
+			status := balanceTargetExecutionStatus(&group.Group, &target, checkAction)
+			if status != balanceAllowed {
+				blocked = blocked || status == balanceTemporarilyBlocked
+				continue
+			}
 			scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
-			status := balanceAllowed
 			for {
 				if err := checkInput(); err != nil {
 					return err
-				}
-				status = c.balanceTargetExecutionStatus(&group.Group, &target)
-				if status != balanceAllowed {
-					break
 				}
 				region, covered, done := scan.next(c.cluster)
 				if !covered {
@@ -291,7 +303,8 @@ func balanceTargetForMove(group *affinity.GroupState, move affinity.BalanceMove)
 	return target
 }
 
-func hasPotentialBalanceCandidate(snapshot *affinity.BalanceSnapshot, scorer *affinity.BalanceScorer, filters map[string]balanceTargetPlacementFilter) bool {
+func hasPotentialBalanceCandidate(snapshot *affinity.BalanceSnapshot, scorer *affinity.BalanceScorer,
+	filters map[string]balanceTargetPlacementFilter, check func(balanceStoreAction) balanceStatus) bool {
 	for _, replace := range []bool{false, true} {
 		candidates := newBalanceCandidates(snapshot, scorer, replace)
 		for {
@@ -304,7 +317,7 @@ func hasPotentialBalanceCandidate(snapshot *affinity.BalanceSnapshot, scorer *af
 			}
 			group := snapshot.Groups[candidates.group]
 			target := balanceTargetForMove(group, move)
-			if filters[group.ID].maySatisfy(&target) {
+			if filters[group.ID].maySatisfy(&target) && balanceTargetExecutionStatus(&group.Group, &target, check) == balanceAllowed {
 				return true
 			}
 		}

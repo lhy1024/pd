@@ -226,28 +226,49 @@ func (c *AffinityChecker) newBalanceTargetPlacementFilter(ranges affinity.GroupK
 	return filter
 }
 
-func (c *AffinityChecker) balanceTargetExecutionStatus(actual, target *affinity.Group) balanceStatus {
-	type storeAction struct {
-		id             uint64
-		leader, source bool
+type balanceStoreAction struct {
+	id             uint64
+	leader, source bool
+}
+
+// Store/action results belong to a single search. Submission always checks
+// live state again, and the next search does not reuse temporary restrictions.
+func (c *AffinityChecker) balanceStoreActionChecker() func(balanceStoreAction) balanceStatus {
+	results := make(map[balanceStoreAction]balanceStatus)
+	return func(action balanceStoreAction) balanceStatus {
+		if status, ok := results[action]; ok {
+			return status
+		}
+		status := c.balanceStoreActionStatus(action.id, action.leader, action.source)
+		results[action] = status
+		return status
 	}
-	var actions []storeAction
+}
+
+func (c *AffinityChecker) balanceTargetExecutionStatus(actual, target *affinity.Group) balanceStatus {
+	return balanceTargetExecutionStatus(actual, target, func(action balanceStoreAction) balanceStatus {
+		return c.balanceStoreActionStatus(action.id, action.leader, action.source)
+	})
+}
+
+func balanceTargetExecutionStatus(actual, target *affinity.Group, check func(balanceStoreAction) balanceStatus) balanceStatus {
+	var actions []balanceStoreAction
 	if actual.LeaderStoreID != target.LeaderStoreID {
-		actions = append(actions, storeAction{actual.LeaderStoreID, true, true}, storeAction{target.LeaderStoreID, true, false})
+		actions = append(actions, balanceStoreAction{actual.LeaderStoreID, true, true}, balanceStoreAction{target.LeaderStoreID, true, false})
 	}
 	for _, id := range actual.VoterStoreIDs {
 		if !slices.Contains(target.VoterStoreIDs, id) {
-			actions = append(actions, storeAction{id, false, true})
+			actions = append(actions, balanceStoreAction{id, false, true})
 		}
 	}
 	for _, id := range target.VoterStoreIDs {
 		if !slices.Contains(actual.VoterStoreIDs, id) {
-			actions = append(actions, storeAction{id, false, false})
+			actions = append(actions, balanceStoreAction{id, false, false})
 		}
 	}
 	status := balanceAllowed
 	for _, action := range actions {
-		result := c.balanceStoreActionStatus(action.id, action.leader, action.source)
+		result := check(action)
 		if result == balanceRejected {
 			return result
 		}
