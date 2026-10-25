@@ -16,8 +16,10 @@ package checker
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -233,6 +235,147 @@ func TestAffinityBalancePreparingScaleOut(t *testing.T) {
 	require.Equal(t, affinity.BalanceScore{Leader: 3, Voter: 21}, score())
 	require.True(t, tc.GetStore(4).IsPreparing(), "convergence must not depend on a Serving transition")
 	require.Positive(t, tc.GetStore(4).GetRegionCount())
+}
+
+func setupAffinityBalancePlateau(t *testing.T, fixedMiddle bool) (*mockcluster.Cluster, *AffinityChecker) {
+	t.Helper()
+	tc, checker := newAffinityBalanceTestCluster(t, 6)
+	tc.SetEnableUseJointConsensus(false)
+	for id := uint64(1); id <= 6; id++ {
+		tc.SetStoreLabel(id, map[string]string{"node": strconv.FormatUint(id, 10)})
+	}
+	for i, leader := range []uint64{1, 1, 1, 2, 2, 3} {
+		start, end := fmt.Sprintf("%02d", i), fmt.Sprintf("%02d", i+1)
+		for _, rule := range []*placement.Rule{
+			{GroupID: placement.DefaultGroupID, ID: fmt.Sprintf("leader-%d", i), Index: 1, Override: true,
+				Role: placement.Leader, Count: 1,
+				LabelConstraints: []placement.LabelConstraint{{Key: "node", Op: placement.In, Values: []string{strconv.FormatUint(leader, 10), strconv.FormatUint(leader+1, 10)}}}},
+			{GroupID: placement.DefaultGroupID, ID: fmt.Sprintf("followers-%d", i), Index: 2,
+				Role: placement.Follower, Count: 2,
+				LabelConstraints: []placement.LabelConstraint{{Key: "node", Op: placement.In, Values: []string{"5", "6"}}}},
+		} {
+			rule.StartKeyHex, rule.EndKeyHex = hex.EncodeToString([]byte(start)), hex.EncodeToString([]byte(end))
+			require.NoError(t, tc.GetRuleManager().SetRule(rule))
+		}
+		policy := affinity.BalancePolicyAuto
+		if fixedMiddle && leader == 2 {
+			policy = affinity.BalancePolicyFixed
+		}
+		id := fmt.Sprintf("_tidb_pt_100_p%d", i)
+		createBalanceGroup(t, tc.GetAffinityManager(), id, start, end, leader, []uint64{leader, 5, 6}, policy)
+		addBalanceRegion(t, tc, tc.GetAffinityManager(), uint64(i+1), start, end, leader, leader, 5, 6)
+	}
+	return tc, checker
+}
+
+func convergeAffinityBalanceTargets(t *testing.T, tc *mockcluster.Cluster, checker *AffinityChecker) {
+	t.Helper()
+	manager := tc.GetAffinityManager()
+	for id := uint64(1); id <= 6; id++ {
+		region := tc.GetRegion(id)
+		group := manager.GetAffinityGroupState(fmt.Sprintf("_tidb_pt_100_p%d", id-1))
+		if op := checker.createAffinityOperator(region, group); op != nil {
+			operator.ApplyOperator(tc, op)
+		}
+		region = tc.GetRegion(id)
+		manager.ObserveBalanceRegion(region)
+		_, aligned := manager.GetAndCacheRegionAffinityGroupState(region)
+		require.True(t, aligned)
+		require.Equal(t, affinity.PhaseStable, manager.GetAffinityGroupState(group.ID).Phase)
+	}
+}
+
+func TestAffinityBalanceEscapesEmptyStorePlateau(t *testing.T) {
+	tc, checker := setupAffinityBalancePlateau(t, false)
+	manager := tc.GetAffinityManager()
+	placements := func() ([]*affinity.Group, []int) {
+		groups, counts := make([]*affinity.Group, 0, 6), make([]int, 4)
+		for i := range 6 {
+			group := manager.GetAffinityGroupState(fmt.Sprintf("_tidb_pt_100_p%d", i)).Group
+			groups = append(groups, &group)
+			counts[group.LeaderStoreID-1]++
+		}
+		return groups, counts
+	}
+	neutral := 0
+	for range 8 {
+		groups, _ := placements()
+		before, err := affinity.NewBalanceScorer(groups)
+		require.NoError(t, err)
+		runAffinityBalanceTask(t, t.Context(), checker)
+		afterGroups, _ := placements()
+		after, err := affinity.NewBalanceScorer(afterGroups)
+		require.NoError(t, err)
+		if !slices.EqualFunc(groups, afterGroups, func(a, b *affinity.Group) bool {
+			return a.LeaderStoreID == b.LeaderStoreID && slices.Equal(a.VoterStoreIDs, b.VoterStoreIDs)
+		}) {
+			require.LessOrEqual(t, after.Score().Compare(before.Score()), 0)
+			if after.Score() == before.Score() {
+				neutral++
+			}
+		}
+		convergeAffinityBalanceTargets(t, tc, checker)
+	}
+	_, counts := placements()
+	require.Equal(t, []int{2, 2, 1, 1}, counts, "a legal neutral step must unblock the previously empty store")
+	require.Equal(t, 1, neutral, "repeated planning must not wander among equal-score layouts")
+}
+
+func TestAffinityBalanceEscapeRequiresLegalSuccessor(t *testing.T) {
+	tc, checker := setupAffinityBalancePlateau(t, true)
+	for range 3 {
+		runAffinityBalanceTask(t, t.Context(), checker)
+	}
+	for i, leader := range []uint64{1, 1, 1, 2, 2, 3} {
+		require.Equal(t, leader, tc.GetAffinityManager().GetAffinityGroupState(fmt.Sprintf("_tidb_pt_100_p%d", i)).LeaderStoreID,
+			"neutral moves alone are not a reason to change targets when the successor is fixed")
+	}
+}
+
+func TestAffinityBalanceEscapeRechecksSuccessor(t *testing.T) {
+	tc, checker := setupAffinityBalancePlateau(t, false)
+	manager := tc.GetAffinityManager()
+	checker.cluster = &affinityBalanceScanCluster{CheckerCluster: tc, beforeFinal: func() {
+		tc.SetStoreBusy(3, true)
+	}}
+	runAffinityBalanceTask(t, t.Context(), checker)
+	require.Equal(t, uint64(1), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID,
+		"a neutral step cannot commit after its strict successor becomes blocked")
+	tc.SetStoreBusy(4, true)
+	checker.cluster = tc
+	runAffinityBalanceTask(t, t.Context(), checker)
+	for i, leader := range []uint64{1, 1, 1, 2, 2, 3} {
+		require.Equal(t, leader, manager.GetAffinityGroupState(fmt.Sprintf("_tidb_pt_100_p%d", i)).LeaderStoreID)
+	}
+	tc.SetStoreBusy(3, false)
+	tc.SetStoreBusy(4, false)
+	runAffinityBalanceTask(t, t.Context(), checker)
+	require.Equal(t, uint64(2), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID,
+		"a pre-submission rejection must not consume the neutral-step credit")
+}
+
+func TestAffinityBalanceEscapeCannotRepeatAtSameScore(t *testing.T) {
+	tc, checker := setupAffinityBalancePlateau(t, false)
+	manager := tc.GetAffinityManager()
+	runAffinityBalanceTask(t, t.Context(), checker)
+	require.Equal(t, uint64(2), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
+	convergeAffinityBalanceTargets(t, tc, checker)
+	// Remove the proven successor after the neutral step has converged.
+	// The unchanged score must not authorize a second neutral step.
+	for _, i := range []int{3, 4} {
+		_, err := manager.UpdateAffinityGroupPolicy(fmt.Sprintf("_tidb_pt_100_p%d", i), affinity.BalancePolicyFixed)
+		require.NoError(t, err)
+	}
+	for range 3 {
+		runAffinityBalanceTask(t, t.Context(), checker)
+	}
+	require.Equal(t, uint64(2), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
+	require.Equal(t, uint64(3), manager.GetAffinityGroupState("_tidb_pt_100_p5").LeaderStoreID)
+	// Restoring the successor allows an ordinary strict improvement.
+	_, err := manager.UpdateAffinityGroupPolicy("_tidb_pt_100_p3", affinity.BalancePolicyAuto)
+	require.NoError(t, err)
+	runAffinityBalanceTask(t, t.Context(), checker)
+	require.Equal(t, uint64(3), manager.GetAffinityGroupState("_tidb_pt_100_p3").LeaderStoreID)
 }
 
 func TestControllerObservesAffinityRegionBeforeRuleRepair(t *testing.T) {

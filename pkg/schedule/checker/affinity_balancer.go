@@ -34,9 +34,10 @@ import (
 )
 
 type affinityBalancer struct {
-	checker *AffinityChecker
-	mu      sync.Mutex
-	tables  map[affinity.TableID]struct{}
+	checker      *AffinityChecker
+	mu           sync.Mutex
+	tables       map[affinity.TableID]struct{}
+	escapeScores map[affinity.TableID]affinity.BalanceScore
 }
 
 type balanceCheckedRegion struct {
@@ -98,6 +99,7 @@ func (b *affinityBalancer) processDirty(ctx context.Context) bool {
 	for id := range b.tables {
 		if _, exists := b.checker.affinityManager.GetBalanceVersion(id); !exists {
 			delete(b.tables, id)
+			delete(b.escapeScores, id)
 			continue
 		}
 		ids = append(ids, id)
@@ -189,8 +191,15 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 	// A filter that accepts a candidate still falls through to the complete
 	// Region-level fit and final review below.
 	checkAction := c.balanceStoreActionChecker()
-	if !hasPotentialBalanceCandidate(snapshot, scorer, placementFilters, checkAction) {
-		return checkInput()
+	potential, blockedLeader := hasPotentialBalanceCandidate(snapshot, scorer, placementFilters, checkAction)
+	if !potential {
+		if blockedLeader || !b.balanceEscapeAllowed(id, scorer.Score()) {
+			return checkInput()
+		}
+		first, _, err := findBalanceEscape(snapshot, scorer, placementFilters, checkAction, checkInput, nil)
+		if err != nil || first == nil {
+			return err
+		}
 	}
 	waiting := c.waitingAffinityRegions()
 	checked := make(map[uint64]balanceCheckedRegion)
@@ -223,7 +232,7 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 	}
 	// Exhaust leader-only improvements before trying voter replacements.
 	for _, replace := range []bool{false, true} {
-		candidates := newBalanceCandidates(snapshot, scorer, replace)
+		candidates := newBalanceCandidates(snapshot, scorer, replace, checkAction)
 		blocked := false
 		for {
 			if err := checkInput(); err != nil {
@@ -246,52 +255,98 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 				blocked = blocked || status == balanceTemporarilyBlocked
 				continue
 			}
-			scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
-			for {
-				if err := checkInput(); err != nil {
-					return err
-				}
-				region, covered, done := scan.next(c.cluster)
-				if !covered {
-					return nil
-				}
-				if done {
-					break
-				}
-				current, ok := checked[region.GetID()]
-				if !ok || !sameBalanceRegionInput(current.region, region) || !c.balanceRegionReady(group, region, waiting) {
-					return nil
-				}
-				status = c.validateBalanceTarget(&target, region, current.fit)
-				if status != balanceAllowed {
-					break
-				}
+			status, err = b.validateBalanceCandidate(snapshot, group, &target, checked, waiting, checkInput)
+			if err != nil {
+				return err
+			}
+			if status == balanceUnready {
+				return nil
 			}
 			if status != balanceAllowed {
 				blocked = blocked || status == balanceTemporarilyBlocked
 				continue
 			}
-			if err := manager.PrepareBalanceCommit(ctx, snapshot); err != nil {
-				return err
-			}
-			if !b.verifyFinalRegions(ctx, snapshot, checked) {
-				return ctx.Err()
-			}
-			if !c.balanceSchedulingAllowed() || c.balanceTargetExecutionStatus(&group.Group, &target) != balanceAllowed {
-				return nil
-			}
-			committed, err := manager.CommitBalanceTarget(ctx, snapshot, &target)
-			if committed {
-				log.Debug("balanced affinity partition", zap.String("group-id", target.ID))
-			}
-			return err
+			return b.commitBalanceCandidate(ctx, snapshot, checked, &target, nil, scorer.Score())
 		}
 		// A temporary leader restriction must not trigger a voter replacement.
 		if blocked {
 			return nil
 		}
 	}
+	if b.balanceEscapeAllowed(id, scorer.Score()) {
+		first, next, err := findBalanceEscape(snapshot, scorer, placementFilters, checkAction, checkInput,
+			func(group *affinity.GroupState, target *affinity.Group) (bool, error) {
+				status, err := b.validateBalanceCandidate(snapshot, group, target, checked, waiting, checkInput)
+				return status == balanceAllowed, err
+			})
+		if err != nil {
+			return err
+		}
+		if first != nil {
+			return b.commitBalanceCandidate(ctx, snapshot, checked, first, next, scorer.Score())
+		}
+	}
 	return nil
+}
+
+func (b *affinityBalancer) validateBalanceCandidate(snapshot *affinity.BalanceSnapshot, group *affinity.GroupState,
+	target *affinity.Group, checked map[uint64]balanceCheckedRegion, waiting map[uint64]struct{}, checkInput func() error) (balanceStatus, error) {
+	scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
+	for {
+		if err := checkInput(); err != nil {
+			return balanceUnready, err
+		}
+		region, covered, done := scan.next(b.checker.cluster)
+		if !covered {
+			return balanceUnready, nil
+		}
+		if done {
+			return balanceAllowed, nil
+		}
+		current, ok := checked[region.GetID()]
+		if !ok || !sameBalanceRegionInput(current.region, region) || !b.checker.balanceRegionReady(group, region, waiting) {
+			return balanceUnready, nil
+		}
+		if status := b.checker.validateBalanceTarget(target, region, current.fit); status != balanceAllowed {
+			return status, nil
+		}
+	}
+}
+
+func (b *affinityBalancer) commitBalanceCandidate(ctx context.Context, snapshot *affinity.BalanceSnapshot,
+	checked map[uint64]balanceCheckedRegion, target, successor *affinity.Group, score affinity.BalanceScore) error {
+	c, manager := b.checker, b.checker.affinityManager
+	if err := manager.PrepareBalanceCommit(ctx, snapshot); err != nil {
+		return err
+	}
+	if !b.verifyFinalRegions(ctx, snapshot, checked) {
+		return ctx.Err()
+	}
+	if !c.balanceSchedulingAllowed() {
+		return nil
+	}
+	for _, group := range snapshot.Groups {
+		for _, candidate := range []*affinity.Group{target, successor} {
+			if candidate != nil && group.ID == candidate.ID && c.balanceTargetExecutionStatus(&group.Group, candidate) != balanceAllowed {
+				return nil
+			}
+		}
+	}
+	committed, err := manager.CommitBalanceTarget(ctx, snapshot, target)
+	if successor != nil && (committed || err != nil && !errs.ErrEtcdTxnConflict.Equal(err)) {
+		// Unknown results consume the credit too. A deterministic CAS conflict
+		// did not commit and may retry the same escape from a fresh snapshot.
+		b.mu.Lock()
+		if b.escapeScores == nil {
+			b.escapeScores = make(map[affinity.TableID]affinity.BalanceScore)
+		}
+		b.escapeScores[snapshot.TableID] = score
+		b.mu.Unlock()
+	}
+	if committed {
+		log.Debug("balanced affinity partition", zap.String("group-id", target.ID), zap.Bool("escape", successor != nil))
+	}
+	return err
 }
 
 func balanceTargetForMove(group *affinity.GroupState, move affinity.BalanceMove) affinity.Group {
@@ -304,9 +359,12 @@ func balanceTargetForMove(group *affinity.GroupState, move affinity.BalanceMove)
 }
 
 func hasPotentialBalanceCandidate(snapshot *affinity.BalanceSnapshot, scorer *affinity.BalanceScorer,
-	filters map[string]balanceTargetPlacementFilter, check func(balanceStoreAction) balanceStatus) bool {
+	filters map[string]balanceTargetPlacementFilter, check func(balanceStoreAction) balanceStatus) (potential, blockedLeader bool) {
 	for _, replace := range []bool{false, true} {
-		candidates := newBalanceCandidates(snapshot, scorer, replace)
+		if replace && blockedLeader {
+			return false, true
+		}
+		candidates := newBalanceCandidates(snapshot, scorer, replace, check)
 		for {
 			move, found := candidates.next()
 			if !found {
@@ -317,12 +375,16 @@ func hasPotentialBalanceCandidate(snapshot *affinity.BalanceSnapshot, scorer *af
 			}
 			group := snapshot.Groups[candidates.group]
 			target := balanceTargetForMove(group, move)
-			if filters[group.ID].maySatisfy(&target) && balanceTargetExecutionStatus(&group.Group, &target, check) == balanceAllowed {
-				return true
+			if filters[group.ID].maySatisfy(&target) {
+				status := balanceTargetExecutionStatus(&group.Group, &target, check)
+				if status == balanceAllowed {
+					return true, false
+				}
+				blockedLeader = blockedLeader || !replace && status == balanceTemporarilyBlocked
 			}
 		}
 	}
-	return false
+	return false, blockedLeader
 }
 
 func sameBalanceRegionInput(a, b *core.RegionInfo) bool {
@@ -407,10 +469,16 @@ func balanceScoreAtTheoreticalLowerBound(snapshot *affinity.BalanceSnapshot, sco
 	return score.Leader == minimum(leaders) && score.Voter == minimum(voters)
 }
 
-func newBalanceCandidates(snapshot *affinity.BalanceSnapshot, scorer *affinity.BalanceScorer, replace bool) balanceCandidates {
+func newBalanceCandidates(snapshot *affinity.BalanceSnapshot, scorer *affinity.BalanceScorer,
+	replace bool, check func(balanceStoreAction) balanceStatus) balanceCandidates {
 	var stores []uint64
 	if replace {
 		stores = sortedBalanceCandidateStores(snapshot, scorer)
+		// Every voter replacement adds a peer to its destination. Exclude
+		// blocked destinations once, before enumerating groups/from/leader.
+		stores = slices.DeleteFunc(stores, func(id uint64) bool {
+			return check(balanceStoreAction{id: id}) != balanceAllowed
+		})
 	}
 	return balanceCandidates{snapshot: snapshot, scorer: scorer, replace: replace, stores: stores}
 }
@@ -459,6 +527,9 @@ func (p *balanceCandidates) next() (affinity.BalanceMove, bool) {
 		if !p.replace && p.leader < len(p.leaders) {
 			move := affinity.BalanceMove{GroupID: group.ID, LeaderStoreID: p.leaders[p.leader]}
 			p.leader++
+			if move.LeaderStoreID == group.LeaderStoreID {
+				continue
+			}
 			return move, true
 		}
 		if p.replace && p.from < len(p.voters) && len(p.stores) > 0 {
@@ -486,6 +557,9 @@ func (p *balanceCandidates) next() (affinity.BalanceMove, bool) {
 					p.to = 0
 					p.from++
 				}
+			}
+			if move.LeaderStoreID == move.FromStoreID {
+				continue
 			}
 			return move, true
 		}
