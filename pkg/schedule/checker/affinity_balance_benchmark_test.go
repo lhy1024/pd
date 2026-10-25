@@ -72,6 +72,9 @@ func newAffinityBalanceBenchmarkSetup(b *testing.B, tc affinityBalanceBenchmarkC
 			cluster.AddRegionStore(uint64(id), 10)
 		}
 		cluster.SetStoreUp(uint64(id))
+		// Large fixtures can take longer than the disconnect threshold to
+		// build. Keep stores connected during setup as well as measurement.
+		cluster.SetStoreLastHeartbeatInterval(uint64(id), -time.Hour)
 	}
 	if tc.constrained {
 		rule := cluster.GetRuleManager().GetRule(placement.DefaultGroupID, placement.DefaultRuleID)
@@ -147,11 +150,6 @@ func newAffinityBalanceBenchmarkSetup(b *testing.B, tc affinityBalanceBenchmarkC
 		for id := 4; id <= tc.stores; id++ {
 			cluster.SetStoreBusy(uint64(id), true)
 		}
-	}
-	// Keep stores connected throughout long searches without a heartbeat
-	// goroutine competing with the measured planner. Busy flags stay intact.
-	for id := 1; id <= tc.stores; id++ {
-		cluster.SetStoreLastHeartbeatInterval(uint64(id), -time.Hour)
 	}
 	snapshot := manager.GetBalanceSnapshot(setup.tableID)
 	if snapshot == nil {
