@@ -138,7 +138,7 @@ func (s *BalanceScorer) Evaluate(move BalanceMove) (BalanceScore, bool) {
 
 // EvaluateMove returns the resulting score, whether the move is structurally
 // valid, and whether it strictly improves the current score.
-func (s *BalanceScorer) EvaluateMove(move BalanceMove) (BalanceScore, bool, bool) {
+func (s *BalanceScorer) EvaluateMove(move BalanceMove) (score BalanceScore, valid, improves bool) {
 	group, exists := s.groups[move.GroupID]
 	if !exists || group.fixed || len(group.voters) == 0 || move.LeaderStoreID == 0 {
 		return s.score, false, false
