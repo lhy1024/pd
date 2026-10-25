@@ -132,35 +132,42 @@ func (s *BalanceScorer) Score() BalanceScore {
 // Evaluate returns the score after move when its shape is valid. The boolean
 // is true only when the move is valid and strictly improves the current score.
 func (s *BalanceScorer) Evaluate(move BalanceMove) (BalanceScore, bool) {
+	next, valid, improves := s.EvaluateMove(move)
+	return next, valid && improves
+}
+
+// EvaluateMove returns the resulting score, whether the move is structurally
+// valid, and whether it strictly improves the current score.
+func (s *BalanceScorer) EvaluateMove(move BalanceMove) (BalanceScore, bool, bool) {
 	group, exists := s.groups[move.GroupID]
 	if !exists || group.fixed || len(group.voters) == 0 || move.LeaderStoreID == 0 {
-		return s.score, false
+		return s.score, false, false
 	}
 
 	next := s.score
 	if move.FromStoreID == 0 && move.ToStoreID == 0 {
 		if move.LeaderStoreID == group.leaderStoreID {
-			return s.score, false
+			return s.score, false, false
 		}
 		if _, isVoter := group.voters[move.LeaderStoreID]; !isVoter {
-			return s.score, false
+			return s.score, false, false
 		}
 	} else {
 		if move.FromStoreID == 0 || move.ToStoreID == 0 {
-			return s.score, false
+			return s.score, false, false
 		}
 		if _, isVoter := group.voters[move.FromStoreID]; !isVoter {
-			return s.score, false
+			return s.score, false, false
 		}
 		if _, isVoter := group.voters[move.ToStoreID]; isVoter {
-			return s.score, false
+			return s.score, false, false
 		}
 		if move.LeaderStoreID != move.ToStoreID {
 			if move.LeaderStoreID == move.FromStoreID {
-				return s.score, false
+				return s.score, false, false
 			}
 			if _, remainsVoter := group.voters[move.LeaderStoreID]; !remainsVoter {
-				return s.score, false
+				return s.score, false, false
 			}
 		}
 		next.Voter += countMoveDelta(s.voterCounts, move.FromStoreID, move.ToStoreID)
@@ -169,7 +176,7 @@ func (s *BalanceScorer) Evaluate(move BalanceMove) (BalanceScore, bool) {
 	if move.LeaderStoreID != group.leaderStoreID {
 		next.Leader += countMoveDelta(s.leaderCounts, group.leaderStoreID, move.LeaderStoreID)
 	}
-	return next, next.Compare(s.score) < 0
+	return next, true, next.Compare(s.score) < 0
 }
 
 // LeaderCount returns the number of groups led by storeID.

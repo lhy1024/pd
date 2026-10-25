@@ -52,8 +52,8 @@ func findBalanceEscape(snapshot *affinity.BalanceSnapshot, scorer *affinity.Bala
 				break
 			}
 			remaining--
-			score, _ := scorer.Evaluate(move)
-			if score != scorer.Score() {
+			score, valid, improves := scorer.EvaluateMove(move)
+			if !valid || improves || score != scorer.Score() {
 				continue
 			}
 			group := snapshot.Groups[candidates.group]
