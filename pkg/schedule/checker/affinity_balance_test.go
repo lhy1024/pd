@@ -631,6 +631,11 @@ func exhaustLeaderTransferIn(t *testing.T, tc *mockcluster.Cluster, id uint64) {
 	require.False(t, tc.GetStore(id).IsAvailable(storelimit.TransferLeaderIn, constant.Medium))
 }
 
+func restoreLeaderTransferIn(tc *mockcluster.Cluster, id uint64) {
+	tc.SetStoreLimit(id, storelimit.TransferLeaderIn, storelimit.Unlimited)
+	tc.ResetStoreLimit(id, storelimit.TransferLeaderIn, storelimit.Unlimited/time.Minute.Seconds())
+}
+
 func TestAffinityBalanceTemporaryLeaderLimitUsesNextCandidate(t *testing.T) {
 	tc, checker := newAffinityBalanceTestCluster(t, 6)
 	manager := setupLeaderLimitBalanceTable(t, tc)
@@ -671,8 +676,7 @@ func TestAffinityBalanceLeaderLimitRecovery(t *testing.T) {
 	runAffinityBalanceTask(t, t.Context(), checker)
 	require.Equal(t, uint64(1), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
 	for _, id := range []uint64{2, 3} {
-		tc.SetStoreLimit(id, storelimit.TransferLeaderIn, storelimit.Unlimited)
-		tc.ResetStoreLimit(id, storelimit.TransferLeaderIn, storelimit.Unlimited/time.Minute.Seconds())
+		restoreLeaderTransferIn(tc, id)
 	}
 	runAffinityBalanceTask(t, t.Context(), checker)
 	require.Equal(t, uint64(2), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID,
