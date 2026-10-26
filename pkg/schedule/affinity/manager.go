@@ -183,13 +183,11 @@ func (m *Manager) initGroupLocked(group *Group) {
 		return
 	}
 	m.groups[group.ID] = &runtimeGroupInfo{
-		Group: Group{
-			ID:              group.ID,
-			CreateTimestamp: group.CreateTimestamp,
-			LeaderStoreID:   group.LeaderStoreID,
-			VoterStoreIDs:   normalizeVoters(group.VoterStoreIDs),
-			BalancePolicy:   group.BalancePolicy,
-		},
+		ID:                  group.ID,
+		CreateTimestamp:     group.CreateTimestamp,
+		LeaderStoreID:       group.LeaderStoreID,
+		VoterStoreIDs:       normalizeVoters(group.VoterStoreIDs),
+		BalancePolicy:       group.BalancePolicy,
 		availability:        groupDegraded,
 		degradedExpiredAt:   newDegradedExpiredAtFromNow(),
 		AffinityVer:         1,

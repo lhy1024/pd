@@ -190,13 +190,11 @@ func newGroupState(g *runtimeGroupInfo) *GroupState {
 	}
 
 	return &GroupState{
-		Group: Group{
-			ID:              g.ID,
-			CreateTimestamp: g.CreateTimestamp,
-			LeaderStoreID:   g.LeaderStoreID,
-			VoterStoreIDs:   slices.Clone(g.VoterStoreIDs),
-			BalancePolicy:   g.BalancePolicy,
-		},
+		ID:                        g.ID,
+		CreateTimestamp:           g.CreateTimestamp,
+		LeaderStoreID:             g.LeaderStoreID,
+		VoterStoreIDs:             slices.Clone(g.VoterStoreIDs),
+		BalancePolicy:             g.BalancePolicy,
 		RegularSchedulingAllowed:  g.IsRegularSchedulingAllowed(),
 		AffinitySchedulingAllowed: affinitySchedulingAllowed,
 		Phase:                     phase,
