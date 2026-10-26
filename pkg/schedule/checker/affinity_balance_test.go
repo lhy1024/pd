@@ -915,8 +915,8 @@ func TestAffinityBalanceRoleReassignmentCanReplaceOldLeader(t *testing.T) {
 
 func TestBalanceScoreLowerBoundIncludesZeroCountStores(t *testing.T) {
 	groups := []*affinity.GroupState{
-		{Group: affinity.Group{ID: "g1", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 3}}},
-		{Group: affinity.Group{ID: "g2", LeaderStoreID: 2, VoterStoreIDs: []uint64{2, 4}}},
+		{ID: "g1", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 3}},
+		{ID: "g2", LeaderStoreID: 2, VoterStoreIDs: []uint64{2, 4}},
 	}
 	scorer, err := affinity.NewBalanceScorer([]*affinity.Group{&groups[0].Group, &groups[1].Group})
 	require.NoError(t, err)
@@ -942,7 +942,7 @@ func TestBalanceScoreLowerBoundIncludesFixedTargetsOutsideCandidates(t *testing.
 		if i >= 6 {
 			voters, policy = []uint64{1, 2, 5}, affinity.BalancePolicyFixed
 		}
-		groups[i] = &affinity.GroupState{Group: affinity.Group{ID: fmt.Sprintf("g%d", i), LeaderStoreID: leader, VoterStoreIDs: voters, BalancePolicy: policy}}
+		groups[i] = &affinity.GroupState{ID: fmt.Sprintf("g%d", i), LeaderStoreID: leader, VoterStoreIDs: voters, BalancePolicy: policy}
 		inputs[i] = &groups[i].Group
 	}
 	scorer, err := affinity.NewBalanceScorer(inputs)
