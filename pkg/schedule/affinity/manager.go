@@ -242,18 +242,34 @@ func (m *Manager) resetCountLocked(groupInfo *runtimeGroupInfo) {
 func (m *Manager) updateGroupTarget(group Group) (*GroupState, error) {
 	m.Lock()
 	defer m.Unlock()
-
 	groupInfo, ok := m.groups[group.ID]
 	if !ok {
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(group.ID)
 	}
+	return m.applyGroupTargetLocked(group, groupInfo), nil
+}
 
+func (m *Manager) applyGroupTargetLocked(group Group, groupInfo *runtimeGroupInfo) *GroupState {
 	groupInfo.SetAvailability(groupAvailable)
 	groupInfo.Group = group
 	groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
 	m.resetCountLocked(groupInfo)
 
-	return newGroupState(groupInfo), nil
+	return newGroupState(groupInfo)
+}
+
+func (m *Manager) updateGroupTargets(groups []Group) error {
+	m.Lock()
+	defer m.Unlock()
+	for _, group := range groups {
+		if _, ok := m.groups[group.ID]; !ok {
+			return errs.ErrAffinityGroupNotFound.GenWithStackByArgs(group.ID)
+		}
+	}
+	for _, group := range groups {
+		m.applyGroupTargetLocked(group, m.groups[group.ID])
+	}
+	return nil
 }
 
 func (m *Manager) updateGroupAvailabilityLocked(groupID string, availability groupAvailability) {
