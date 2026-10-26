@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/server/v3/embed"
 
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/storage"
@@ -218,6 +220,30 @@ func TestUnknownGroupTargetBatchReloadsAllChanges(t *testing.T) {
 	for _, id := range ids {
 		require.Equal(t, uint64(4), loadStoredGroup(t, m, id).LeaderStoreID)
 		require.Equal(t, uint64(4), m.GetAffinityGroupState(id).LeaderStoreID, "one reload must publish the complete committed batch")
+	}
+}
+
+func TestCommitGroupTargetsRequestSizeRejectsWholeBatch(t *testing.T) {
+	_, client, cleanup := etcdutil.NewTestEtcdCluster(t, 1, &etcdutil.TestEtcdClusterOptions{
+		ServerCfgModifier: func(cfg *embed.Config) { cfg.MaxRequestBytes = 2048 },
+	})
+	defer cleanup()
+	m := newMetadataTestManager(t)
+	m.storage = storage.NewStorageWithEtcdBackend(client)
+	require.NoError(t, m.ReloadAffinityMetadataFromStorage())
+	ids := seedBatchTargetGroups(t, m, 12)
+	changes := make([]groupTargetUpdate, len(ids))
+	for i, id := range ids {
+		changes[i] = makeGroupTargetUpdate(m, id, 4, []uint64{2, 3, 4})
+	}
+	// The operation count fits; etcd's configured byte limit rejects the
+	// entire request, including all earlier targets in the batch.
+	committed, err := m.commitGroupTargets(t.Context(), changes, nil, func() bool { return true })
+	require.ErrorIs(t, err, rpctypes.ErrRequestTooLarge)
+	require.False(t, committed)
+	for _, id := range ids {
+		require.Equal(t, uint64(1), loadStoredGroup(t, m, id).LeaderStoreID)
+		require.Equal(t, uint64(1), m.GetAffinityGroupState(id).LeaderStoreID)
 	}
 }
 
