@@ -64,9 +64,8 @@ func TestBalanceScorerEvaluatesLeaderAndVoterMoves(t *testing.T) {
 		// The old leader remains a voter while a different voter is replaced.
 		{"leader and voter", BalanceMove{GroupID: "p0", LeaderStoreID: 2, FromStoreID: 3, ToStoreID: 4}, BalanceScore{Leader: 9, Voter: 67}, true},
 		{"worse", BalanceMove{GroupID: "p3", LeaderStoreID: 1}, BalanceScore{Leader: 17, Voter: 75}, false},
-		// Voter gains cannot compensate for a worse leader distribution,
-		// even when Leader+Voter would be smaller.
-		{"voter gain with leader loss", BalanceMove{GroupID: "p3", LeaderStoreID: 1, FromStoreID: 3, ToStoreID: 4}, BalanceScore{Leader: 17, Voter: 67}, false},
+		// Voter improvement takes precedence even when leader balance worsens.
+		{"voter gain with leader loss", BalanceMove{GroupID: "p3", LeaderStoreID: 1, FromStoreID: 3, ToStoreID: 4}, BalanceScore{Leader: 17, Voter: 67}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			score, improves := scorer.Evaluate(tc.move)
@@ -76,7 +75,7 @@ func TestBalanceScorerEvaluatesLeaderAndVoterMoves(t *testing.T) {
 	}
 }
 
-func TestBalanceScorerLeaderGainTakesPriorityOverVoterLoss(t *testing.T) {
+func TestBalanceScorerDoesNotTradeVoterBalanceForLeaderBalance(t *testing.T) {
 	scorer, err := NewBalanceScorer([]*Group{
 		{ID: "p0", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}},
 		{ID: "p1", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 4}},
@@ -85,8 +84,149 @@ func TestBalanceScorerLeaderGainTakesPriorityOverVoterLoss(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, BalanceScore{Leader: 5, Voter: 23}, scorer.Score())
 	score, improves := scorer.Evaluate(BalanceMove{GroupID: "p0", LeaderStoreID: 4, FromStoreID: 3, ToStoreID: 4})
-	require.True(t, improves)
+	require.False(t, improves)
 	require.Equal(t, BalanceScore{Leader: 3, Voter: 27}, score)
+}
+
+func TestBalanceScorerEvaluateTargetsMatchesFullReconstruction(t *testing.T) {
+	groups := []*Group{
+		{ID: "fixed", BalancePolicy: BalancePolicyFixed, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2}},
+		{ID: "p0", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2}},
+		{ID: "p1", LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 3}},
+		{ID: "p2", LeaderStoreID: 3, VoterStoreIDs: []uint64{2, 3}},
+	}
+	targets := []*Group{
+		{ID: "p0", LeaderStoreID: 2, VoterStoreIDs: []uint64{2, 4}},
+		{ID: "p1", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 4}},
+	}
+	scorer, err := NewBalanceScorer(groups)
+	require.NoError(t, err)
+
+	score, improves := scorer.EvaluateTargets(targets)
+	require.True(t, improves)
+	require.Equal(t, BalanceScore{Leader: 6, Voter: 25}, score)
+
+	finalGroups := []*Group{
+		groups[0],
+		targets[0],
+		targets[1],
+		groups[3],
+	}
+	require.Equal(t, independentBalanceScore(finalGroups), score)
+	require.Equal(t, BalanceScore{Leader: 6, Voter: 29}, scorer.Score())
+}
+
+func TestBalanceScorerTwoNeutralTargetsJointlyImproveAcrossSharedStore(t *testing.T) {
+	groups := []*Group{
+		{ID: "p0", LeaderStoreID: 1, VoterStoreIDs: []uint64{1}},
+		{ID: "p1", LeaderStoreID: 2, VoterStoreIDs: []uint64{2}},
+		{ID: "p2", LeaderStoreID: 1, VoterStoreIDs: []uint64{1}},
+	}
+	scorer, err := NewBalanceScorer(groups)
+	require.NoError(t, err)
+	require.Equal(t, BalanceScore{Leader: 5, Voter: 5}, scorer.Score())
+
+	first := &Group{ID: "p0", LeaderStoreID: 2, VoterStoreIDs: []uint64{2}}
+	second := &Group{ID: "p1", LeaderStoreID: 3, VoterStoreIDs: []uint64{3}}
+	firstScore, firstImproves := scorer.EvaluateTargets([]*Group{first})
+	secondScore, secondImproves := scorer.EvaluateTargets([]*Group{second})
+	require.Equal(t, scorer.Score(), firstScore)
+	require.Equal(t, scorer.Score(), secondScore)
+	require.False(t, firstImproves)
+	require.False(t, secondImproves)
+
+	jointScore, jointImproves := scorer.EvaluateTargets([]*Group{first, second})
+	require.True(t, jointImproves)
+	require.Equal(t, BalanceScore{Leader: 3, Voter: 3}, jointScore)
+	require.Equal(t, independentBalanceScore([]*Group{first, second, groups[2]}), jointScore)
+}
+
+func TestBalanceScorerAllowsVoterImprovementAsLeaderScoreRises(t *testing.T) {
+	groups := []*Group{
+		{ID: "p0", LeaderStoreID: 3, VoterStoreIDs: []uint64{1, 2, 3}},
+		{ID: "p1", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 4}},
+		{ID: "p2", LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 4}},
+		{ID: "p3", LeaderStoreID: 4, VoterStoreIDs: []uint64{1, 2, 4}},
+	}
+	scorer, err := NewBalanceScorer(groups)
+	require.NoError(t, err)
+	require.Equal(t, BalanceScore{Leader: 4, Voter: 42}, scorer.Score())
+
+	score, improves := scorer.EvaluateTargets([]*Group{
+		{ID: "p0", LeaderStoreID: 2, VoterStoreIDs: []uint64{2, 3, 5}},
+	})
+	require.True(t, improves)
+	require.Equal(t, BalanceScore{Leader: 6, Voter: 36}, score)
+}
+
+func TestBalanceScorerEvaluateTargetsRequiresStrictImprovement(t *testing.T) {
+	scorer, err := NewBalanceScorer([]*Group{
+		{ID: "p0", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2}},
+	})
+	require.NoError(t, err)
+
+	score, improves := scorer.EvaluateTargets([]*Group{
+		{ID: "p0", LeaderStoreID: 1, VoterStoreIDs: []uint64{2, 1}},
+	})
+	require.Equal(t, scorer.Score(), score)
+	require.False(t, improves)
+	score, improves = scorer.EvaluateTargets(nil)
+	require.Equal(t, scorer.Score(), score)
+	require.False(t, improves)
+}
+
+func TestBalanceScorerEvaluateTargetsRejectsInvalidBatches(t *testing.T) {
+	scorer, err := NewBalanceScorer([]*Group{
+		{ID: "auto", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}},
+		{ID: "fixed", BalancePolicy: BalancePolicyFixed, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}},
+		{ID: "empty"},
+	})
+	require.NoError(t, err)
+	valid := &Group{ID: "auto", LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 4}}
+	for _, tc := range []struct {
+		name    string
+		targets []*Group
+	}{
+		{name: "nil target", targets: []*Group{nil}},
+		{name: "unknown group", targets: []*Group{{ID: "missing", LeaderStoreID: 1, VoterStoreIDs: []uint64{1}}}},
+		{name: "uninitialized group", targets: []*Group{{ID: "empty", LeaderStoreID: 1, VoterStoreIDs: []uint64{1}}}},
+		{name: "fixed group", targets: []*Group{{ID: "fixed", LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 3}}}},
+		{name: "duplicate targets", targets: []*Group{valid, valid}},
+		{name: "zero leader", targets: []*Group{{ID: "auto", VoterStoreIDs: []uint64{1, 2, 3}}}},
+		{name: "different voter count", targets: []*Group{{ID: "auto", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2}}}},
+		{name: "zero voter", targets: []*Group{{ID: "auto", LeaderStoreID: 1, VoterStoreIDs: []uint64{0, 2, 3}}}},
+		{name: "duplicate voters", targets: []*Group{{ID: "auto", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 1, 3}}}},
+		{name: "leader is not a voter", targets: []*Group{{ID: "auto", LeaderStoreID: 4, VoterStoreIDs: []uint64{1, 2, 3}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			score, improves := scorer.EvaluateTargets(tc.targets)
+			require.Equal(t, scorer.Score(), score)
+			require.False(t, improves)
+		})
+	}
+}
+
+func TestBalanceScorerEvaluateTargetsDoesNotMutateScorerOrTargets(t *testing.T) {
+	groups := []*Group{
+		{ID: "p0", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}},
+		{ID: "p1", LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 4}},
+	}
+	targets := []*Group{{ID: "p0", LeaderStoreID: 2, VoterStoreIDs: []uint64{2, 3, 5}}}
+	originalTargetVoters := slices.Clone(targets[0].VoterStoreIDs)
+	scorer, err := NewBalanceScorer(groups)
+	require.NoError(t, err)
+	originalScore := scorer.Score()
+	expectedLeaderCounts := []int{scorer.LeaderCount(1), scorer.LeaderCount(2), scorer.LeaderCount(3)}
+	expectedVoterCounts := []int{scorer.VoterCount(1), scorer.VoterCount(2), scorer.VoterCount(3), scorer.VoterCount(4), scorer.VoterCount(5)}
+
+	firstScore, firstImproves := scorer.EvaluateTargets(targets)
+	secondScore, secondImproves := scorer.EvaluateTargets(targets)
+	require.Equal(t, firstScore, secondScore)
+	require.Equal(t, firstImproves, secondImproves)
+	require.Equal(t, originalScore, scorer.Score())
+	require.Equal(t, originalTargetVoters, targets[0].VoterStoreIDs)
+	require.Equal(t, expectedLeaderCounts, []int{scorer.LeaderCount(1), scorer.LeaderCount(2), scorer.LeaderCount(3)})
+	require.Equal(t, expectedVoterCounts, []int{scorer.VoterCount(1), scorer.VoterCount(2), scorer.VoterCount(3), scorer.VoterCount(4), scorer.VoterCount(5)})
 }
 
 func TestBalanceScorerStrictImprovementsTerminate(t *testing.T) {
@@ -256,4 +396,27 @@ func applyBalanceMove(groups []*Group, move BalanceMove) {
 		group.LeaderStoreID = move.LeaderStoreID
 		return
 	}
+}
+
+func independentBalanceScore(groups []*Group) BalanceScore {
+	leaderCounts := make(map[uint64]int)
+	voterCounts := make(map[uint64]int)
+	for _, group := range groups {
+		if group.LeaderStoreID != 0 {
+			leaderCounts[group.LeaderStoreID]++
+		}
+		for _, storeID := range group.VoterStoreIDs {
+			if storeID != 0 {
+				voterCounts[storeID]++
+			}
+		}
+	}
+	var score BalanceScore
+	for _, count := range leaderCounts {
+		score.Leader += count * count
+	}
+	for _, count := range voterCounts {
+		score.Voter += count * count
+	}
+	return score
 }

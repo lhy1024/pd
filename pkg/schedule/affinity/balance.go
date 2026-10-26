@@ -39,12 +39,12 @@ type BalanceScore struct {
 	Voter  int
 }
 
-// Compare orders scores by leader balance first, then voter balance.
+// Compare orders scores by voter balance first, then leader balance.
 func (s BalanceScore) Compare(other BalanceScore) int {
-	if order := cmp.Compare(s.Leader, other.Leader); order != 0 {
+	if order := cmp.Compare(s.Voter, other.Voter); order != 0 {
 		return order
 	}
-	return cmp.Compare(s.Voter, other.Voter)
+	return cmp.Compare(s.Leader, other.Leader)
 }
 
 // BalanceMove describes a leader transfer or a single voter replacement.
@@ -62,7 +62,7 @@ type balanceGroup struct {
 	fixed         bool
 }
 
-// BalanceScorer scores placements and evaluates individual candidate moves.
+// BalanceScorer scores placements and evaluates candidate moves or complete targets.
 type BalanceScorer struct {
 	groups       map[string]balanceGroup
 	leaderCounts map[uint64]int
@@ -172,6 +172,66 @@ func (s *BalanceScorer) Evaluate(move BalanceMove) (BalanceScore, bool) {
 	return next, next.Compare(s.score) < 0
 }
 
+// EvaluateTargets returns the score after applying complete targets for one or
+// more initialized auto groups. The boolean is true only when the targets
+// strictly improve the current score.
+func (s *BalanceScorer) EvaluateTargets(targets []*Group) (BalanceScore, bool) {
+	seen := make(map[string]struct{}, len(targets))
+	leaderDeltas := make(map[uint64]int)
+	voterDeltas := make(map[uint64]int)
+	for _, target := range targets {
+		if target == nil {
+			return s.score, false
+		}
+		group, exists := s.groups[target.ID]
+		if !exists || group.fixed || len(group.voters) == 0 {
+			return s.score, false
+		}
+		if _, duplicate := seen[target.ID]; duplicate {
+			return s.score, false
+		}
+		seen[target.ID] = struct{}{}
+
+		if target.LeaderStoreID == 0 || len(target.VoterStoreIDs) != len(group.voters) {
+			return s.score, false
+		}
+		targetVoters := make(map[uint64]struct{}, len(target.VoterStoreIDs))
+		for _, storeID := range target.VoterStoreIDs {
+			if storeID == 0 {
+				return s.score, false
+			}
+			if _, duplicate := targetVoters[storeID]; duplicate {
+				return s.score, false
+			}
+			targetVoters[storeID] = struct{}{}
+		}
+		if _, isVoter := targetVoters[target.LeaderStoreID]; !isVoter {
+			return s.score, false
+		}
+
+		for storeID := range group.voters {
+			if _, remainsVoter := targetVoters[storeID]; !remainsVoter {
+				voterDeltas[storeID]--
+			}
+		}
+		for storeID := range targetVoters {
+			if _, wasVoter := group.voters[storeID]; !wasVoter {
+				voterDeltas[storeID]++
+			}
+		}
+		if target.LeaderStoreID != group.leaderStoreID {
+			leaderDeltas[group.leaderStoreID]--
+			leaderDeltas[target.LeaderStoreID]++
+		}
+	}
+
+	next := BalanceScore{
+		Leader: s.score.Leader + sumSquaresDelta(s.leaderCounts, leaderDeltas),
+		Voter:  s.score.Voter + sumSquaresDelta(s.voterCounts, voterDeltas),
+	}
+	return next, next.Compare(s.score) < 0
+}
+
 // LeaderCount returns the number of groups led by storeID.
 func (s *BalanceScorer) LeaderCount(storeID uint64) int {
 	return s.leaderCounts[storeID]
@@ -193,6 +253,15 @@ func sumSquares(counts map[uint64]int) int {
 		total += count * count
 	}
 	return total
+}
+
+func sumSquaresDelta(counts, deltas map[uint64]int) int {
+	difference := 0
+	for storeID, delta := range deltas {
+		count := counts[storeID]
+		difference += 2*count*delta + delta*delta
+	}
+	return difference
 }
 
 func normalizeVoters(voters []uint64) []uint64 {
