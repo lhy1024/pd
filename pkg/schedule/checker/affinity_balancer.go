@@ -191,9 +191,8 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 	// A filter that accepts a candidate still falls through to the complete
 	// Region-level fit and final review below.
 	checkAction := c.balanceStoreActionChecker()
-	potential, blockedLeader := hasPotentialBalanceCandidate(snapshot, scorer, placementFilters, checkAction)
-	if !potential {
-		if blockedLeader || !b.balanceEscapeAllowed(id, scorer.Score()) {
+	if !hasPotentialBalanceCandidate(snapshot, scorer, placementFilters, checkAction) {
+		if !b.balanceEscapeAllowed(id, scorer.Score()) {
 			return checkInput()
 		}
 		first, _, err := findBalanceEscape(snapshot, scorer, placementFilters, checkAction, checkInput, nil)
@@ -230,10 +229,10 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 			checked[region.GetID()] = balanceCheckedRegion{group, region, fit}
 		}
 	}
-	// Exhaust leader-only improvements before trying voter replacements.
+	// Prefer leader-only improvements to avoid peer movement. A blocked leader
+	// transfer does not veto another legal voter improvement.
 	for _, replace := range []bool{false, true} {
 		candidates := newBalanceCandidates(snapshot, scorer, replace, checkAction)
-		blocked := false
 		for {
 			if err := checkInput(); err != nil {
 				return err
@@ -252,7 +251,6 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 			}
 			status := balanceTargetExecutionStatus(&group.Group, &target, checkAction)
 			if status != balanceAllowed {
-				blocked = blocked || status == balanceTemporarilyBlocked
 				continue
 			}
 			status, err = b.validateBalanceCandidate(snapshot, group, &target, checked, waiting, checkInput)
@@ -263,14 +261,9 @@ func (b *affinityBalancer) stepWithCounts(ctx context.Context, id affinity.Table
 				return nil
 			}
 			if status != balanceAllowed {
-				blocked = blocked || status == balanceTemporarilyBlocked
 				continue
 			}
 			return b.commitBalanceCandidate(ctx, snapshot, checked, &target, nil, scorer.Score())
-		}
-		// A temporary leader restriction must not trigger a voter replacement.
-		if blocked {
-			return nil
 		}
 	}
 	if b.balanceEscapeAllowed(id, scorer.Score()) {
@@ -359,11 +352,8 @@ func balanceTargetForMove(group *affinity.GroupState, move affinity.BalanceMove)
 }
 
 func hasPotentialBalanceCandidate(snapshot *affinity.BalanceSnapshot, scorer *affinity.BalanceScorer,
-	filters map[string]balanceTargetPlacementFilter, check func(balanceStoreAction) balanceStatus) (potential, blockedLeader bool) {
+	filters map[string]balanceTargetPlacementFilter, check func(balanceStoreAction) balanceStatus) bool {
 	for _, replace := range []bool{false, true} {
-		if replace && blockedLeader {
-			return false, true
-		}
 		candidates := newBalanceCandidates(snapshot, scorer, replace, check)
 		for {
 			move, found := candidates.next()
@@ -378,13 +368,12 @@ func hasPotentialBalanceCandidate(snapshot *affinity.BalanceSnapshot, scorer *af
 			if filters[group.ID].maySatisfy(&target) {
 				status := balanceTargetExecutionStatus(&group.Group, &target, check)
 				if status == balanceAllowed {
-					return true, false
+					return true
 				}
-				blockedLeader = blockedLeader || !replace && status == balanceTemporarilyBlocked
 			}
 		}
 	}
-	return false, blockedLeader
+	return false
 }
 
 func sameBalanceRegionInput(a, b *core.RegionInfo) bool {

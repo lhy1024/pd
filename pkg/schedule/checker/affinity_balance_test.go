@@ -631,11 +631,6 @@ func exhaustLeaderTransferIn(t *testing.T, tc *mockcluster.Cluster, id uint64) {
 	require.False(t, tc.GetStore(id).IsAvailable(storelimit.TransferLeaderIn, constant.Medium))
 }
 
-func restoreLeaderTransferIn(tc *mockcluster.Cluster, id uint64) {
-	tc.SetStoreLimit(id, storelimit.TransferLeaderIn, storelimit.Unlimited)
-	tc.ResetStoreLimit(id, storelimit.TransferLeaderIn, storelimit.Unlimited/time.Minute.Seconds())
-}
-
 func TestAffinityBalanceTemporaryLeaderLimitUsesNextCandidate(t *testing.T) {
 	tc, checker := newAffinityBalanceTestCluster(t, 6)
 	manager := setupLeaderLimitBalanceTable(t, tc)
@@ -646,22 +641,82 @@ func TestAffinityBalanceTemporaryLeaderLimitUsesNextCandidate(t *testing.T) {
 		"a temporarily rate-limited candidate must not hide another legal improvement")
 }
 
-func TestAffinityBalanceAllLeaderLimitsRetryBeforeVoterMoves(t *testing.T) {
+func TestAffinityBalanceBlockedLeaderDoesNotVetoVoterImprovement(t *testing.T) {
 	tc, checker := newAffinityBalanceTestCluster(t, 6)
 	manager := setupLeaderLimitBalanceTable(t, tc)
+	createBalanceGroup(t, manager, "_tidb_pt_100_p3", "d", "e", 4, []uint64{1, 4, 5}, affinity.BalancePolicyFixed)
+	addBalanceRegion(t, tc, manager, 4, "d", "e", 4, 1, 4, 5)
 	exhaustLeaderTransferIn(t, tc, 2)
 	exhaustLeaderTransferIn(t, tc, 3)
-	err := checker.balancer.step(t.Context(), affinity.TableIDForGroup("_tidb_pt_100_p0"))
-	require.NoError(t, err)
-	require.Equal(t, []uint64{1, 2, 3}, manager.GetAffinityGroupState("_tidb_pt_100_p0").VoterStoreIDs,
-		"temporarily blocked leader candidates must not fall through to voter replacements")
-	require.Equal(t, uint64(1), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
 
-	restoreLeaderTransferIn(tc, 2)
-	restoreLeaderTransferIn(tc, 3)
+	runAffinityBalanceTask(t, t.Context(), checker)
+	target := manager.GetAffinityGroupState("_tidb_pt_100_p0")
+	require.Equal(t, []uint64{2, 3, 6}, target.VoterStoreIDs,
+		"blocked leader-only transfers must not hide a legal voter improvement from V=30 to V=28")
+	require.Equal(t, uint64(6), target.LeaderStoreID)
+	require.NotNil(t, checker.createAffinityOperator(tc.GetRegion(1), target))
+}
+
+func TestAffinityBalanceLeaderLimitRecovery(t *testing.T) {
+	tc, checker := newAffinityBalanceTestCluster(t, 3)
+	manager := tc.GetAffinityManager()
+	for i := range 2 {
+		id := fmt.Sprintf("_tidb_pt_100_p%d", i)
+		start, end := fmt.Sprintf("%02d", i), fmt.Sprintf("%02d", i+1)
+		createBalanceGroup(t, manager, id, start, end, 1, []uint64{1, 2, 3}, affinity.BalancePolicyAuto)
+		addBalanceRegion(t, tc, manager, uint64(i+1), start, end, 1, 1, 2, 3)
+	}
+	exhaustLeaderTransferIn(t, tc, 2)
+	exhaustLeaderTransferIn(t, tc, 3)
+	runAffinityBalanceTask(t, t.Context(), checker)
+	require.Equal(t, uint64(1), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID)
+	for _, id := range []uint64{2, 3} {
+		tc.SetStoreLimit(id, storelimit.TransferLeaderIn, storelimit.Unlimited)
+		tc.ResetStoreLimit(id, storelimit.TransferLeaderIn, storelimit.Unlimited/time.Minute.Seconds())
+	}
 	runAffinityBalanceTask(t, t.Context(), checker)
 	require.Equal(t, uint64(2), manager.GetAffinityGroupState("_tidb_pt_100_p0").LeaderStoreID,
-		"the next attempt can use the recovered candidate")
+		"transient leader limits must be refreshed even without another placement or metadata change")
+}
+
+func TestAffinityBalanceVoterImprovementMayIncreaseLeaderScore(t *testing.T) {
+	tc, checker := newAffinityBalanceTestCluster(t, 4)
+	for i, zone := range []string{"a", "b", "c", "c"} {
+		tc.SetStoreLabel(uint64(i+1), map[string]string{"zone": zone})
+	}
+	rule := tc.GetRuleManager().GetRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	rule.LocationLabels = []string{"zone"}
+	rule.IsolationLevel = "zone"
+	require.NoError(t, tc.GetRuleManager().SetRule(rule))
+	manager := tc.GetAffinityManager()
+	groups := make([]*affinity.Group, 0, 4)
+	for i := range 4 {
+		id := fmt.Sprintf("_tidb_pt_100_p%d", i)
+		start, end := fmt.Sprintf("%02d", i), fmt.Sprintf("%02d", i+1)
+		leader, policy := uint64(2), affinity.BalancePolicyFixed
+		if i == 0 {
+			leader, policy = 3, affinity.BalancePolicyAuto
+		}
+		createBalanceGroup(t, manager, id, start, end, leader, []uint64{1, 2, 3}, policy)
+		addBalanceRegion(t, tc, manager, uint64(i+1), start, end, leader, 1, 2, 3)
+		group := manager.GetAffinityGroupState(id).Group
+		groups = append(groups, &group)
+	}
+	scorer, err := affinity.NewBalanceScorer(groups)
+	require.NoError(t, err)
+	require.Equal(t, affinity.BalanceScore{Voter: 48, Leader: 10}, scorer.Score())
+	// Zone isolation only permits replacing store 3 with 4. Its leader must
+	// transfer to the already occupied store 2, worsening the leader score.
+	exhaustLeaderTransferIn(t, tc, 1)
+	exhaustLeaderTransferIn(t, tc, 4)
+	runAffinityBalanceTask(t, t.Context(), checker)
+	target := manager.GetAffinityGroupState(groups[0].ID)
+	require.Equal(t, []uint64{1, 2, 4}, target.VoterStoreIDs)
+	require.Equal(t, uint64(2), target.LeaderStoreID)
+	score, improves := scorer.EvaluateTargets([]*affinity.Group{&target.Group})
+	require.True(t, improves)
+	require.Equal(t, affinity.BalanceScore{Voter: 42, Leader: 16}, score)
+	require.NotNil(t, checker.createAffinityOperator(tc.GetRegion(1), target))
 }
 
 func TestAffinityBalanceBusyVoterDestinationRetries(t *testing.T) {

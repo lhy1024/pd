@@ -80,7 +80,6 @@ func findBalanceEscape(snapshot *affinity.BalanceSnapshot, scorer *affinity.Bala
 			firstChecked, firstAllowed := false, true
 			for _, replaceNext := range []bool{false, true} {
 				nextCandidates := newBalanceCandidates(&virtual, nextScorer, replaceNext, check)
-				blockedLeader := false
 				for remaining > 0 && validations > 0 {
 					if err := checkInput(); err != nil {
 						return nil, nil, err
@@ -103,7 +102,6 @@ func findBalanceEscape(snapshot *affinity.BalanceSnapshot, scorer *affinity.Bala
 					}
 					status := balanceTargetExecutionStatus(&nextGroup.Group, &next, check)
 					if status != balanceAllowed {
-						blockedLeader = blockedLeader || !replaceNext && status == balanceTemporarilyBlocked
 						continue
 					}
 					if validate != nil {
@@ -129,7 +127,7 @@ func findBalanceEscape(snapshot *affinity.BalanceSnapshot, scorer *affinity.Bala
 					}
 					return &target, &next, nil
 				}
-				if blockedLeader || !firstAllowed {
+				if !firstAllowed {
 					break
 				}
 			}
