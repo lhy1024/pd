@@ -106,7 +106,7 @@ func TestUpdateAffinityGroupTargetsRejectsInvalidInput(t *testing.T) {
 }
 
 func TestSyncRecreatedAffinityGroup(t *testing.T) {
-	for _, path := range []string{"watcher", "conflict", "written"} {
+	for _, path := range []string{"watcher", "conflict", "written", "policy", "peers"} {
 		t.Run(path, func(t *testing.T) {
 			re := require.New(t)
 			m, store := newTargetTestManager(t)
@@ -119,9 +119,10 @@ func TestSyncRecreatedAffinityGroup(t *testing.T) {
 			recreated := *old
 			recreated.CreateTimestamp++
 			re.NoError(store.RunInTxn(t.Context(), func(txn kv.Txn) error { return store.SaveAffinityGroup(txn, old.ID, &recreated) }))
-			if path == "watcher" {
+			switch path {
+			case "watcher":
 				m.SyncGroupFromEtcd(&recreated)
-			} else {
+			case "conflict", "written":
 				target := targetFor(m, old.ID, 2, 1, 2, 3)
 				if path == "written" {
 					target.Expected = recreated
@@ -130,6 +131,13 @@ func TestSyncRecreatedAffinityGroup(t *testing.T) {
 				written, err := m.UpdateAffinityGroupTargets([]GroupTarget{target})
 				re.NoError(err)
 				re.Equal(path == "written", len(written) == 1)
+			case "policy":
+				_, err := m.UpdateAffinityGroupPolicy(old.ID, BalancePolicyFixed)
+				re.NoError(err)
+				recreated.BalancePolicy = BalancePolicyFixed
+			case "peers":
+				_, err := m.UpdateAffinityGroupPeers(old.ID, 1, []uint64{1, 2, 3})
+				re.NoError(err)
 			}
 			state := m.GetAffinityGroupState(old.ID)
 			re.Equal(recreated, state.Group)
