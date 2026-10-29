@@ -415,6 +415,11 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 	if !ok {
 		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
 	}
+	if groupInfo.CreateTimestamp != updated.CreateTimestamp {
+		// The group was deleted and created again in storage.
+		m.syncGroupTargetLocked(groupInfo, updated)
+		return newGroupState(m.groups[groupID]), nil
+	}
 	if groupInfo.LeaderStoreID != updated.LeaderStoreID || !slices.Equal(groupInfo.VoterStoreIDs, updated.VoterStoreIDs) {
 		// A write whose result was unknown committed this target. Check it against
 		// the store conditions known now, because the availability check applies
