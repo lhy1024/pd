@@ -132,12 +132,13 @@ func TestUpdateAffinityGroupTargets(t *testing.T) {
 }
 
 // TestSyncRecreatedAffinityGroup checks that a group deleted and created again
-// with the same ID replaces the old instance, both when the scheduling service
-// reloads it and when a conflicting write refreshes it. The new instance keeps
-// the old target, so only its create timestamp tells them apart.
+// with the same ID replaces the old instance, when the scheduling service
+// reloads it, when a conflicting write refreshes it and when a policy or peers
+// update finds it in storage. The new instance keeps the old target, so only
+// its create timestamp tells them apart.
 func TestSyncRecreatedAffinityGroup(t *testing.T) {
-	for _, mode := range []string{"reload", "conflict", "current expected"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, path := range []string{"reload", "refresh", "current expected", "policy", "peers"} {
+		t.Run(path, func(t *testing.T) {
 			re := require.New(t)
 			manager, store := newTargetTestManager(t)
 			old := &Group{ID: "g", CreateTimestamp: 1, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}
@@ -151,23 +152,31 @@ func TestSyncRecreatedAffinityGroup(t *testing.T) {
 			recreated := *old
 			recreated.CreateTimestamp = 2
 			re.NoError(store.RunInTxn(t.Context(), func(txn kv.Txn) error { return store.SaveAffinityGroup(txn, old.ID, &recreated) }))
-			if mode == "reload" {
+			var err error
+			switch path {
+			case "reload":
 				manager.SyncGroupFromEtcd(&recreated)
-			} else {
+			case "refresh", "current expected":
 				target := targetFor(manager, old.ID, 2, 1, 2, 3)
-				if mode == "current expected" {
+				if path == "current expected" {
 					target.Expected = recreated
 					recreated.LeaderStoreID = 2
 				}
-				written, err := manager.UpdateAffinityGroupTargets([]GroupTarget{target})
-				re.NoError(err)
-				re.Equal(mode == "current expected", len(written) == 1)
+				var written []string
+				written, err = manager.UpdateAffinityGroupTargets([]GroupTarget{target})
+				re.Equal(path == "current expected", len(written) == 1)
+			case "policy":
+				_, err = manager.UpdateAffinityGroupPolicy(old.ID, BalancePolicyFixed)
+				recreated.BalancePolicy = BalancePolicyFixed
+			case "peers":
+				_, err = manager.UpdateAffinityGroupPeers(old.ID, 1, []uint64{1, 2, 3})
 			}
+			re.NoError(err)
 			state := manager.GetAffinityGroupState(old.ID)
 			re.Equal(recreated, state.Group)
 			re.Zero(state.RegionCount)
 			re.Equal(1, state.RangeCount)
-			if mode == "current expected" {
+			if path == "current expected" {
 				re.True(state.AffinitySchedulingAllowed)
 			}
 			written, err := manager.UpdateAffinityGroupTargets([]GroupTarget{targetFor(manager, old.ID, 2, 1, 2, 3)})
