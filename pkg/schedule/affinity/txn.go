@@ -346,6 +346,11 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 		if !group.RegularSchedulingAllowed && !slices.Equal(voterStoreIDs, group.VoterStoreIDs) {
 			return group, nil
 		}
+		// Policy-only updates keep affinityVer, so check the current policy while
+		// holding metaMutex. A degraded fixed group can only confirm its target.
+		if group.BalancePolicy.IsFixed() && !group.RegularSchedulingAllowed && leaderStoreID != group.LeaderStoreID {
+			return group, nil
+		}
 		if m.targetWriter != nil {
 			target := GroupTarget{Expected: group.Group, LeaderStoreID: leaderStoreID, VoterStoreIDs: voterStoreIDs}
 			if sameStoredGroup(&target.Expected, target.result()) {
