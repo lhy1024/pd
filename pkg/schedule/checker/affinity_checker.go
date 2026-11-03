@@ -49,6 +49,7 @@ type AffinityChecker struct {
 	affinityManager  *affinity.Manager
 	conf             config.CheckerConfigProvider
 	recentMergeCache *cache.TTLUint64
+	splitAttempts    cache.Cache
 	startTime        time.Time
 	balancer         *affinityBalancer
 }
@@ -61,6 +62,7 @@ func NewAffinityChecker(ctx context.Context, cluster sche.CheckerCluster, conf c
 		affinityManager:  cluster.GetAffinityManager(),
 		conf:             conf,
 		recentMergeCache: cache.NewIDTTL(ctx, gcInterval, recentMergeTTL),
+		splitAttempts:    cache.NewCache(affinitySplitCacheSize, cache.LRUCache),
 		startTime:        time.Now(),
 	}
 	if c.affinityManager != nil {
@@ -280,6 +282,10 @@ func (c *AffinityChecker) createAffinityOperator(region *core.RegionInfo, group 
 		return nil
 	}
 
+	if op, ready := c.prepareAffinityPeerMove(region, group); !ready {
+		return op
+	}
+
 	// Determine operator kind based on whether leader needs to change
 	kind := operator.OpAffinity
 	if currentLeaderStoreID != group.LeaderStoreID {
@@ -396,6 +402,11 @@ func (c *AffinityChecker) mergeCheck(region *core.RegionInfo, group *affinity.Gr
 	if region.GetApproximateSize()+target.GetApproximateSize() > maxSize ||
 		region.GetApproximateKeys()+target.GetApproximateKeys() > maxKeys {
 		affinityMergeCheckerTargetTooBigCounter.Inc()
+		return nil
+	}
+
+	// Already moved children must remain separate until the whole group is ready.
+	if !affinityGroupRegionsReady(c.cluster, group, true) {
 		return nil
 	}
 
