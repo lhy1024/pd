@@ -52,7 +52,7 @@ func TestBalanceTableLifecycle(t *testing.T) {
 	re := require.New(t)
 	m, _ := newTargetTestManager(t)
 	const table TableID = "_tidb_ks1_pt_100"
-	ids := []string{"_tidb_ks1_pt_100_p12", "_tidb_ks1_pt_100_p0", "_tidb_ks1_pt_101_p0", "_tidb_ks1_pt_100"}
+	ids := []string{"_tidb_ks1_pt_100_p12", "_tidb_ks1_pt_100_p1", "_tidb_ks1_pt_101_p1", "_tidb_ks1_t_100"}
 	key := func(value string) []byte {
 		return codec.EncodeBytes(append(codec.MakeKeyspacePrefix(codec.TxnKeyspaceModePrefix, 1), value...))
 	}
@@ -148,7 +148,7 @@ func TestCommitBalanceTargets(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			re := require.New(t)
 			m, store := newTargetTestManager(t)
-			const id = "_tidb_ks1_pt_100_p0"
+			const id = "_tidb_ks1_pt_100_p1"
 			expected := Group{ID: id, CreateTimestamp: 1, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}
 			re.NoError(store.RunInTxn(t.Context(), func(txn kv.Txn) error { return store.SaveAffinityGroup(txn, id, &expected) }))
 			m.SyncGroupFromEtcd(&expected)
@@ -237,7 +237,7 @@ func TestCommitBalanceTargetsChunks(t *testing.T) {
 			m, store := newTargetTestManager(t)
 			groups := make([]GroupKeyRanges, etcdutil.MaxEtcdTxnOps+1)
 			for i := range groups {
-				groups[i].GroupID = fmt.Sprintf("_tidb_ks1_pt_100_p%d", i)
+				groups[i].GroupID = fmt.Sprintf("_tidb_ks1_pt_100_p%d", i+1)
 			}
 			re.NoError(m.CreateAffinityGroups(groups))
 			snapshot := m.GetBalanceSnapshot("_tidb_ks1_pt_100", m.GetBalanceCounts())
@@ -299,7 +299,7 @@ func TestCommitBalanceTargetsChunks(t *testing.T) {
 func TestCommitBalanceTargetsAfterLostReply(t *testing.T) {
 	re := require.New(t)
 	m, store := newTargetTestManager(t)
-	const id = "_tidb_ks1_pt_100_p0"
+	const id = "_tidb_ks1_pt_100_p1"
 	re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}))
 	lost := &lostReplyStorage{AffinityStorage: m.storage, lose: true}
 	m.storage = lost
