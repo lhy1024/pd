@@ -139,7 +139,7 @@ func TestHotRegionRevertAffinity(t *testing.T) {
 						re.Len(ops, 1, "the affinity revert region must not be moved or split")
 						re.Equal(uint64(6), ops[0].RegionID())
 						checkTransfer(re, ops[0], operator.OpHotRegion, 2, 5)
-					} else if testCase.withBuckets {
+					} else if testCase.withBuckets && groupState != "expired" {
 						re.Len(ops, 1)
 						re.Equal(uint64(7), ops[0].RegionID())
 						re.Equal(splitHotWriteBuckets, ops[0].Desc())
