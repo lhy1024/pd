@@ -103,7 +103,7 @@ func TestAskBatchSplitRejectsAffinityAutoSplit(t *testing.T) {
 	re := require.New(t)
 
 	svc, cluster, stream := newTestSchedulingServiceForSplit(t)
-	cluster.SwitchPDLeader(&splitScatterPDClient{next: 1000})
+	cluster.SwitchPDLeader(&splitScatterPDClient{next: 1000}, "http://pd-leader")
 
 	region := newAffinitySplitTestRegion()
 	cluster.PutRegion(region)
