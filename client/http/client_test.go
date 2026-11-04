@@ -61,6 +61,25 @@ func TestConfigWithTrailingSlash(t *testing.T) {
 	}
 }
 
+func TestGetAffinityGroupsByPrefix(t *testing.T) {
+	re := require.New(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		re.Equal(http.MethodGet, r.Method)
+		re.Equal("/pd/api/v2/affinity-groups?prefix=_tidb_ks1_pt_100_p", r.RequestURI)
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"affinity_groups":{"_tidb_ks1_pt_100_p101":{"id":"_tidb_ks1_pt_100_p101"}}}`)
+		re.NoError(err)
+	}))
+	defer server.Close()
+
+	c := newClientWithMockServiceDiscovery("test-affinity-prefix", []string{server.URL})
+	defer c.Close()
+	groups, err := c.GetAffinityGroupsByPrefix(context.Background(), "_tidb_ks1_pt_100_p")
+	re.NoError(err)
+	re.Len(groups, 1)
+	re.Contains(groups, "_tidb_ks1_pt_100_p101")
+}
+
 func TestPDAllowFollowerHandleHeader(t *testing.T) {
 	re := require.New(t)
 	checked := 0
