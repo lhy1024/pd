@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 
+	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
@@ -50,8 +51,11 @@ func TestTableIDForGroup(t *testing.T) {
 func TestBalanceTableLifecycle(t *testing.T) {
 	re := require.New(t)
 	m, _ := newTargetTestManager(t)
-	const table TableID = "_tidb_pt_100"
-	ids := []string{"_tidb_pt_100_p12", "_tidb_pt_100_p0", "_tidb_pt_101_p0", "_tidb_pt_100"}
+	const table TableID = "_tidb_ks1_pt_100"
+	ids := []string{"_tidb_ks1_pt_100_p12", "_tidb_ks1_pt_100_p0", "_tidb_ks1_pt_101_p0", "_tidb_ks1_pt_100"}
+	key := func(value string) []byte {
+		return codec.EncodeBytes(append(codec.MakeKeyspacePrefix(codec.TxnKeyspaceModePrefix, 1), value...))
+	}
 	var version uint64
 	changed := func() {
 		t.Helper()
@@ -61,7 +65,7 @@ func TestBalanceTableLifecycle(t *testing.T) {
 		version = next
 	}
 	re.False(m.IsBalanceTableEligible(table))
-	ranges := GroupKeyRanges{GroupID: ids[0], KeyRanges: []keyutil.KeyRange{{StartKey: []byte("a"), EndKey: []byte("b")}}}
+	ranges := GroupKeyRanges{GroupID: ids[0], KeyRanges: []keyutil.KeyRange{{StartKey: key("a"), EndKey: key("b")}}}
 	re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{ranges}))
 	changed()
 	re.False(m.IsBalanceTableEligible(table))
@@ -80,7 +84,7 @@ func TestBalanceTableLifecycle(t *testing.T) {
 	m.SyncGroupFromEtcd(&synced)
 	changed()
 	re.Equal(PhaseStable, m.GetAffinityGroupState(ids[0]).Phase)
-	added := GroupKeyRanges{GroupID: ids[0], KeyRanges: []keyutil.KeyRange{{StartKey: []byte("c"), EndKey: []byte("d")}}}
+	added := GroupKeyRanges{GroupID: ids[0], KeyRanges: []keyutil.KeyRange{{StartKey: key("c"), EndKey: key("d")}}}
 	re.NoError(m.UpdateAffinityGroupKeyRanges([]GroupKeyRanges{added}, nil))
 	changed()
 	m.ExpireAffinityGroup(ids[0])
@@ -118,7 +122,7 @@ func TestBalanceTableLifecycle(t *testing.T) {
 	snapshot.Ranges[ids[0]].KeyRanges[0].EndKey[0] = 'y'
 	snapshot.Ranges[ids[0]].KeyRanges[0] = keyutil.KeyRange{StartKey: []byte("x"), EndKey: []byte("y")}
 	re.Equal([]uint64{1, 2, 3}, m.GetAffinityGroupState(ids[1]).VoterStoreIDs)
-	re.Equal([]keyutil.KeyRange{{StartKey: []byte("a"), EndKey: []byte("b")}, {StartKey: []byte("c"), EndKey: []byte("d")}},
+	re.Equal([]keyutil.KeyRange{{StartKey: key("a"), EndKey: key("b")}, {StartKey: key("c"), EndKey: key("d")}},
 		m.GetBalanceSnapshot(table, counts).Ranges[ids[0]].KeyRanges)
 	// A table whose groups are all fixed is not eligible. Deleting its last group
 	// removes it, and creating the group again gives a larger version.
@@ -144,12 +148,12 @@ func TestCommitBalanceTargets(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			re := require.New(t)
 			m, store := newTargetTestManager(t)
-			const id = "_tidb_pt_100_p0"
+			const id = "_tidb_ks1_pt_100_p0"
 			expected := Group{ID: id, CreateTimestamp: 1, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}
 			re.NoError(store.RunInTxn(t.Context(), func(txn kv.Txn) error { return store.SaveAffinityGroup(txn, id, &expected) }))
 			m.SyncGroupFromEtcd(&expected)
 			m.ExpireAffinityGroup(id)
-			snapshot := m.GetBalanceSnapshot("_tidb_pt_100", m.GetBalanceCounts())
+			snapshot := m.GetBalanceSnapshot("_tidb_ks1_pt_100", m.GetBalanceCounts())
 			target := expected
 			target.LeaderStoreID, target.VoterStoreIDs = 2, []uint64{1, 2, 4}
 			stored, want, allowed := target, target, true
@@ -233,10 +237,10 @@ func TestCommitBalanceTargetsChunks(t *testing.T) {
 			m, store := newTargetTestManager(t)
 			groups := make([]GroupKeyRanges, etcdutil.MaxEtcdTxnOps+1)
 			for i := range groups {
-				groups[i].GroupID = fmt.Sprintf("_tidb_pt_100_p%d", i)
+				groups[i].GroupID = fmt.Sprintf("_tidb_ks1_pt_100_p%d", i)
 			}
 			re.NoError(m.CreateAffinityGroups(groups))
-			snapshot := m.GetBalanceSnapshot("_tidb_pt_100", m.GetBalanceCounts())
+			snapshot := m.GetBalanceSnapshot("_tidb_ks1_pt_100", m.GetBalanceCounts())
 			targets, ids := make([]*Group, 0, len(groups)), make([]string, 0, len(groups))
 			for _, group := range snapshot.Groups {
 				target := targetFor(m, group.ID, 1, 1, 2, 3)
@@ -295,12 +299,12 @@ func TestCommitBalanceTargetsChunks(t *testing.T) {
 func TestCommitBalanceTargetsAfterLostReply(t *testing.T) {
 	re := require.New(t)
 	m, store := newTargetTestManager(t)
-	const id = "_tidb_pt_100_p0"
+	const id = "_tidb_ks1_pt_100_p0"
 	re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}))
 	lost := &lostReplyStorage{AffinityStorage: m.storage, lose: true}
 	m.storage = lost
 	commit := func(leader uint64) ([]string, error) {
-		snapshot := m.GetBalanceSnapshot("_tidb_pt_100", m.GetBalanceCounts())
+		snapshot := m.GetBalanceSnapshot("_tidb_ks1_pt_100", m.GetBalanceCounts())
 		target := targetFor(m, id, leader, 1, 2, 3)
 		return m.CommitBalanceTargets(t.Context(), snapshot, []*Group{target.result()})
 	}
