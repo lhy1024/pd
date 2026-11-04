@@ -14,7 +14,12 @@
 
 package affinity
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+
+	"github.com/tikv/pd/pkg/errs"
+)
 
 type groupStateProvider interface {
 	GetAllAffinityGroupStates() []*GroupState
@@ -74,6 +79,37 @@ func CollectGroupStates(provider groupStateProvider, rawIDs []string) (map[strin
 		state := provider.GetAffinityGroupState(id)
 		if state != nil {
 			result[id] = state
+		}
+	}
+	return result, nil
+}
+
+// idPrefixRegexp matches a prefix of a valid group ID. An empty prefix selects every group.
+var idPrefixRegexp = regexp.MustCompile("^[-A-Za-z0-9_]{0,64}$")
+
+// ValidateGroupIDPrefix checks that prefix can start a valid group ID.
+func ValidateGroupIDPrefix(prefix string) error {
+	if !idPrefixRegexp.MatchString(prefix) {
+		return errs.ErrAffinityGroupContent.FastGenByArgs("invalid group ID prefix " + prefix)
+	}
+	return nil
+}
+
+// CollectGroupStatesByQuery returns the affinity group states that a list
+// request selects. rawIDs selects groups by ID and prefix selects the groups
+// whose IDs start with it; when both are given, a group must match both. With
+// neither, it returns all groups.
+func CollectGroupStatesByQuery(provider groupStateProvider, rawIDs []string, prefix string) (map[string]*GroupState, error) {
+	if err := ValidateGroupIDPrefix(prefix); err != nil {
+		return nil, err
+	}
+	result, err := CollectGroupStates(provider, rawIDs)
+	if err != nil || prefix == "" {
+		return result, err
+	}
+	for id := range result {
+		if !strings.HasPrefix(id, prefix) {
+			delete(result, id)
 		}
 	}
 	return result, nil

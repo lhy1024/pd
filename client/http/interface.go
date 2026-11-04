@@ -143,6 +143,10 @@ type Client interface {
 	GetAffinityGroups(ctx context.Context, groupIDs []string) (map[string]*AffinityGroupState, error)
 	// GetAllAffinityGroups gets all affinity groups.
 	GetAllAffinityGroups(ctx context.Context) (map[string]*AffinityGroupState, error)
+	// GetAffinityGroupsByPrefix gets the affinity groups whose IDs start with prefix.
+	// A PD that does not support the filter returns all groups, so callers that
+	// depend on the filter should check the IDs again.
+	GetAffinityGroupsByPrefix(ctx context.Context, prefix string) (map[string]*AffinityGroupState, error)
 	// UpdateAffinityGroupPeers updates the leader and voter stores of an affinity group.
 	UpdateAffinityGroupPeers(ctx context.Context, groupID string, leaderStoreID uint64, voterStoreIDs []uint64) (*AffinityGroupState, error)
 	// DeleteAffinityGroup deletes an affinity group by group ID.
@@ -1321,6 +1325,20 @@ func (c *client) GetAffinityGroups(ctx context.Context, groupIDs []string) (map[
 	err := c.request(ctx, newRequestInfo().
 		WithName("GetAffinityGroups").
 		WithURI(fmt.Sprintf("%s?%s", AffinityGroups, query.String())).
+		WithMethod(http.MethodGet).
+		WithResp(&resp))
+	if err != nil {
+		return nil, err
+	}
+	return resp.AffinityGroups, nil
+}
+
+// GetAffinityGroupsByPrefix gets the affinity groups whose IDs start with prefix.
+func (c *client) GetAffinityGroupsByPrefix(ctx context.Context, prefix string) (map[string]*AffinityGroupState, error) {
+	var resp AffinityGroupsResponse
+	err := c.request(ctx, newRequestInfo().
+		WithName("GetAffinityGroupsByPrefix").
+		WithURI(fmt.Sprintf("%s?prefix=%s", AffinityGroups, url.QueryEscape(prefix))).
 		WithMethod(http.MethodGet).
 		WithResp(&resp))
 	if err != nil {

@@ -35,6 +35,7 @@ import (
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/affinity"
 	"github.com/tikv/pd/pkg/utils/apiutil"
+	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server/apiv2/handlers"
 	"github.com/tikv/pd/server/config"
@@ -971,6 +972,100 @@ func (suite *affinityHandlerTestSuite) TestAffinityListWithIDs() {
 		mustCreateAffinityGroups(re, serverAddr, &createReq)
 
 		waitForAffinityGroups(re, getAffinityGroupURL(serverAddr)+"?ids=group-1&ids=group-3&ids=missing", "group-1", "group-3")
+	})
+}
+
+// TestAffinityListWithPrefix verifies that a prefix selects groups and can be combined with IDs.
+func (suite *affinityHandlerTestSuite) TestAffinityListWithPrefix() {
+	suite.env.RunTest(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		serverAddr := cluster.GetLeaderServer().GetAddr()
+		mustCreateAffinityGroups(re, serverAddr, &handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"prefix-1":  {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x10}}}},
+				"prefix-10": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x20}, EndKey: []byte{0x30}}}},
+				"other-1":   {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x40}, EndKey: []byte{0x50}}}},
+			},
+		})
+		url := getAffinityGroupURL(serverAddr)
+		waitForAffinityGroups(re, url+"?prefix=prefix-", "prefix-1", "prefix-10")
+		waitForAffinityGroups(re, url+"?prefix=prefix-1", "prefix-1", "prefix-10")
+		waitForAffinityGroups(re, url+"?prefix=prefix-&ids=prefix-10&ids=other-1", "prefix-10")
+		waitForAffinityGroups(re, url+"?prefix=", "prefix-1", "prefix-10", "other-1")
+		waitForAffinityGroups(re, url+"?prefix=missing")
+		resp, err := apiutil.GetJSON(tests.TestDialClient, url+"?prefix=bad%20prefix", nil)
+		re.NoError(err)
+		defer resp.Body.Close()
+		re.Equal(http.StatusBadRequest, resp.StatusCode)
+	})
+}
+
+// TestAffinityListWithPrefixForwarded verifies that the scheduling service applies the prefix.
+func (suite *affinityHandlerTestSuite) TestAffinityListWithPrefixForwarded() {
+	suite.env.RunTestInMicroserviceEnv(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		serverAddr := cluster.GetLeaderServer().GetAddr()
+		mustCreateAffinityGroups(re, serverAddr, &handlers.CreateAffinityGroupsRequest{
+			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
+				"forwarded-1": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x01}, EndKey: []byte{0x10}}}},
+				"other-2":     {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x40}, EndKey: []byte{0x50}}}},
+			},
+		})
+		testutil.Eventually(re, func() bool {
+			result, header, ok := tryGetAffinityGroups(getAffinityGroupURL(serverAddr) + "?prefix=forwarded-")
+			if !ok || header.Get(apiutil.XForwardedToMicroserviceHeader) != "true" {
+				return false
+			}
+			_, found := result.AffinityGroups["forwarded-1"]
+			return found && len(result.AffinityGroups) == 1
+		})
+	})
+}
+
+// TestAffinityForceDeleteLeftoverLabelRule verifies that a forced delete removes
+// a label rule whose group no longer exists, through both delete APIs.
+func (suite *affinityHandlerTestSuite) TestAffinityForceDeleteLeftoverLabelRule() {
+	suite.env.RunTest(func(cluster *tests.TestCluster) {
+		re := suite.Require()
+		leader := cluster.GetLeaderServer()
+		serverAddr := leader.GetAddr()
+		regionLabeler := leader.GetRaftCluster().GetRegionLabeler()
+		storedRuleIDs := func() []string {
+			var ids []string
+			re.NoError(leader.GetServer().GetStorage().LoadRegionRules(func(k, _ string) {
+				ids = append(ids, k)
+			}))
+			return ids
+		}
+		// A rule left without its group, as a creation request that failed after
+		// committing the transaction with the label rules leaves it.
+		putLeftover := func(groupID string, start, end byte) {
+			re.NoError(regionLabeler.SetLabelRule(affinity.MakeLabelRule(affinity.GroupKeyRanges{
+				GroupID:   groupID,
+				KeyRanges: []keyutil.KeyRange{{StartKey: []byte{start}, EndKey: []byte{end}}},
+			})))
+			re.Contains(storedRuleIDs(), affinity.GetLabelRuleID(groupID))
+		}
+
+		putLeftover("leftover-single", 0x01, 0x02)
+		// Without force, a missing group is not found and its rule stays.
+		statusCode, errorMsg := doDeleteAffinityGroup(re, serverAddr, "leftover-single", false)
+		re.Equal(http.StatusNotFound, statusCode, errorMsg)
+		re.NotNil(regionLabeler.GetLabelRule(affinity.GetLabelRuleID("leftover-single")))
+		// The forced delete removes the rule, and repeating it succeeds.
+		for range 2 {
+			statusCode, errorMsg = doDeleteAffinityGroup(re, serverAddr, "leftover-single", true)
+			re.Equal(http.StatusOK, statusCode, errorMsg)
+			re.Nil(regionLabeler.GetLabelRule(affinity.GetLabelRuleID("leftover-single")))
+			re.NotContains(storedRuleIDs(), affinity.GetLabelRuleID("leftover-single"))
+		}
+
+		putLeftover("leftover-batch", 0x03, 0x04)
+		statusCode, errorMsg = doBatchDeleteAffinityGroups(re, serverAddr,
+			&handlers.BatchDeleteAffinityGroupsRequest{IDs: []string{"leftover-batch"}, Force: true})
+		re.Equal(http.StatusOK, statusCode, errorMsg)
+		re.Nil(regionLabeler.GetLabelRule(affinity.GetLabelRuleID("leftover-batch")))
+		re.NotContains(storedRuleIDs(), affinity.GetLabelRuleID("leftover-batch"))
 	})
 }
 
