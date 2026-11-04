@@ -750,7 +750,13 @@ func TestForwardWatchGCStatesBlockedTransportCleanup(t *testing.T) {
 			upstreamExited := make(chan struct{})
 			// Three 128 KiB responses exhaust the downstream's static receive
 			// window and write quota. The client deliberately never calls Recv.
-			response := &pdpb.WatchGCStatesResponse{Header: &pdpb.ResponseHeader{Error: &pdpb.Error{Message: strings.Repeat("x", 128<<10)}}}
+			responseSize := 128 << 10
+			if tc.fullQueue {
+				// Fill the response queue before the send deadline even under -race.
+				// The static transport window still forces downstream backpressure.
+				responseSize = 4 << 10
+			}
+			response := &pdpb.WatchGCStatesResponse{Header: &pdpb.ResponseHeader{Error: &pdpb.Error{Message: strings.Repeat("x", responseSize)}}}
 			upstream := newWatchGCStatesTestConn(t, &watchGCStatesRPCServer{watch: func(_ *pdpb.WatchGCStatesRequest, stream pdpb.PD_WatchGCStatesServer) error {
 				defer close(upstreamExited)
 				for i := 0; i < 3 || tc.fullQueue; i++ {
