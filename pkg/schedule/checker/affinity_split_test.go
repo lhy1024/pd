@@ -113,17 +113,19 @@ func TestAffinitySplitBeforeMoveUnreportedSize(t *testing.T) {
 	cluster, checker := newAffinitySplitTest(t)
 	// A USEKEY split of the 64 MiB Region 1 adds Regions 2 and 3. TiKV does not
 	// share the parent's size with them, so a new Region reports 0 bytes until
-	// its first split check, and an empty Region reports 1 byte.
+	// its first split check, and an empty Region reports 1 byte. Region 1 keeps
+	// its ID and reports 0 bytes as well if TiKV had no size for it before the
+	// split, for example right after a leader transfer.
 	parent := cluster.GetRegion(1)
-	cluster.PutRegion(parent.Clone(core.WithEndKey([]byte("g")), core.WithIncVersion()))
-	children := map[uint64]*core.RegionInfo{
+	regions := map[uint64]*core.RegionInfo{
+		1: parent.Clone(core.WithEndKey([]byte("g")), core.WithIncVersion()),
 		2: parent.Clone(core.WithNewRegionID(2), core.WithStartKey([]byte("g")), core.WithEndKey([]byte("m")), core.WithIncVersion()),
 		3: parent.Clone(core.WithNewRegionID(3), core.WithStartKey([]byte("m")), core.WithIncVersion()),
 	}
 	// heartbeat handles a heartbeat as processRegionHeartbeat does and checks the Region.
 	heartbeat := func(id, size uint64) []*operator.Operator {
 		region := core.RegionFromHeartbeat(&pdpb.RegionHeartbeatRequest{
-			Region: children[id].GetMeta(), Leader: children[id].GetLeader(), ApproximateSize: size,
+			Region: regions[id].GetMeta(), Leader: regions[id].GetLeader(), ApproximateSize: size,
 		}, 0)
 		origin := cluster.GetRegion(id)
 		region.Inherit(origin, false)
@@ -136,12 +138,14 @@ func TestAffinitySplitBeforeMoveUnreportedSize(t *testing.T) {
 		re.Len(ops, 1)
 		re.Equal("affinity-move-region", ops[0].Desc())
 	}
+	re.Empty(heartbeat(1, 0), "the size after the split is not reported yet")
 	re.Empty(heartbeat(2, 0), "the size is not reported yet")
 	re.Empty(heartbeat(2, 0), "the size is still not reported")
 	requireMove(heartbeat(2, 1))
 	requireMove(heartbeat(3, 1))
 }
 
+// ageAffinitySplitAttempt makes the first split of the attempt start wait ago.
 func ageAffinitySplitAttempt(t *testing.T, checker *AffinityChecker, regionID uint64, wait time.Duration) {
 	t.Helper()
 	value, ok := checker.splitAttempts.Get(regionID)
@@ -204,17 +208,41 @@ func TestAffinitySplitBeforeMoveFallbackEpoch(t *testing.T) {
 
 	region = region.Clone(core.WithIncVersion())
 	cluster.PutRegion(region)
-	resetAt := time.Now()
 	requireAffinitySplit(t, checker.Check(region))
 	value, ok := checker.splitAttempts.Get(region.GetID())
 	re.True(ok)
 	attempt := value.(affinitySplitAttempt)
 	re.Equal(region.GetRegionEpoch().GetVersion(), attempt.version)
-	re.False(attempt.startedAt.Before(resetAt), "the new epoch must start a fresh wait")
+	re.True(attempt.startedAt.IsZero(), "the new epoch must start a fresh wait")
 	re.Equal(before, promtestutil.ToFloat64(affinityCheckerSplitTimeoutCounter))
 
 	ageAffinitySplitAttempt(t, checker, region.GetID(), affinitySplitWaitTimeout+time.Second)
 	ops := checker.Check(region)
+	re.Len(ops, 1)
+	re.Equal("affinity-move-region", ops[0].Desc())
+	re.Equal(before+1, promtestutil.ToFloat64(affinityCheckerSplitTimeoutCounter))
+}
+
+func TestAffinitySplitBeforeMoveFallbackAfterSplitStarts(t *testing.T) {
+	originalTimeout := affinitySplitWaitTimeout
+	// Without a wait, the move is allowed as soon as a split has started.
+	affinitySplitWaitTimeout = 0
+	t.Cleanup(func() { affinitySplitWaitTimeout = originalTimeout })
+
+	re := require.New(t)
+	cluster, checker := newAffinitySplitTest(t)
+	region := cluster.GetRegion(1)
+	before := promtestutil.ToFloat64(affinityCheckerSplitTimeoutCounter)
+	requireAffinitySplit(t, checker.Check(region))
+	// The operator controller did not start the split, for example because its
+	// waiting queue was full, so it sent no split request and the next patrol
+	// requests the split again.
+	ops := checker.Check(region)
+	requireAffinitySplit(t, ops)
+	re.Equal(before, promtestutil.ToFloat64(affinityCheckerSplitTimeoutCounter))
+	// The controller starts an operator when it admits it and sends the request.
+	re.True(ops[0].Start())
+	ops = checker.Check(region)
 	re.Len(ops, 1)
 	re.Equal("affinity-move-region", ops[0].Desc())
 	re.Equal(before+1, promtestutil.ToFloat64(affinityCheckerSplitTimeoutCounter))
