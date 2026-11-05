@@ -19,11 +19,14 @@
 //
 // It targets tables whose partitions share their placement rules, the usual
 // case for affinity partition tables. When partitions may use different
-// stores, the plan is still legal and never worse than the input, but it may
-// stop at a local optimum that only several coordinated moves would leave.
+// stores, the plan is still legal and never worse than the input, but its
+// voters may stop at a local optimum that only several coordinated moves
+// would leave. Unless the search is cut off, the leaders are optimal for the
+// planned voters and their rule assignment.
 package balanceplan
 
 import (
+	"cmp"
 	"math/rand/v2"
 	"slices"
 )
@@ -91,16 +94,18 @@ type Input struct {
 // Options bounds the search. Zero values select the defaults.
 type Options struct {
 	Sweeps int
-	// WorkBudget limits candidate and reversion load entries processed by the
-	// whole plan, including entries restored after a rejected reversion.
+	// WorkBudget limits candidate, reversion and leader transfer load entries
+	// processed by the whole plan, including entries restored after a
+	// rejected reversion.
 	WorkBudget int64
 	Seed       uint64
-	// Cancel is checked before every group visit and reversion trial.
+	// Cancel is checked before every group visit, reversion trial and round
+	// of leader transfers.
 	Cancel func() bool
 }
 
-// Default search limits. The work budget is shared by greedy candidate scans
-// and reversion cleanup.
+// Default search limits. The work budget is shared by greedy candidate scans,
+// reversion cleanup and leader transfers.
 const (
 	DefaultSweeps     = 4
 	DefaultWorkBudget = 10_000_000
@@ -199,10 +204,11 @@ func Plan(in *Input, opt Options) Result {
 	fastV, fastL, fast := p.greedy(opt.Seed)
 	res.Fast = fast
 	res.Stop = StopGreedy
-	if fast == res.Bound {
+	res.Score = p.revert(origV, origL, fastV, fastL)
+	res.Score.Leader += p.chainLeaders(fastL, res.Bound.Leader)
+	if res.Score == res.Bound {
 		res.Stop = StopBound
 	}
-	res.Score = p.revert(origV, origL, fastV, fastL)
 	if p.stop != "" {
 		res.Stop = p.stop
 	}
@@ -639,6 +645,8 @@ func (p *planner) visitLeader(g *groupState) bool {
 // reverts nothing; every other pass reverts at least one group, so it ends.
 // Trials share the search's cancellation and work budget. A cutoff keeps the
 // last accepted layout, whose score is never worse than the saved best layout.
+// A reverted group also gets the rule assignment of its input target back,
+// which chainLeaders reads.
 func (p *planner) revert(origV [][]int, origL []int, voters [][]int, leaders []int) Score {
 	p.setLayout(voters, leaders, nil)
 	cur := p.score()
@@ -664,6 +672,8 @@ func (p *planner) revert(origV [][]int, origL []int, voters [][]int, leaders []i
 			if value := (Score{cur.Voter + d.Voter, cur.Leader + d.Leader}); !cur.Less(value) {
 				cur, reverted = value, true
 				voters[i], leaders[i] = slices.Clone(origV[i]), origL[i]
+				g.curRule = make([]int, len(g.Voters))
+				copy(g.curRule, g.RuleOf)
 				continue
 			}
 			p.move(g, oldV, oldL)
@@ -690,6 +700,148 @@ func (p *planner) move(g *groupState, voters []int, leader int) Score {
 	d.Leader += int64(2*p.l[g.lead] + 1)
 	p.l[g.lead]++
 	return d
+}
+
+// chainLeaders keeps every group's voters and moves leaders along transfer
+// paths until no path lowers the leader score or the score reaches bound. A
+// path starts at a store a, moves the leader of a group led at a to another
+// of its voters b, then the leader of a group led at b, and so on, up to a
+// store z with l[z] <= l[a]-2. Only a and z change counts, so the score drops
+// by at least 2. With the voters fixed, the leaders are optimal exactly when
+// no such path exists (Harvey et al., "Semi-matchings for bipartite graphs
+// and load balancing", 2006). Single-group moves miss a path whose first
+// transfer only ties: 24 groups on 6 stores stayed at leader counts
+// 3/4/5/4/4/4, although two transfers in a row reach 4 on every store.
+//
+// A leader moves as in visitLeader: a pinned leader stays, and a leader moves
+// only to a voter of a rule that may hold it, on a store that may lead. A
+// path ends on the store with the fewest leaders, which lowers the score
+// most, then on the nearest one, which transfers the fewest leaders; other
+// tables and the store ID break the remaining ties. Every round is checked
+// for cancellation and charged to the work budget; a cutoff keeps the paths
+// already moved. It updates leaders and returns the change of the leader
+// score.
+func (p *planner) chainLeaders(leaders []int, bound int64) int64 {
+	score := p.score().Leader
+	if score <= bound || p.stopped() {
+		return 0
+	}
+	// alt[at[i]:at[i+1]] lists the voters that may lead group i.
+	at := make([]int, len(p.gs)+1)
+	var alt []int
+	for i := range p.gs {
+		g := &p.gs[i]
+		at[i] = len(alt)
+		p.work += int64(len(g.cur))
+		if g.LeaderPinned {
+			continue
+		}
+		hosts := p.leaderHosts(g)
+		for k, s := range g.cur {
+			if ri := g.curRule[k]; slices.Contains(hosts, ri) && p.leaderCapable(g, g.Rules[ri], s) {
+				alt = append(alt, s)
+			}
+		}
+	}
+	at[len(p.gs)] = len(alt)
+	start := make([]int, p.n+1) // the groups led at s are led[start[s]:start[s+1]]
+	next := make([]int, p.n)
+	led := make([]int, len(p.gs))
+	seen := make([]bool, p.n)
+	via := make([]int, p.n) // the group whose leader moves to the store
+	dist := make([]int, p.n)
+	order := make([]int, p.n)
+	queue := make([]int, 0, p.n)
+	var delta int64
+	for score+delta > bound && !p.stopped() {
+		p.visits++
+		p.work += int64(len(p.gs) + p.n)
+		clear(start)
+		for i := range p.gs {
+			start[p.gs[i].lead+1]++
+		}
+		for s := range p.n {
+			start[s+1] += start[s]
+		}
+		copy(next, start)
+		for i := range p.gs {
+			s := p.gs[i].lead
+			led[next[s]] = i
+			next[s]++
+		}
+		for s := range order {
+			order[s], seen[s] = s, false
+		}
+		slices.SortFunc(order, func(a, b int) int { return cmp.Or(cmp.Compare(p.l[b], p.l[a]), cmp.Compare(a, b)) })
+		low := slices.Min(p.l)
+		// Sources go from the highest count down. A source without a path
+		// reaches only stores whose count is at least its own minus one, and
+		// so do all stores they reach, so later sources, which have no higher
+		// count, skip them. The stores reached for a moved path stay seen too:
+		// later paths of the round share no store or group with it, and what
+		// they skip is searched again in the next round. A round that moves
+		// nothing therefore proves that no path exists.
+		moved := false
+		for _, a := range order {
+			if p.l[a]-2 < low {
+				break
+			}
+			if seen[a] {
+				continue
+			}
+			seen[a], dist[a] = true, 0
+			queue = append(queue[:0], a)
+			for h := 0; h < len(queue); h++ {
+				x := queue[h]
+				for _, i := range led[start[x]:start[x+1]] {
+					p.work += int64(at[i+1] - at[i])
+					for _, y := range alt[at[i]:at[i+1]] {
+						if !seen[y] {
+							seen[y], via[y], dist[y] = true, i, dist[x]+1
+							queue = append(queue, y)
+						}
+					}
+				}
+			}
+			end := -1
+			for _, z := range queue[1:] {
+				if p.l[z] <= p.l[a]-2 && (end < 0 || p.endBefore(z, end, dist)) {
+					end = z
+				}
+			}
+			if end < 0 {
+				continue
+			}
+			delta += int64(2*(p.l[end]-p.l[a]) + 2)
+			for z := end; z != a; {
+				i := via[z]
+				x := p.gs[i].lead
+				p.l[x]--
+				p.l[z]++
+				p.gs[i].lead, leaders[i] = z, z
+				z = x
+			}
+			moved = true
+		}
+		if !moved {
+			break
+		}
+	}
+	return delta
+}
+
+// endBefore orders the ends of leader paths.
+func (p *planner) endBefore(a, b int, dist []int) bool {
+	if p.l[a] != p.l[b] {
+		return p.l[a] < p.l[b]
+	}
+	if dist[a] != dist[b] {
+		return dist[a] < dist[b]
+	}
+	if p.otherL != nil && p.otherL[a] != p.otherL[b] {
+		return p.otherL[a] < p.otherL[b]
+	}
+	return a < b
 }
 
 func sameSet(a, b []int) bool {
