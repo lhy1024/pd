@@ -24,9 +24,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
@@ -435,24 +439,35 @@ func TestLoadRegionLabelIgnoreUnknownGroup(t *testing.T) {
 	regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
 	re.NoError(err)
 
-	// Inject a leftover label rule for a non-existent group "ghost".
+	// Inject leftover label rules for non-existent groups.
 	plan := regionLabeler.NewPlan()
-	rule := &labeler.LabelRule{
-		ID:       GetLabelRuleID("ghost"),
-		Labels:   []labeler.RegionLabel{{Key: AffinityLabelKey, Value: "ghost"}},
-		RuleType: labeler.KeyRange,
-		Data: []any{
-			map[string]any{"start_key": hex.EncodeToString([]byte{0x01}), "end_key": hex.EncodeToString([]byte{0x02})},
-		},
+	for i, id := range []string{"ghost", "ghost-2"} {
+		rule := &labeler.LabelRule{
+			ID:       GetLabelRuleID(id),
+			Labels:   []labeler.RegionLabel{{Key: AffinityLabelKey, Value: id}},
+			RuleType: labeler.KeyRange,
+			Data: []any{
+				map[string]any{"start_key": hex.EncodeToString([]byte{byte(2*i + 1)}), "end_key": hex.EncodeToString([]byte{byte(2*i + 2)})},
+			},
+		}
+		re.NoError(plan.SetLabelRule(rule))
 	}
-	re.NoError(plan.SetLabelRule(rule))
 	re.NoError(endpoint.RunBatchOpInTxn(ctx, store, plan.CommitOps()))
 	plan.Apply()
 
-	// Manager initialization should ignore the unknown label rule.
+	// Manager initialization should ignore the unknown label rules, and report
+	// them once at the warning level.
+	logCore, logs := observer.New(zapcore.WarnLevel)
+	restore := log.ReplaceGlobals(zap.New(logCore), nil)
 	manager, err := NewManager(ctx, store, storeInfos, conf, regionLabeler)
+	restore()
 	re.NoError(err)
 	re.False(manager.IsGroupExist("ghost"))
+	warnings := logs.FilterMessageSnippet("found affinity label rules without affinity groups").All()
+	re.Len(warnings, 1)
+	fields := warnings[0].ContextMap()
+	re.Equal(int64(2), fields["count"])
+	re.Equal([]any{"ghost", "ghost-2"}, fields["group-ids"])
 
 	// Creating a new group with overlapping range should succeed (ghost is ignored).
 	err = manager.CreateAffinityGroups([]GroupKeyRanges{{

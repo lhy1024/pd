@@ -40,6 +40,9 @@ import (
 )
 
 const (
+	// maxLoggedLeftoverGroupIDs limits the group IDs that the warning about label
+	// rules without groups lists.
+	maxLoggedLeftoverGroupIDs = 10
 	// LabelRuleIDPrefix is the prefix for affinity group label rules.
 	// This is exposed publicly to allow other packages (like watcher) to use it.
 	LabelRuleIDPrefix = "affinity_group/"
@@ -963,6 +966,8 @@ func (m *Manager) logRangeConflictsLocked() {
 func (m *Manager) loadRegionLabel() {
 	// Collect all key ranges from label rules and populate in-memory cache
 	var allRanges []GroupKeyRanges
+	// leftoverGroupIDs lists the label rules whose groups do not exist.
+	var leftoverGroupIDs []string
 
 	m.regionLabeler.IterateLabelRules(func(rule *labeler.LabelRule) bool {
 		groupID, ok := parseAffinityGroupIDFromLabelRule(rule)
@@ -972,9 +977,7 @@ func (m *Manager) loadRegionLabel() {
 		}
 
 		if _, exists := m.groups[groupID]; !exists {
-			log.Debug("found label rule for unknown affinity group, skip rebuilding",
-				zap.String("group-id", groupID),
-				zap.String("rule-id", rule.ID))
+			leftoverGroupIDs = append(leftoverGroupIDs, groupID)
 			return true
 		}
 
@@ -998,6 +1001,17 @@ func (m *Manager) loadRegionLabel() {
 
 		return true
 	})
+
+	if len(leftoverGroupIDs) > 0 {
+		// Such a rule is left, for example, by a creation request that failed
+		// after some of its transactions committed. The overlap checks do not see
+		// it, but it still splits Regions at its boundaries and stops merges
+		// across them, so report it once here for an operator to delete.
+		slices.Sort(leftoverGroupIDs)
+		log.Warn("found affinity label rules without affinity groups, delete each with pd-ctl config affinity delete --force",
+			zap.Int("count", len(leftoverGroupIDs)),
+			zap.Strings("group-ids", leftoverGroupIDs[:min(len(leftoverGroupIDs), maxLoggedLeftoverGroupIDs)]))
+	}
 
 	m.reconcileRangeConflictsLocked()
 	m.logRangeConflictsLocked()
