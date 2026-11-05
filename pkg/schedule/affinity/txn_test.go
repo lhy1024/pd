@@ -15,8 +15,10 @@
 package affinity
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -39,6 +41,7 @@ import (
 	"github.com/tikv/pd/pkg/storage"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
+	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/testutil"
 )
@@ -337,8 +340,6 @@ func TestLoadOverlappingAffinityRanges(t *testing.T) {
 			for _, change := range testCase.groups {
 				re.Contains(string(logs), change.GroupID)
 			}
-			re.Contains(string(logs), "start-key")
-			re.Contains(string(logs), "end-key")
 
 			if testCase.name == "nested ranges" {
 				extra := []GroupKeyRanges{{GroupID: "unrelated", KeyRanges: []keyutil.KeyRange{keyRange("y", "z")}}}
@@ -518,6 +519,119 @@ func TestLabelRuleIntegration(t *testing.T) {
 	err = manager.DeleteAffinityGroups([]string{"group_no_label"}, false)
 	re.NoError(err)
 	re.False(manager.IsGroupExist("group_no_label"))
+}
+
+// failingAffinityStorage fails the failAt-th transaction, so a request that
+// spans several transactions commits only the earlier ones.
+type failingAffinityStorage struct {
+	endpoint.AffinityStorage
+	txnCount int
+	failAt   int
+}
+
+func (s *failingAffinityStorage) RunInTxn(ctx context.Context, f func(kv.Txn) error) error {
+	s.txnCount++
+	if s.txnCount == s.failAt {
+		return errors.New("injected affinity transaction failure")
+	}
+	return s.AffinityStorage.RunInTxn(ctx, f)
+}
+
+// TestAffinityGroupsBatchFailure verifies that when a later transaction of a
+// request fails, each group keeps all or none of its changes in storage, and
+// the memory holds the committed transactions only, so that new groups are
+// checked against the committed ranges and a retry that skips existing groups
+// creates the rest.
+func TestAffinityGroupsBatchFailure(t *testing.T) {
+	for _, op := range []string{"create", "delete", "update"} {
+		t.Run(op, func(t *testing.T) {
+			re := require.New(t)
+			ctx := t.Context()
+			store := storage.NewStorageWithMemoryBackend()
+			regionLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+			re.NoError(err)
+			failingStore := &failingAffinityStorage{AffinityStorage: store}
+			manager, err := NewManager(ctx, failingStore, core.NewStoresInfo(), mockconfig.NewTestOptions(), regionLabeler)
+			re.NoError(err)
+			// Each request needs two transactions. To create or delete, the first
+			// group has no label rule, so cutting the operations every
+			// MaxEtcdTxnOps would separate a later group from its rule. An update
+			// writes one label rule per group.
+			count := etcdutil.MaxEtcdTxnOps/2 + 2
+			if op == "update" {
+				count = etcdutil.MaxEtcdTxnOps + 1
+			}
+			changes, ids := make([]GroupKeyRanges, count), make([]string, count)
+			for i := range changes {
+				ids[i] = fmt.Sprintf("batch-group-%d", i)
+				changes[i].GroupID = ids[i]
+				if i > 0 || op == "update" {
+					changes[i].KeyRanges = []keyutil.KeyRange{{StartKey: fmt.Appendf(nil, "%04d", i), EndKey: fmt.Appendf(nil, "%04d", i+1)}}
+				}
+			}
+			switch op {
+			case "delete":
+				re.NoError(manager.CreateAffinityGroups(changes))
+			case "update":
+				empty := make([]GroupKeyRanges, count)
+				for i := range empty {
+					empty[i].GroupID = ids[i]
+				}
+				re.NoError(manager.CreateAffinityGroups(empty))
+			}
+			failingStore.txnCount, failingStore.failAt = 0, 2
+			switch op {
+			case "create":
+				err = manager.CreateAffinityGroups(changes)
+			case "delete":
+				err = manager.DeleteAffinityGroups(ids, true)
+			case "update":
+				err = manager.UpdateAffinityGroupKeyRanges(changes, nil)
+			}
+			re.ErrorContains(err, "injected affinity transaction failure")
+			re.Equal(2, failingStore.txnCount)
+
+			// Rebuild the labeler and the manager from storage as a restart does.
+			reloadedLabeler, err := labeler.NewRegionLabeler(ctx, store, time.Second*5)
+			re.NoError(err)
+			reloaded, err := NewManager(ctx, store, core.NewStoresInfo(), mockconfig.NewTestOptions(), reloadedLabeler)
+			re.NoError(err)
+			for _, change := range changes {
+				ruleID := GetLabelRuleID(change.GroupID)
+				stored, hasRule := reloaded.GetAffinityGroupState(change.GroupID), reloadedLabeler.GetLabelRule(ruleID) != nil
+				if op != "update" {
+					re.Equal(stored != nil && len(change.KeyRanges) > 0, hasRule,
+						"group %s and its label rule must persist together", change.GroupID)
+				}
+				// The memory holds the committed changes and only them.
+				state := manager.GetAffinityGroupState(change.GroupID)
+				re.Equal(stored != nil, state != nil, change.GroupID)
+				re.Equal(hasRule, regionLabeler.GetLabelRule(ruleID) != nil, change.GroupID)
+				if stored != nil {
+					re.Equal(stored.RangeCount, state.RangeCount, change.GroupID)
+				}
+			}
+			// Only the first transaction committed.
+			re.NotEqual(reloadedLabeler.GetLabelRule(GetLabelRuleID(ids[1])) != nil, reloadedLabeler.GetLabelRule(GetLabelRuleID(ids[count-1])) != nil)
+
+			// New groups are checked against the committed changes. The first
+			// transaction created group 1, deleted it, or gave it its range.
+			err = manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "overlap", KeyRanges: changes[1].KeyRanges}})
+			if op == "delete" {
+				re.NoError(err)
+			} else {
+				re.ErrorContains(err, "overlap")
+			}
+			if op == "create" {
+				// Only a retry that skips the existing groups can create the rest.
+				re.ErrorContains(manager.CreateAffinityGroups(changes), "already exists")
+				re.NoError(manager.CreateAffinityGroupsIfNotExists(changes))
+				for _, id := range ids {
+					re.True(manager.IsGroupExist(id))
+				}
+			}
+		})
+	}
 }
 
 // TestUpdateAffinityGroupKeyRangesAddToEmptyGroup documents the current failure

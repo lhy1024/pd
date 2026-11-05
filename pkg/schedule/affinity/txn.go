@@ -36,7 +36,6 @@ import (
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/keyutil"
-	"github.com/tikv/pd/pkg/utils/logutil"
 )
 
 const (
@@ -193,11 +192,23 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 	}
 
 	// Step 5: Save the Group and Label information in storage.
-	if err := m.runGroupOpsInTxn(groupOps); err != nil {
+	committed, err := m.runGroupOpsInTxn(groupOps)
+	if err != nil {
 		log.Error("failed to add affinity groups",
 			zap.Int("total-groups", len(filteredChanges)),
+			zap.Int("committed-groups", committed),
 			zap.Error(err))
-		return err
+		// Publish the groups that have committed and treat the failed
+		// transaction as not committed. Only groups with ranges have a label
+		// rule in the plan.
+		committedRules := 0
+		for _, rule := range labelRules[:committed] {
+			if rule != nil {
+				committedRules++
+			}
+		}
+		plan = plan.Prefix(committedRules)
+		filteredGroups, filteredChanges, labelRules = filteredGroups[:committed], filteredChanges[:committed], labelRules[:committed]
 	}
 
 	// Step 6: Save the Group and Label information in memory.
@@ -218,7 +229,7 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 	}
 
 	m.createGroups(filteredGroups, labelRules)
-	return nil
+	return err
 }
 
 // DeleteAffinityGroups deletes multiple affinity groups and their label rules.
@@ -295,11 +306,15 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 	}
 
 	// Step 5: Save the Group and Label information in storage.
-	if err := m.runGroupOpsInTxn(groupOps); err != nil {
+	committed, err := m.runGroupOpsInTxn(groupOps)
+	if err != nil {
 		log.Error("failed to delete affinity groups",
 			zap.Int("total-groups", len(toDelete)),
+			zap.Int("committed-groups", committed),
 			zap.Error(err))
-		return err
+		// Publish the deletions that have committed and treat the failed
+		// transaction as not committed.
+		plan, toDelete = plan.Prefix(committed), toDelete[:committed]
 	}
 
 	// Step 6: Save the Group and Label information in memory.
@@ -311,24 +326,29 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 	}
 
 	m.deleteGroups(toDelete)
-	return nil
+	return err
 }
 
-// runGroupOpsInTxn keeps each group's one or two writes in the same transaction.
+// runGroupOpsInTxn keeps each group's one or two writes in the same transaction
+// and returns how many groups, from the first, have committed.
 // Count the individual operations so a group without a label rule cannot make
 // the next group's pair straddle the transaction limit.
-func (m *Manager) runGroupOpsInTxn(groupOps [][]func(kv.Txn) error) error {
+func (m *Manager) runGroupOpsInTxn(groupOps [][]func(kv.Txn) error) (int, error) {
 	batch := make([]func(kv.Txn) error, 0, etcdutil.MaxEtcdTxnOps)
-	for _, ops := range groupOps {
+	committed := 0
+	for i, ops := range groupOps {
 		if len(batch)+len(ops) > etcdutil.MaxEtcdTxnOps {
 			if err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, batch); err != nil {
-				return err
+				return committed, err
 			}
-			batch = batch[:0]
+			committed, batch = i, batch[:0]
 		}
 		batch = append(batch, ops...)
 	}
-	return endpoint.RunBatchOpInTxn(m.ctx, m.storage, batch)
+	if err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, batch); err != nil {
+		return committed, err
+	}
+	return len(groupOps), nil
 }
 
 // UpdateAffinityGroupPeers updates the leader and voter stores of an affinity group and marks it available.
@@ -532,7 +552,8 @@ func loadAffinityGroupInTxn(txn kv.Txn, groupID string) (*Group, error) {
 }
 
 // UpdateAffinityGroupKeyRanges batch modifies key ranges for multiple affinity groups.
-// Note: Validates add and remove operations separately, then applies both atomically in a single transaction.
+// Note: Validates add and remove operations separately, then writes both in one batch, which spans several
+// transactions when it has more than MaxEtcdTxnOps operations.
 // Currently migration (removing a range from group A and adding the same range to group B in one request)
 // is not supported because add validation checks overlaps against existing ranges before removals are applied.
 func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRanges) error {
@@ -652,12 +673,25 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 		newRemovedLabelRules[op.GroupID] = labelRule
 	}
 
-	// Step 4: Save the Label information in storage.
-	if err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, plan.CommitOps()); err != nil {
+	// Step 4: Save the Label information in storage. Each operation writes one
+	// label rule.
+	labelOps := plan.CommitOps()
+	ruleOps := make([][]func(kv.Txn) error, len(labelOps))
+	for i, op := range labelOps {
+		ruleOps[i] = []func(kv.Txn) error{op}
+	}
+	committed, err := m.runGroupOpsInTxn(ruleOps)
+	if err != nil {
 		log.Error("failed to update affinity group ranges",
 			zap.Int("total-groups", len(addOps)+len(removeOps)),
+			zap.Int("committed-groups", committed),
 			zap.Error(err))
-		return err
+		// Publish the rules that have committed and treat the failed
+		// transaction as not committed. The rules of addOps come first.
+		plan = plan.Prefix(committed)
+		added := min(committed, len(addOps))
+		toAdd, newAddedLabelRules = filterGroups(toAdd, addOps[:added]), filterGroups(newAddedLabelRules, addOps[:added])
+		toRemove, newRemovedLabelRules = filterGroups(toRemove, removeOps[:committed-added]), filterGroups(newRemovedLabelRules, removeOps[:committed-added])
 	}
 
 	// Step 5: Save the Group and Label information in memory.
@@ -674,7 +708,18 @@ func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRange
 
 	m.updateGroupLabelRules(newAddedLabelRules, false)
 	m.updateGroupLabelRules(newRemovedLabelRules, true)
-	return nil
+	return err
+}
+
+// filterGroups returns the entries of m for the groups of ops.
+func filterGroups[V any](m map[string]V, ops []GroupKeyRanges) map[string]V {
+	filtered := make(map[string]V, len(ops))
+	for _, op := range ops {
+		if v, ok := m[op.GroupID]; ok {
+			filtered[op.GroupID] = v
+		}
+	}
+	return filtered
 }
 
 // getCurrentRanges retrieves the current key ranges for a group.
@@ -910,7 +955,9 @@ func flattenRanges(ranges []GroupKeyRanges) []flattenKeyRange {
 }
 
 // reconcileRangeConflictsLocked preserves the raw ranges for administrative
-// repairs, but excludes every conflicting group from affinity scheduling.
+// repairs, but excludes every conflicting group from affinity scheduling. It
+// logs the groups that start or stop conflicting, at the error level if any
+// group starts conflicting.
 // Both metaMutex and the manager write lock must be held.
 func (m *Manager) reconcileRangeConflictsLocked() {
 	ranges := flattenRanges(slices.Collect(maps.Values(m.keyRanges)))
@@ -929,37 +976,27 @@ func (m *Manager) reconcileRangeConflictsLocked() {
 			}
 		}
 	}
+	var conflicting, resolved []string
 	for id, group := range m.groups {
 		_, conflict := conflicts[id]
 		if group.rangeConflict != conflict {
 			group.rangeConflict = conflict
 			m.clearGroupCacheLocked(id)
-			m.rangeConflictsChanged = true
-		}
-	}
-}
-
-func (m *Manager) logRangeConflictsLocked() {
-	if !m.rangeConflictsChanged {
-		return
-	}
-	m.rangeConflictsChanged = false
-	var conflicts []map[string]any
-	for _, id := range slices.Sorted(maps.Keys(m.keyRanges)) {
-		if group, ok := m.groups[id]; ok && group.rangeConflict {
-			ranges := make([]map[string]string, 0, len(m.keyRanges[id].KeyRanges))
-			for _, kr := range m.keyRanges[id].KeyRanges {
-				ranges = append(ranges, map[string]string{
-					"start-key": logutil.RedactString(hex.EncodeToString(kr.StartKey)),
-					"end-key":   logutil.RedactString(hex.EncodeToString(kr.EndKey)),
-				})
+			if conflict {
+				conflicting = append(conflicting, id)
+			} else {
+				resolved = append(resolved, id)
 			}
-			conflicts = append(conflicts, map[string]any{"group-id": id, "ranges": ranges})
 		}
 	}
-	if len(conflicts) > 0 {
+	slices.Sort(conflicting)
+	slices.Sort(resolved)
+	if len(conflicting) > 0 {
 		log.Error("overlapping affinity key ranges; delete or update conflicting groups to restore affinity scheduling",
-			zap.Reflect("conflicting-groups", conflicts))
+			zap.Strings("newly-conflicting-group-ids", conflicting),
+			zap.Strings("resolved-group-ids", resolved))
+	} else if len(resolved) > 0 {
+		log.Info("affinity key range conflicts resolved", zap.Strings("resolved-group-ids", resolved))
 	}
 }
 
@@ -1016,7 +1053,6 @@ func (m *Manager) loadRegionLabel() {
 	}
 
 	m.reconcileRangeConflictsLocked()
-	m.logRangeConflictsLocked()
 
 	log.Info("rebuilt group-label mapping",
 		zap.Int("total-groups", len(m.keyRanges)),
