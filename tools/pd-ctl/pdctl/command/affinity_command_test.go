@@ -16,9 +16,14 @@ package command
 
 import (
 	"encoding/hex"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/tikv/pd/client/constants"
+	pd "github.com/tikv/pd/client/http"
+	"github.com/tikv/pd/pkg/codec"
 )
 
 func TestTiDBGroupKeyRange(t *testing.T) {
@@ -61,5 +66,88 @@ func TestParseAffinityKeyRanges(t *testing.T) {
 	for _, raw := range []string{"0a", "0a,0b,0c", "zz,0b", "0a,zz", "0,1"} {
 		_, err := parseAffinityKeyRanges([]string{raw})
 		re.Error(err, raw)
+	}
+}
+
+func TestCheckCustomGroupKeyspace(t *testing.T) {
+	re := require.New(t)
+	// key returns the Region key of a table in a transaction keyspace, or the
+	// key where the keyspace starts for table 0.
+	key := func(keyspaceID uint32, tableID int64) []byte {
+		raw := codec.MakeKeyspacePrefix(codec.TxnKeyspaceModePrefix, keyspaceID)
+		if tableID > 0 {
+			raw = append(raw, codec.GenerateTableKey(tableID)...)
+		}
+		return codec.EncodeBytes(raw)
+	}
+	keyRange := func(start, end []byte) pd.AffinityGroupKeyRange {
+		return pd.AffinityGroupKeyRange{StartKey: start, EndKey: end}
+	}
+	table := func(keyspaceID uint32, tableID int64) pd.AffinityGroupKeyRange {
+		return keyRange(key(keyspaceID, tableID), key(keyspaceID, tableID+1))
+	}
+	ranges := func(r ...pd.AffinityGroupKeyRange) []pd.AffinityGroupKeyRange { return r }
+	quote := func(r pd.AffinityGroupKeyRange) string { return strconv.Quote(formatAffinityKeyRange(r)) }
+	afterLast := codec.EncodeKeyspaceBoundary(codec.TxnKeyspaceModePrefix, constants.MaxKeyspaceID+1)
+	rawKeyspace := codec.EncodeBytes(codec.MakeKeyspacePrefix(codec.RawKeyspaceModePrefix, 1))
+	for _, tc := range []struct {
+		existing, added []pd.AffinityGroupKeyRange
+		// problem is what the first range that breaks the rule does, or empty
+		// if the ranges lie in one keyspace.
+		problem string
+	}{
+		{added: ranges(table(1, 100), table(1, 200))},
+		{existing: ranges(table(1, 100)), added: ranges(table(1, 200))},
+		// A keyspace ends where the next one starts, and the last one at the
+		// boundary after it.
+		{added: ranges(keyRange(key(1, 0), key(2, 0)))},
+		{added: ranges(keyRange(key(constants.MaxKeyspaceID, 0), afterLast[:]))},
+		// As PD does, the keys are compared with the keyspace boundaries, so a
+		// key between them is in the keyspace whatever its encoding.
+		{added: ranges(keyRange([]byte{'x', 0, 0, 1, 't'}, []byte{'x', 0, 0, 1, 'u'}))},
+		{added: ranges(keyRange(nil, nil)), problem: `key range "," covers the whole key space`},
+		{
+			added:   ranges(keyRange(nil, key(1, 100))),
+			problem: `key range ",7800000174800000ff0000000064000000fc" has no start key`,
+		},
+		{
+			added:   ranges(keyRange(key(1, 100), nil)),
+			problem: `key range "7800000174800000ff0000000064000000fc," starts in keyspace 1 and has no end key`,
+		},
+		{added: ranges(keyRange([]byte{0x0a}, []byte{0x0b})), problem: `key range "0a,0b" does not start in a transaction keyspace`},
+		{
+			added:   ranges(keyRange(rawKeyspace, key(1, 0))),
+			problem: "key range " + quote(keyRange(rawKeyspace, key(1, 0))) + " does not start in a transaction keyspace",
+		},
+		{
+			added:   ranges(keyRange(afterLast[:], append(afterLast[:], 0))),
+			problem: "key range " + quote(keyRange(afterLast[:], append(afterLast[:], 0))) + " does not start in a transaction keyspace",
+		},
+		{
+			added:   ranges(keyRange(key(1, 100), key(3, 100))),
+			problem: "key range " + quote(keyRange(key(1, 100), key(3, 100))) + " starts in keyspace 1 and ends after it",
+		},
+		{
+			added:   ranges(keyRange(key(1, 0), append(key(2, 0), 0))),
+			problem: "key range " + quote(keyRange(key(1, 0), append(key(2, 0), 0))) + " starts in keyspace 1 and ends after it",
+		},
+		{
+			added:   ranges(table(1, 100), table(2, 100)),
+			problem: "key range " + quote(table(2, 100)) + " lies in keyspace 2 and key range " + quote(table(1, 100)) + " in keyspace 1",
+		},
+		// The ranges that the group has are checked with the new ones.
+		{
+			existing: ranges(table(1, 100)),
+			added:    ranges(table(2, 100)),
+			problem:  "key range " + quote(table(2, 100)) + " lies in keyspace 2 and key range " + quote(table(1, 100)) + " in keyspace 1",
+		},
+		{existing: ranges(keyRange(nil, nil)), added: ranges(table(1, 100)), problem: `key range "," covers the whole key space`},
+	} {
+		err := checkCustomGroupKeyspace("poc", tc.existing, tc.added)
+		if tc.problem == "" {
+			re.NoError(err, "%v %v", tc.existing, tc.added)
+			continue
+		}
+		re.EqualError(err, "nextgen requires the key ranges of custom group poc to lie in one keyspace, but "+tc.problem)
 	}
 }
