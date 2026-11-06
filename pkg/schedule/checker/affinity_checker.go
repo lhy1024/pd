@@ -310,8 +310,8 @@ func (c *AffinityChecker) createAffinityOperator(region *core.RegionInfo, group 
 		return nil, false
 	}
 
-	if op, ready := c.prepareAffinityPeerMove(region, group); !ready {
-		return op
+	if op, ready := c.prepareAffinityPeerMove(region, group, roles); !ready {
+		return op, false
 	}
 
 	// Determine operator kind based on whether leader needs to change
