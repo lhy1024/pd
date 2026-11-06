@@ -16,6 +16,7 @@ package affinity
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -86,4 +87,23 @@ func TestTargetCASAndLostReplyWithEtcd(t *testing.T) {
 	re.NoError(err)
 	re.Equal([]string{"g"}, written)
 	re.Equal(*loadStoredGroup(re, store, "g"), m.GetAffinityGroupState("g").Group)
+
+	t.Run("more targets than transaction limit", func(t *testing.T) {
+		re := require.New(t)
+		var targets []GroupTarget
+		for i := range etcdutil.MaxEtcdTxnOps + 3 {
+			id := fmt.Sprintf("batch-%d", i)
+			re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: id}}))
+			targets = append(targets, targetFor(m, id, 1, 1, 2, 3))
+		}
+		commits := 0
+		wrapped.beforeCommit = func() { commits++ }
+		written, err := m.UpdateAffinityGroupTargets(targets)
+		re.NoError(err)
+		re.Len(written, len(targets))
+		re.Equal(len(targets), commits, "each target uses an independent transaction")
+		for _, target := range targets {
+			re.Equal(*target.result(), *loadStoredGroup(re, store, target.Expected.ID))
+		}
+	})
 }

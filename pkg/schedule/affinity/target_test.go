@@ -124,6 +124,10 @@ func TestUpdateAffinityGroupTargets(t *testing.T) {
 	re.NoError(err)
 	re.Equal([]string{id}, written)
 	re.Equal(uint64(3), loadStoredGroup(re, store, id).LeaderStoreID)
+	written, err = manager.UpdateAffinityGroupTargets([]GroupTarget{target})
+	re.NoError(err)
+	re.Equal([]string{id}, written, "an identical retry reports the committed target")
+	re.True(manager.GetAffinityGroupState(id).AffinitySchedulingAllowed)
 }
 
 // TestSyncRecreatedAffinityGroup checks that a group deleted and created again
@@ -131,8 +135,8 @@ func TestUpdateAffinityGroupTargets(t *testing.T) {
 // reloads it and when a conflicting write refreshes it. The new instance keeps
 // the old target, so only its create timestamp tells them apart.
 func TestSyncRecreatedAffinityGroup(t *testing.T) {
-	for _, reload := range []bool{true, false} {
-		t.Run(fmt.Sprintf("reload=%t", reload), func(t *testing.T) {
+	for _, mode := range []string{"reload", "conflict", "current expected"} {
+		t.Run(mode, func(t *testing.T) {
 			re := require.New(t)
 			manager, store := newTargetTestManager(t)
 			old := &Group{ID: "g", CreateTimestamp: 1, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}
@@ -146,17 +150,25 @@ func TestSyncRecreatedAffinityGroup(t *testing.T) {
 			recreated := *old
 			recreated.CreateTimestamp = 2
 			re.NoError(store.RunInTxn(t.Context(), func(txn kv.Txn) error { return store.SaveAffinityGroup(txn, old.ID, &recreated) }))
-			if reload {
+			if mode == "reload" {
 				manager.SyncGroupFromEtcd(&recreated)
 			} else {
-				written, err := manager.UpdateAffinityGroupTargets([]GroupTarget{targetFor(manager, old.ID, 2, 1, 2, 3)})
+				target := targetFor(manager, old.ID, 2, 1, 2, 3)
+				if mode == "current expected" {
+					target.Expected = recreated
+					recreated.LeaderStoreID = 2
+				}
+				written, err := manager.UpdateAffinityGroupTargets([]GroupTarget{target})
 				re.NoError(err)
-				re.Empty(written)
+				re.Equal(mode == "current expected", len(written) == 1)
 			}
 			state := manager.GetAffinityGroupState(old.ID)
 			re.Equal(recreated, state.Group)
 			re.Zero(state.RegionCount)
 			re.Equal(1, state.RangeCount)
+			if mode == "current expected" {
+				re.True(state.AffinitySchedulingAllowed)
+			}
 			written, err := manager.UpdateAffinityGroupTargets([]GroupTarget{targetFor(manager, old.ID, 2, 1, 2, 3)})
 			re.NoError(err)
 			re.Equal([]string{old.ID}, written)
@@ -198,38 +210,6 @@ func TestUpdateAffinityGroupTargetsRejectsInvalidInput(t *testing.T) {
 	re.Equal([]string{"h"}, written)
 	re.Zero(loadStoredGroup(re, store, "g").LeaderStoreID)
 	re.Equal(uint64(1), loadStoredGroup(re, store, "h").LeaderStoreID)
-}
-
-// TestUpdateAffinityGroupTargetsPublishesStoredGroup checks that a written target
-// is reported again when its request is repeated, and that the in-memory group
-// takes the whole stored group, including a newer instance that PD has not seen.
-func TestUpdateAffinityGroupTargetsPublishesStoredGroup(t *testing.T) {
-	re := require.New(t)
-	manager, store := newTargetTestManager(t)
-	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}, {GroupID: "h"}}))
-
-	// A request repeated after its reply was lost reports the target as written.
-	target := targetFor(manager, "g", 1, 1, 2, 3)
-	for range 2 {
-		written, err := manager.UpdateAffinityGroupTargets([]GroupTarget{target})
-		re.NoError(err)
-		re.Equal([]string{"g"}, written)
-		re.True(manager.GetAffinityGroupState("g").AffinitySchedulingAllowed)
-	}
-	re.Equal(manager.GetAffinityGroupState("g").Group, *loadStoredGroup(re, store, "g"))
-
-	// The group was recreated in storage, and the scheduling service decided the
-	// target from the new instance.
-	recreated := manager.GetAffinityGroupState("h").Group
-	recreated.CreateTimestamp++
-	re.NoError(store.RunInTxn(t.Context(), func(txn kv.Txn) error { return store.SaveAffinityGroup(txn, "h", &recreated) }))
-	written, err := manager.UpdateAffinityGroupTargets([]GroupTarget{{Expected: recreated, LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 3}}})
-	re.NoError(err)
-	re.Equal([]string{"h"}, written)
-	state := manager.GetAffinityGroupState("h")
-	re.Equal(*loadStoredGroup(re, store, "h"), state.Group)
-	re.Equal(recreated.CreateTimestamp, state.CreateTimestamp)
-	re.True(state.AffinitySchedulingAllowed)
 }
 
 type fakeTargetWriter struct {
