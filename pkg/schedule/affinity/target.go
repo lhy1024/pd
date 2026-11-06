@@ -95,6 +95,11 @@ func (m *Manager) UpdateAffinityGroupTargets(targets []GroupTarget) ([]string, e
 func (m *Manager) updateGroupTarget(target GroupTarget) (bool, error) {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	return m.updateGroupTargetLocked(target)
+}
+
+// updateGroupTargetLocked requires metaMutex to serialize metadata changes.
+func (m *Manager) updateGroupTargetLocked(target GroupTarget) (bool, error) {
 	var stored *Group
 	written := false
 	err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
