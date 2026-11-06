@@ -91,6 +91,8 @@ type Manager struct {
 	// stays degraded, while a target that is written, synced or confirmed uses
 	// the conditions recorded so far. The first check sets every group.
 	storeConditionsKnown bool
+	balanceTables        map[TableID]*balanceTable
+	lastBalanceVersion   uint64
 
 	// The following members are protected by metaMutex only, not protected by RWMutex.
 	// keyRanges cached in memory to reduce labeler lock contention
@@ -117,6 +119,7 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 		groups:              make(map[string]*runtimeGroupInfo),
 		regions:             make(map[uint64]regionCache),
 		unavailableStores:   make(map[uint64]storeCondition),
+		balanceTables:       make(map[TableID]*balanceTable),
 		keyRanges:           make(map[string]GroupKeyRanges),
 		labelRuleBuffer:     make(map[string]*labeler.LabelRule),
 	}
@@ -191,11 +194,14 @@ func (m *Manager) initGroupLocked(group *Group) {
 		RangeCount:          0,
 	}
 	m.groups[group.ID] = groupInfo
+	m.touchBalanceTableLocked(group.ID)
 	// A group read with a target, for example by the watcher, can be used once
 	// its stores are known to be available. The first availability check sets
 	// the groups loaded before it.
 	if m.storeConditionsKnown {
 		m.setTargetAvailabilityLocked(groupInfo)
+	} else {
+		groupInfo.storeConditionsUnknown = true
 	}
 }
 
@@ -245,6 +251,7 @@ func (m *Manager) resetCountLocked(groupInfo *runtimeGroupInfo) {
 	m.affinityRegionCount -= groupInfo.AffinityRegionCount
 	groupInfo.AffinityRegionCount = 0
 	groupInfo.AffinityVer++
+	m.touchBalanceTableLocked(groupInfo.ID)
 }
 
 func (m *Manager) updateGroupAvailabilityLocked(groupID string, availability groupAvailability) {
@@ -329,6 +336,7 @@ func (m *Manager) deleteGroupLocked(groupID string) {
 	m.labelRuleVer.Add(1)
 	m.clearGroupCacheLocked(groupID)
 	delete(m.groups, groupID)
+	m.removeBalanceGroupLocked(groupID)
 }
 
 func (m *Manager) deleteGroups(groupIDs []string) {
@@ -583,9 +591,13 @@ func (m *Manager) syncGroupTargetLocked(groupInfo *runtimeGroupInfo, group *Grou
 	if sameStoredGroup(&groupInfo.Group, group) && groupInfo.BalancePolicy == group.BalancePolicy && slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs) {
 		return
 	}
+	policyChanged := groupInfo.BalancePolicy != group.BalancePolicy
 	targetChanged := groupInfo.LeaderStoreID != group.LeaderStoreID || !slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs)
 	groupInfo.Group = *group
 	groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
+	if policyChanged {
+		m.touchBalanceTableLocked(groupInfo.ID)
+	}
 	if targetChanged {
 		m.setTargetAvailabilityLocked(groupInfo)
 		m.resetCountLocked(groupInfo)
