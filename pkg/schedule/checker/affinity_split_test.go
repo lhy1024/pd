@@ -15,6 +15,7 @@
 package checker
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/config"
 	"github.com/tikv/pd/pkg/schedule/hbstream"
 	"github.com/tikv/pd/pkg/schedule/operator"
+	"github.com/tikv/pd/pkg/schedule/placement"
 )
 
 func newAffinitySplitTest(t *testing.T) (*mockcluster.Cluster, *AffinityChecker) {
@@ -419,8 +421,9 @@ func TestAffinitySplitBeforeMoveFallbackCache(t *testing.T) {
 				checker.splitAttempts.Put(region.GetID(), attempt)
 			case "evicted":
 				group := cluster.GetAffinityManager().GetAffinityGroupState("split_before_move")
+				roles := map[uint64]placement.PeerRoleType{1: placement.Leader, 2: placement.Voter, 3: placement.Voter}
 				for id := uint64(2); id <= 3; id++ {
-					op, ready := checker.prepareAffinityPeerMove(region.Clone(core.WithNewRegionID(id)), group)
+					op, ready := checker.prepareAffinityPeerMove(region.Clone(core.WithNewRegionID(id)), group, roles)
 					re.False(ready)
 					requireAffinitySplit(t, []*operator.Operator{op})
 				}
@@ -488,6 +491,63 @@ func TestAffinitySplitBeforeMoveUsesCurrentTarget(t *testing.T) {
 	requireAffinitySplit(t, checker.Check(parent))
 	re.NoError(manager.DeleteAffinityGroups([]string{"split_before_move"}, true))
 	re.Empty(checker.Check(parent))
+}
+
+// A learner that moves off a target voter store to a store without a peer
+// copies the Region there, so a large Region splits first, as for a new voter.
+// A swap with a voter that the target drops copies no data.
+func TestAffinitySplitBeforeLearnerMove(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		voters []uint64
+		// learnerStores are the stores that the learner rule allows; nil means
+		// no learner, and empty means any store.
+		learnerStores []string
+		size          int64
+		wantSplit     bool
+	}{
+		{name: "new voter store", voters: []uint64{1, 2, 5}, size: 64, wantSplit: true},
+		{name: "learner moves to a new store", voters: []uint64{1, 2, 4}, learnerStores: []string{"4", "5"}, size: 64, wantSplit: true},
+		{name: "small learner move", voters: []uint64{1, 2, 4}, learnerStores: []string{"4", "5"}, size: 16},
+		{name: "learner swaps with a dropped voter", voters: []uint64{1, 2, 4}, learnerStores: []string{}, size: 64},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			re := require.New(t)
+			c, tc, _ := newLearnerConflictController(t)
+			storeConfig := &config.StoreConfig{RegionMaxSize: "24MiB", RegionSplitSize: "16MiB", RegionSplitKeys: 160000}
+			storeConfig.Adjust()
+			tc.SetStoreConfig(storeConfig)
+			if testCase.learnerStores != nil {
+				// A swap demotes a voter, which needs joint consensus.
+				tc.SetEnableUseJointConsensus(true)
+				re.NoError(tc.GetRuleManager().SetRule(newLearnerRule(testCase.learnerStores...)))
+				putLearner(tc, 1, 4)
+			}
+			region := tc.GetRegion(1).Clone(core.SetApproximateSize(testCase.size), core.SetApproximateKeys(10), core.SetSource(core.Heartbeat))
+			tc.PutRegion(region)
+			re.NoError(createAffinityGroupForTest(tc.GetAffinityManager(), &affinity.Group{
+				ID: "large", LeaderStoreID: 1, VoterStoreIDs: testCase.voters,
+			}, region.GetStartKey(), region.GetEndKey()))
+			ops := c.CheckRegion(region)
+			if testCase.wantSplit {
+				requireAffinitySplit(t, ops)
+				// A child at the split size moves without another split.
+				region = region.Clone(core.WithIncVersion(), core.SetApproximateSize(16))
+				tc.PutRegion(region)
+				ops = c.CheckRegion(region)
+			}
+			re.Len(ops, 1)
+			re.Equal("affinity-move-region", ops[0].Desc())
+			re.Zero(ops[0].Kind() & operator.OpSplit)
+			addsStore5 := false
+			for i := range ops[0].Len() {
+				if step, ok := ops[0].Step(i).(operator.AddLearner); ok && step.ToStore == 5 {
+					addsStore5 = true
+				}
+			}
+			re.Equal(len(testCase.learnerStores) > 0 || slices.Contains(testCase.voters, 5), addsStore5)
+		})
+	}
 }
 
 func TestAffinitySplitBeforeMoveController(t *testing.T) {
