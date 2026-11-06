@@ -247,23 +247,6 @@ func (m *Manager) resetCountLocked(groupInfo *runtimeGroupInfo) {
 	groupInfo.AffinityVer++
 }
 
-func (m *Manager) updateGroupPeers(groupID string, leaderStoreID uint64, voterStoreIDs []uint64) (*GroupState, error) {
-	m.Lock()
-	defer m.Unlock()
-
-	groupInfo, ok := m.groups[groupID]
-	if !ok {
-		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
-	}
-
-	groupInfo.SetAvailability(groupAvailable)
-	groupInfo.LeaderStoreID = leaderStoreID
-	groupInfo.VoterStoreIDs = slices.Clone(voterStoreIDs)
-	m.resetCountLocked(groupInfo)
-
-	return newGroupState(groupInfo), nil
-}
-
 func (m *Manager) updateGroupAvailabilityLocked(groupID string, availability groupAvailability) {
 	groupInfo, ok := m.groups[groupID]
 	if !ok {

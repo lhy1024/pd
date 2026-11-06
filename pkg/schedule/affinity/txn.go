@@ -351,8 +351,14 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 		if group.BalancePolicy.IsFixed() && !group.RegularSchedulingAllowed && leaderStoreID != group.LeaderStoreID {
 			return group, nil
 		}
-		if m.targetWriter != nil {
-			target := GroupTarget{Expected: group.Group, LeaderStoreID: leaderStoreID, VoterStoreIDs: voterStoreIDs}
+		target := GroupTarget{Expected: group.Group, LeaderStoreID: leaderStoreID, VoterStoreIDs: voterStoreIDs}
+		if m.targetWriter == nil {
+			// PD has no affinity watcher. Even an unchanged observation must
+			// check storage after a write whose committed result was unknown.
+			if _, err := m.updateGroupTargetLocked(target); err != nil {
+				return nil, err
+			}
+		} else {
 			if sameStoredGroup(&target.Expected, target.result()) {
 				m.Lock()
 				m.setTargetAvailabilityLocked(m.groups[groupID])
@@ -361,8 +367,8 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 			} else {
 				m.sendObservedTarget(target)
 			}
-			return m.GetAffinityGroupState(groupID), nil
 		}
+		return m.GetAffinityGroupState(groupID), nil
 	}
 
 	// Step 2: Save the Group in storage.
@@ -380,7 +386,13 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	}
 
 	// Step 3: Save the information in memory.
-	return m.updateGroupPeers(groupID, leaderStoreID, voterStoreIDs)
+	m.Lock()
+	defer m.Unlock()
+	m.syncGroupTargetLocked(m.groups[groupID], &group.Group)
+	groupInfo := m.groups[groupID]
+	m.setTargetAvailabilityLocked(groupInfo)
+	m.resetCountLocked(groupInfo)
+	return newGroupState(groupInfo), nil
 }
 
 // UpdateAffinityGroupPolicy updates the balance policy of an affinity group.
