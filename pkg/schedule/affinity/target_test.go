@@ -484,3 +484,57 @@ func TestConfirmationChecksStoredTarget(t *testing.T) {
 	re.Equal(*loadStoredGroup(re, store, "g"), state.Group)
 	re.Equal(uint64(2), state.LeaderStoreID)
 }
+
+func TestClassicFirstWinKeepsCommittedPolicy(t *testing.T) {
+	for _, hasTarget := range []bool{false, true} {
+		t.Run(fmt.Sprintf("has-target-%t", hasTarget), func(t *testing.T) {
+			re := require.New(t)
+			m, store := newTargetTestManager(t)
+			re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}}))
+			if hasTarget {
+				_, err := m.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+				re.NoError(err)
+			}
+			wrapped := &replyTestStorage{AffinityStorage: store, loseReply: true}
+			m.storage = wrapped
+			_, err := m.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+			re.Error(err)
+			re.Empty(m.GetAffinityGroupState("g").BalancePolicy)
+			committed := *loadStoredGroup(re, store, "g")
+			re.Equal(BalancePolicyFixed, committed.BalancePolicy)
+			saves := wrapped.saves
+			m.ExpireAffinityGroup("g")
+			m.ObserveAvailableRegion(generateRegionForTest(10, []uint64{2, 1, 3}, nonOverlappingRange), m.GetAffinityGroupState("g"))
+			re.Equal(saves, wrapped.saves, "stale first-win must not overwrite the committed fixed policy")
+			re.Equal(committed, *loadStoredGroup(re, store, "g"))
+			re.Equal(committed, m.GetAffinityGroupState("g").Group)
+			m.ObserveAvailableRegion(generateRegionForTest(11, []uint64{2, 1, 3}, nonOverlappingRange), m.GetAffinityGroupState("g"))
+			state := m.GetAffinityGroupState("g")
+			re.Equal(BalancePolicyFixed, state.BalancePolicy)
+			re.Equal(uint64(2), state.LeaderStoreID)
+			re.Equal(state.Group, *loadStoredGroup(re, store, "g"))
+		})
+	}
+}
+
+func TestMCSFirstWinKeepsFixedTarget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		re := require.New(t)
+		m, _ := newTargetTestManager(t)
+		re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}}))
+		_, err := m.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2})
+		re.NoError(err)
+		m.DegradeAffinityGroup("g")
+		observed := m.GetAffinityGroupState("g")
+		_, err = m.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+		re.NoError(err)
+		writer := &fakeTargetWriter{reply: func(target GroupTarget) ([]string, error) {
+			return []string{target.Expected.ID}, nil
+		}}
+		m.SetTargetWriter(writer)
+		m.ObserveAvailableRegion(generateRegionForTest(10, []uint64{2, 1}, nonOverlappingRange), observed)
+		synctest.Wait()
+		re.Empty(writer.sent())
+		re.Equal(uint64(1), m.GetAffinityGroupState("g").LeaderStoreID)
+	})
+}
