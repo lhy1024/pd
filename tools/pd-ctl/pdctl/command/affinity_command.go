@@ -55,7 +55,8 @@ func NewAffinityCommand() *cobra.Command {
 		Use:   "affinity",
 		Short: "affinity group commands",
 		Long: `Manage affinity groups. Select a group by its raw ID with --group-id, or by table ID, optional partition ID, and optional keyspace ID.
-IDs that start with _tidb_ belong to TiDB.`,
+IDs that start with _tidb_ are reserved for TiDB. Creating a group in PD does not set the table's AFFINITY attribute in TiDB;
+see create --help for lifecycle details.`,
 		PersistentPreRunE: requirePDClient,
 	}
 	cmd.PersistentFlags().String("group-id", "", "raw affinity group ID; cannot be used with --table-id, --partition-id or --keyspace-id")
@@ -92,7 +93,11 @@ func newAffinityCreateCommand() *cobra.Command {
 		Long: `Create an affinity group.
 A group with a custom ID needs --range. In nextgen, each key range of a custom group needs both keys, and all its key ranges must
 lie in one keyspace. The key ranges of a TiDB table or partition group are derived from its ID, for example --table-id 100
---partition-id 101, or --group-id _tidb_pt_100_p101. Groups of TiDB partition groups are created by TiDB.`,
+--partition-id 101, or --group-id _tidb_pt_100_p101. Groups of TiDB partition groups are created by TiDB.
+
+Creating a _tidb_ group in PD does not set the table's AFFINITY attribute in TiDB. For a table without that attribute,
+SHOW AFFINITY does not list the group, and DROP TABLE does not delete it from PD. Manage such groups explicitly with pd-ctl,
+including deletion after dropping their tables.`,
 		RunE: affinityCreateCommandFunc,
 	}
 	cmd.Flags().StringArray("range", nil, "key range as <start_key>,<end_key> in hex, encoded like Region keys; repeat the flag for more ranges")
