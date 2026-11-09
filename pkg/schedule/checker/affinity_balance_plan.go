@@ -362,7 +362,7 @@ func (c *AffinityChecker) balancePlanGroup(group *affinity.GroupState, ranges af
 				stores[i] = rules.stores[s]
 			}
 			virtual := cloneRegionWithReplacePeerStores(region, rules.stores[leader], stores...)
-			return c.isRegionPlacementRuleSatisfiedWithBestLocation(virtual, false)
+			return virtual != nil && c.isRegionPlacementRuleSatisfiedWithBestLocation(virtual, false)
 		}
 	}
 	return g, balanceGroupMutable
