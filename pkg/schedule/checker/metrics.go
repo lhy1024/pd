@@ -161,7 +161,6 @@ var (
 	affinityBalanceTargetsWritten   = affinityBalanceTargetsCounter.WithLabelValues("written")
 	affinityBalancePlannerStops     = map[balanceplan.StopReason]prometheus.Counter{
 		balanceplan.StopNoGroups: affinityBalancePlannerStopCounter.WithLabelValues(string(balanceplan.StopNoGroups)),
-		balanceplan.StopBound:    affinityBalancePlannerStopCounter.WithLabelValues(string(balanceplan.StopBound)),
 		balanceplan.StopGreedy:   affinityBalancePlannerStopCounter.WithLabelValues("greedy"),
 		balanceplan.StopBudget:   affinityBalancePlannerStopCounter.WithLabelValues(string(balanceplan.StopBudget)),
 		balanceplan.StopCanceled: affinityBalancePlannerStopCounter.WithLabelValues(string(balanceplan.StopCanceled)),
