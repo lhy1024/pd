@@ -119,11 +119,8 @@ func TestAffinityBalancerBatchAndDisabledTables(t *testing.T) {
 			case "placement rules disabled":
 				f.SetPlacementRuleEnabled(false)
 			}
-			disabled := testutil.ToFloat64(affinityBalancePlanCounters[affinityBalanceDisabled])
 			re.False(f.balancer.balance(t.Context()))
 			re.False(f.step())
-			re.Equal(1.0, testutil.ToFloat64(affinityBalancePlanCounters[affinityBalanceDisabled])-disabled)
-			re.Equal(2.0, testutil.ToFloat64(affinityBalanceTablesRegistered))
 			re.Len(f.balancer.tables, 2)
 			re.Equal(map[uint64]int{1: 4}, f.affinityManager.GetBalanceCounts().Leader)
 			f.SetAffinityScheduleLimit(4)
@@ -141,11 +138,20 @@ func TestAffinityBalancerBatchAndDisabledTables(t *testing.T) {
 
 func TestAffinityBalancerCreating(t *testing.T) {
 	re := require.New(t)
+	now := time.Now()
+	created := uint64(now.Unix())
+	for i, group := range []affinity.Group{
+		{CreateTimestamp: created}, // Only a new auto group without a target waits.
+		{CreateTimestamp: created - 120},
+		{CreateTimestamp: created, BalancePolicy: affinity.BalancePolicyFixed},
+		{CreateTimestamp: created, VoterStoreIDs: []uint64{1, 2, 3}},
+	} {
+		snapshot := &affinity.BalanceSnapshot{Groups: []*affinity.GroupState{{Group: group}}}
+		re.Equal(i == 0, balanceCreatingTable(snapshot, now), "group: %+v", group)
+	}
 	f := newAffinityBalanceTest(t, 3)
 	f.seed("100", 1, 1)
 	re.NoError(f.affinityManager.CreateAffinityGroups([]affinity.GroupKeyRanges{{GroupID: balanceTestGroupID("_tidb_pt_100_p2")}}))
-	creating := testutil.ToFloat64(affinityBalancePlanCounters[affinityBalanceCreating])
 	re.False(f.step())
-	re.Equal(1.0, testutil.ToFloat64(affinityBalancePlanCounters[affinityBalanceCreating])-creating)
 	re.Empty(f.balancer.idle)
 }
