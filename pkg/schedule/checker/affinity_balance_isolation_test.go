@@ -16,6 +16,7 @@ package checker
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,7 +29,7 @@ func TestAffinityBalanceSameRoleIsolation(t *testing.T) {
 	re := require.New(t)
 	f := newAffinityBalanceTest(t, 3, "a", "a", "b")
 	for id, zone := range []string{"a", "a", "b"} {
-		f.SetStoreLabel(uint64(id+1), map[string]string{"zone": zone, "id": fmt.Sprint(id + 1)})
+		f.SetStoreLabel(uint64(id+1), map[string]string{"zone": zone, "id": strconv.Itoa(id + 1)})
 	}
 	rule := f.ruleManager.GetRule(placement.DefaultGroupID, placement.DefaultRuleID)
 	rule.Count = 1
