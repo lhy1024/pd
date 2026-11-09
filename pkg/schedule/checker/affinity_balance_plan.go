@@ -353,6 +353,18 @@ func (c *AffinityChecker) balancePlanGroup(group *affinity.GroupState, ranges af
 		}
 	}
 	g.LeaderPinned = !allowed(group.LeaderStoreID, true, true)
+	if len(voterRules) > 1 {
+		scan := newBalanceRegionScan(ranges)
+		region := scan.next(c.cluster)
+		g.CheckTarget = func(voters []int, leader int) bool {
+			stores := make([]uint64, len(voters))
+			for i, s := range voters {
+				stores[i] = rules.stores[s]
+			}
+			virtual := cloneRegionWithReplacePeerStores(region, rules.stores[leader], stores...)
+			return c.isRegionPlacementRuleSatisfiedWithBestLocation(virtual, false)
+		}
+	}
 	return g, balanceGroupMutable
 }
 
