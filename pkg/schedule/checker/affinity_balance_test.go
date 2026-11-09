@@ -476,20 +476,13 @@ func TestAffinityBalanceLearnerInLaterRegion(t *testing.T) {
 	re.Equal(learner, f.GetRegion(later.GetID()).GetStoreLearner(4))
 }
 
-type heartbeatTargetWriter struct {
-	targets []affinity.GroupTarget
+type balanceTestTargetWriter func([]affinity.GroupTarget) ([]string, error)
+
+func (w balanceTestTargetWriter) WriteGroupTargets(_ context.Context, targets []affinity.GroupTarget) ([]string, error) {
+	return w(targets)
 }
 
-func (w *heartbeatTargetWriter) WriteGroupTargets(_ context.Context, targets []affinity.GroupTarget) ([]string, error) {
-	w.targets = append(w.targets, targets...)
-	ids := make([]string, 0, len(targets))
-	for _, target := range targets {
-		ids = append(ids, target.Expected.ID)
-	}
-	return ids, nil
-}
-
-func newMissingHeartbeatBalanceTest(t *testing.T) (*affinityBalanceTest, *core.RegionInfo, *heartbeatTargetWriter) {
+func newMissingHeartbeatBalanceTest(t *testing.T) (*affinityBalanceTest, *core.RegionInfo) {
 	t.Helper()
 	re := require.New(t)
 	enableFastAffinityAvailabilityCheck(t)
@@ -510,49 +503,58 @@ func newMissingHeartbeatBalanceTest(t *testing.T) (*affinityBalanceTest, *core.R
 	// This Region has never entered the cluster cache; the reported [a,b)
 	// Region keeps its original boundaries throughout the test.
 	missing := f.GetRegion(1).Clone(core.WithNewRegionID(2), core.WithStartKey([]byte(balanceTestKey("b"))), core.WithEndKey([]byte(balanceTestKey("c"))), core.SetSource(core.Heartbeat))
-	writer := &heartbeatTargetWriter{}
-	f.affinityManager.SetTargetWriter(writer)
-	return f, missing, writer
+	return f, missing
 }
 
-func TestAffinityBalanceWithRegionGaps(t *testing.T) {
-	re := require.New(t)
-	f, missing, writer := newMissingHeartbeatBalanceTest(t)
-	f.SetMaxAffinityMergeRegionSize(0)
-	re.Nil(f.GetRegion(missing.GetID()))
-	re.True(f.step())
-	re.Len(writer.targets, 1)
-	re.Equal(uint64(3), writer.targets[0].LeaderStoreID)
-	// Deliver the persisted target before the missing Region's first heartbeat.
-	written, err := f.affinityManager.UpdateAffinityGroupTargets(t.Context(), writer.targets)
-	re.NoError(err)
-	re.Equal([]string{writer.targets[0].Expected.ID}, written)
-	f.PutRegion(missing)
-	ops := f.Check(missing)
-	re.Len(ops, 1)
-	operator.ApplyOperator(f.Cluster, ops[0])
-	moved := f.GetRegion(missing.GetID())
-	re.Equal(uint64(3), moved.GetLeader().GetStoreId())
-	re.True(f.ruleManager.FitRegionWithoutCache(f.Cluster, moved).IsSatisfied())
-}
-
-func TestAffinityBalanceWaitsForStorageRegionHeartbeat(t *testing.T) {
-	re := require.New(t)
-	f, heartbeat, writer := newMissingHeartbeatBalanceTest(t)
-	stored := core.NewRegionInfo(heartbeat.GetMeta(), nil, core.SetSource(core.Storage))
-	f.PutRegion(stored)
-	re.True(stored.LoadedFromStorage())
-	re.Nil(stored.GetLeader())
-	before := f.snapshot()
-	re.False(f.step())
-	re.Empty(writer.targets)
-	re.Equal(before.Groups, f.snapshot().Groups)
-	f.PutRegion(heartbeat)
-	f.affinityManager.GetAndCacheRegionAffinityGroupState(heartbeat)
-	re.False(f.GetRegion(heartbeat.GetID()).LoadedFromStorage())
-	re.True(f.step())
-	re.Len(writer.targets, 1)
-	re.Equal(uint64(3), writer.targets[0].LeaderStoreID)
+func TestAffinityBalanceRegionHeartbeat(t *testing.T) {
+	for _, source := range []string{"missing", "storage"} {
+		t.Run(source, func(t *testing.T) {
+			re := require.New(t)
+			f, heartbeat := newMissingHeartbeatBalanceTest(t)
+			f.SetMaxAffinityMergeRegionSize(0)
+			var targets []affinity.GroupTarget
+			f.affinityManager.SetTargetWriter(balanceTestTargetWriter(func(writes []affinity.GroupTarget) ([]string, error) {
+				targets = append(targets, writes...)
+				ids := make([]string, 0, len(writes))
+				for _, target := range writes {
+					ids = append(ids, target.Expected.ID)
+				}
+				return ids, nil
+			}))
+			if source == "storage" {
+				// Region storage persists metadata without a heartbeat's leader.
+				stored := core.NewRegionInfo(heartbeat.GetMeta(), nil, core.SetSource(core.Storage))
+				f.PutRegion(stored)
+				re.True(f.GetRegion(stored.GetID()).LoadedFromStorage())
+				re.Nil(f.GetRegion(stored.GetID()).GetLeader())
+				before := f.snapshot()
+				re.False(f.step())
+				re.Empty(targets)
+				re.Equal(before.Groups, f.snapshot().Groups)
+				f.PutRegion(heartbeat)
+				f.affinityManager.GetAndCacheRegionAffinityGroupState(heartbeat)
+				re.False(f.GetRegion(heartbeat.GetID()).LoadedFromStorage())
+			} else {
+				re.Nil(f.GetRegion(heartbeat.GetID()))
+			}
+			re.True(f.step())
+			re.Len(targets, 1)
+			re.Equal(uint64(3), targets[0].LeaderStoreID)
+			written, err := f.affinityManager.UpdateAffinityGroupTargets(t.Context(), targets)
+			re.NoError(err)
+			re.Equal([]string{targets[0].Expected.ID}, written)
+			if source == "missing" {
+				// Publish the target before the missing Region's first heartbeat.
+				f.PutRegion(heartbeat)
+			}
+			ops := f.Check(heartbeat)
+			re.Len(ops, 1)
+			operator.ApplyOperator(f.Cluster, ops[0])
+			moved := f.GetRegion(heartbeat.GetID())
+			re.Equal(uint64(3), moved.GetLeader().GetStoreId())
+			re.True(f.ruleManager.FitRegionWithoutCache(f.Cluster, moved).IsSatisfied())
+		})
+	}
 }
 
 func TestAffinityBalanceTiFlashRecordRules(t *testing.T) {
@@ -741,6 +743,38 @@ func TestAffinityBalanceRetries(t *testing.T) {
 	}
 }
 
+func TestAffinityBalanceValidationRoundRetry(t *testing.T) {
+	re := require.New(t)
+	enableFastAffinityAvailabilityCheck(t)
+	f := newAffinityBalanceTest(t, 3)
+	const autoGroups = 10
+	ids := f.seed("100", 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		2, 2, 2, 2, 2, 2, 2, 2, 2,
+		3, 3, 3, 3, 3, 3, 3, 3,
+	)
+	f.policy(affinity.BalancePolicyFixed, ids[autoGroups:]...)
+	f.waitForStoreScan(ids[0])
+	// A single leader transfer from store 1 to 3 balances the table. Keep
+	// the groups stable in the snapshot so each round tries one pending Region.
+	for i := range autoGroups {
+		region := f.GetRegion(uint64(i + 1))
+		f.PutRegion(region.Clone(core.WithPendingPeers([]*metapb.Peer{region.GetStorePeer(2)})))
+	}
+	before := f.snapshot()
+	for _, id := range ids[:autoGroups] {
+		re.Equal(affinity.PhaseStable, before.Group(id).Phase)
+	}
+	res, err := f.planBalanceTargets(t.Context(), before)
+	re.NoError(err)
+	re.Equal(10, res.rounds)
+	re.Empty(res.targets)
+	re.True(res.retry)
+	re.False(f.step())
+	re.Equal(before.Groups, f.snapshot().Groups)
+	re.WithinDuration(time.Now().Add(30*time.Second), f.balancer.idle[balanceTestTable()].until, 2*time.Second)
+}
+
 func TestAffinityBalanceRechecksStoreFilters(t *testing.T) {
 	for _, reason := range []string{"busy", "store limit", "special use", "low space"} {
 		t.Run(reason, func(t *testing.T) {
@@ -874,74 +908,72 @@ func TestAffinityBalanceCommitRejectsChangedInputs(t *testing.T) {
 	}
 }
 
-func TestAffinityBalanceCommitAllowsOtherGroupChanges(t *testing.T) {
-	re := require.New(t)
-	enableFastAffinityAvailabilityCheck(t)
-	f := newAffinityBalanceTest(t, 3)
-	ids := f.seed("100", 1, 1, 1)
-	f.waitForStoreScan(ids[0])
-	f.policy(affinity.BalancePolicyFixed, ids[1])
-	snapshot := f.snapshot()
-	revision := f.ruleManager.GetRevision()
-	res, err := f.planBalanceTargets(t.Context(), snapshot)
-	re.NoError(err)
-	re.Len(res.targets, 1)
-	re.Equal(ids[0], res.targets[0].ID)
-	re.NotEqual(uint64(1), res.targets[0].LeaderStoreID)
-	called := false
-	var changedVersion uint64
-	beforeAffinityBalanceCommit(t, func() {
-		if called {
-			return
-		}
-		called = true
-		_, err := f.affinityManager.UpdateAffinityGroupPeers(ids[1], res.targets[0].LeaderStoreID, []uint64{1, 2, 3})
-		re.NoError(err)
-		var ok bool
-		changedVersion, ok = f.affinityManager.GetBalanceVersion(balanceTestTable())
-		re.True(ok)
-		re.Greater(changedVersion, snapshot.Version)
-	})
-	written, reason, err := f.commitBalancePlan(t.Context(), snapshot, res, revision)
-	re.NoError(err)
-	re.True(called)
-	re.Equal([]string{ids[0]}, written)
-	re.Empty(reason)
-	re.Equal(*res.targets[0], f.affinityManager.GetAffinityGroupState(ids[0]).Group)
-	re.Equal(res.targets[0].LeaderStoreID, f.affinityManager.GetAffinityGroupState(ids[1]).LeaderStoreID)
-	// The other group moved to the planned leader, so this round need not improve the table.
-	re.Equal([2]int{12, 4}, balanceTableScore(f.affinityManager, balanceTestTable()))
-	version, ok := f.affinityManager.GetBalanceVersion(balanceTestTable())
-	re.True(ok)
-	re.Greater(version, changedVersion)
+func TestAffinityBalanceCommitChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		fixedGroups int
+	}{
+		{name: "other group", fixedGroups: 2},
+		{name: "partial write", fixedGroups: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			re := require.New(t)
+			enableFastAffinityAvailabilityCheck(t)
+			f := newAffinityBalanceTest(t, 3)
+			ids := f.seed("100", 1, 1, 1, 1)
+			fixed := ids[1 : 1+tc.fixedGroups]
+			f.policy(affinity.BalancePolicyFixed, fixed...)
+			f.waitForStoreScan(ids[0])
+			snapshot, revision := f.snapshot(), f.ruleManager.GetRevision()
+			res, err := f.planBalanceTargets(t.Context(), snapshot)
+			re.NoError(err)
+			re.Len(res.targets, len(ids)-len(fixed))
+			first := res.targets[0]
+			changedID := ids[1]
+			if tc.name == "partial write" {
+				second := res.targets[1]
+				re.NotEqual(first.ID, second.ID)
+				re.NotEqual(first.LeaderStoreID, second.LeaderStoreID)
+				changedID = second.ID
+			}
+			var beforeCommit *affinity.BalanceSnapshot
+			beforeAffinityBalanceCommit(t, func() {
+				if beforeCommit != nil {
+					return
+				}
+				_, err := f.affinityManager.UpdateAffinityGroupPeers(changedID, first.LeaderStoreID, []uint64{1, 2, 3})
+				re.NoError(err)
+				beforeCommit = f.snapshot()
+			})
+			written, reason, err := f.commitBalancePlan(t.Context(), snapshot, res, revision)
+			re.NoError(err)
+			re.Empty(reason)
+			re.Equal([]string{first.ID}, written)
+			re.NotNil(beforeCommit)
+			re.Greater(beforeCommit.Version, snapshot.Version)
+			afterCommit := f.snapshot()
+			re.Greater(afterCommit.Version, beforeCommit.Version)
+			re.Equal(*first, afterCommit.Group(first.ID).Group)
+			re.Equal(beforeCommit.Group(changedID).Group, afterCommit.Group(changedID).Group)
+			// Both written layouts use the same leader until the next plan.
+			re.Equal([2]int{27, 5}, balanceTableScore(f.affinityManager, balanceTestTable()))
 
-	// Once Regions reach their targets, the next round can improve the table
-	// without moving the fixed group that changed during the previous commit.
-	f.settle()
-	fixed := f.affinityManager.GetAffinityGroupState(ids[1]).Group
-	snapshot = f.snapshot()
-	res, err = f.planBalanceTargets(t.Context(), snapshot)
-	re.NoError(err)
-	re.Len(res.targets, 1)
-	re.Equal(ids[0], res.targets[0].ID)
-	written, reason, err = f.commitBalancePlan(t.Context(), snapshot, res, f.ruleManager.GetRevision())
-	re.NoError(err)
-	re.Empty(reason)
-	re.Equal([]string{ids[0]}, written)
-	score := balanceTableScore(f.affinityManager, balanceTestTable())
-	re.LessOrEqual(score[0], 12)
-	if score[0] == 12 {
-		re.LessOrEqual(score[1], 2)
+			f.settle()
+			snapshot = f.snapshot()
+			res, err = f.planBalanceTargets(t.Context(), snapshot)
+			re.NoError(err)
+			re.Len(res.targets, 1)
+			re.NotContains(fixed, res.targets[0].ID)
+			written, reason, err = f.commitBalancePlan(t.Context(), snapshot, res, f.ruleManager.GetRevision())
+			re.NoError(err)
+			re.Empty(reason)
+			re.Equal([]string{res.targets[0].ID}, written)
+			re.Equal([2]int{27, 3}, balanceTableScore(f.affinityManager, balanceTestTable()))
+			for _, id := range fixed {
+				re.Equal(afterCommit.Group(id).Group, f.affinityManager.GetAffinityGroupState(id).Group)
+			}
+		})
 	}
-	re.Equal(fixed, f.affinityManager.GetAffinityGroupState(ids[1]).Group)
-}
-
-type balanceExecutionTargetWriter struct {
-	write func([]affinity.GroupTarget) ([]string, error)
-}
-
-func (w balanceExecutionTargetWriter) WriteGroupTargets(_ context.Context, targets []affinity.GroupTarget) ([]string, error) {
-	return w.write(targets)
 }
 
 func TestAffinityBalanceExecutionAfterRegionChanges(t *testing.T) {
@@ -1037,7 +1069,7 @@ func TestAffinityBalanceExecutionAfterRegionChanges(t *testing.T) {
 			}
 			firstWins := make(chan firstWin, 1)
 			var firstWinCount atomic.Int32
-			f.affinityManager.SetTargetWriter(balanceExecutionTargetWriter{write: func(targets []affinity.GroupTarget) ([]string, error) {
+			f.affinityManager.SetTargetWriter(balanceTestTargetWriter(func(targets []affinity.GroupTarget) ([]string, error) {
 				firstWinCount.Add(1)
 				expired := f.affinityManager.GetAffinityGroupState(id)
 				ids, err := f.affinityManager.UpdateAffinityGroupTargets(t.Context(), targets)
@@ -1046,7 +1078,7 @@ func TestAffinityBalanceExecutionAfterRegionChanges(t *testing.T) {
 				default:
 				}
 				return ids, err
-			}})
+			}))
 			re.Empty(f.Check(region))
 			var observed firstWin
 			select {
@@ -1115,21 +1147,6 @@ func TestAffinityBalanceOverlappingRulesAllowLeaderBalance(t *testing.T) {
 	re.Equal([2]int{16, 2}, balanceTableScore(f.affinityManager, balanceTestTable()))
 	for _, group := range f.snapshot().Groups {
 		re.Equal([]uint64{1, 2, 3, 4}, group.VoterStoreIDs)
-	}
-}
-
-func TestAffinityBalanceCreationGrace(t *testing.T) {
-	re := require.New(t)
-	now := time.Now()
-	created := uint64(now.Unix())
-	for i, group := range []affinity.Group{
-		{CreateTimestamp: created}, // Only a new auto group without a target waits.
-		{CreateTimestamp: created - 120},
-		{CreateTimestamp: created, BalancePolicy: affinity.BalancePolicyFixed},
-		{CreateTimestamp: created, VoterStoreIDs: []uint64{1, 2, 3}},
-	} {
-		snapshot := &affinity.BalanceSnapshot{Groups: []*affinity.GroupState{{Group: group}}}
-		re.Equal(i == 0, balanceCreatingTable(snapshot, now), "group: %+v", group)
 	}
 }
 

@@ -164,6 +164,17 @@ func TestAffinityBalancerBatchAndDisabledTables(t *testing.T) {
 
 func TestAffinityBalancerCreating(t *testing.T) {
 	re := require.New(t)
+	now := time.Now()
+	created := uint64(now.Unix())
+	for i, group := range []affinity.Group{
+		{CreateTimestamp: created}, // Only a new auto group without a target waits.
+		{CreateTimestamp: created - 120},
+		{CreateTimestamp: created, BalancePolicy: affinity.BalancePolicyFixed},
+		{CreateTimestamp: created, VoterStoreIDs: []uint64{1, 2, 3}},
+	} {
+		snapshot := &affinity.BalanceSnapshot{Groups: []*affinity.GroupState{{Group: group}}}
+		re.Equal(i == 0, balanceCreatingTable(snapshot, now), "group: %+v", group)
+	}
 	f := newAffinityBalanceTest(t, 3)
 	f.seed("100", 1, 1)
 	re.NoError(f.affinityManager.CreateAffinityGroups([]affinity.GroupKeyRanges{{GroupID: balanceTestGroupID("_tidb_pt_100_p2")}}))
@@ -181,7 +192,7 @@ func TestAffinityBalancerSkippedAndPartialWrites(t *testing.T) {
 			ids := f.seed("100", 1, 1, 1, 1)
 			f.balancer.enqueue(ids[0])
 			counts, calls := f.affinityManager.GetBalanceCounts(), 0
-			f.affinityManager.SetTargetWriter(balanceExecutionTargetWriter{write: func(targets []affinity.GroupTarget) ([]string, error) {
+			f.affinityManager.SetTargetWriter(balanceTestTargetWriter(func(targets []affinity.GroupTarget) ([]string, error) {
 				calls++
 				if outcome == "partial" {
 					return []string{targets[0].Expected.ID}, errors.New("second transaction failed")
@@ -190,7 +201,7 @@ func TestAffinityBalancerSkippedAndPartialWrites(t *testing.T) {
 					f.policy(affinity.BalancePolicyFixed, ids[0])
 				}
 				return nil, nil
-			}})
+			}))
 			written, err := f.balancer.step(t.Context(), balanceTestTable(), counts)
 			re.Equal(outcome == "partial", written)
 			if outcome == "partial" {
@@ -368,7 +379,7 @@ func TestAffinityBalancerCancellationAndNotReadyAreSkipped(t *testing.T) {
 			if outcome == "planning canceled" {
 				cancel()
 			}
-			f.affinityManager.SetTargetWriter(balanceExecutionTargetWriter{write: func([]affinity.GroupTarget) ([]string, error) {
+			f.affinityManager.SetTargetWriter(balanceTestTargetWriter(func([]affinity.GroupTarget) ([]string, error) {
 				switch outcome {
 				case "write canceled":
 					cancel()
@@ -378,7 +389,7 @@ func TestAffinityBalancerCancellationAndNotReadyAreSkipped(t *testing.T) {
 				default:
 					return nil, errors.New("write failed")
 				}
-			}})
+			}))
 			core, logs := observer.New(zap.WarnLevel)
 			t.Cleanup(log.ReplaceGlobals(zap.New(core), nil))
 			before := testutil.ToFloat64(affinityBalancePlanCounters[affinityBalanceError])
@@ -409,10 +420,10 @@ func TestAffinityBalancerHonorsUnsupportedTargetCooldown(t *testing.T) {
 				f.balancer.enqueue(other[0])
 
 				var calls int
-				m.SetTargetWriter(balanceExecutionTargetWriter{write: func([]affinity.GroupTarget) ([]string, error) {
+				m.SetTargetWriter(balanceTestTargetWriter(func([]affinity.GroupTarget) ([]string, error) {
 					calls++
 					return nil, errors.Annotate(affinity.ErrTargetWriterUnsupported, "404 Not Found")
-				}})
+				}))
 				core, logs := observer.New(zap.WarnLevel)
 				t.Cleanup(log.ReplaceGlobals(zap.New(core), nil))
 				failures := testutil.ToFloat64(affinityBalancePlanCounters[affinityBalanceError])
