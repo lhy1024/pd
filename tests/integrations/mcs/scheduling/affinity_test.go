@@ -98,15 +98,7 @@ func TestAffinityFirstWinTargetWriteUnavailable(t *testing.T) {
 	pd.SetSchedulingCluster(tc)
 	cluster := primary.GetCluster()
 	cluster.SetPrepared()
-	for id := uint64(1); id <= 3; id++ {
-		tests.MustPutStore(re, pd, &metapb.Store{Id: id, State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving})
-		// MustPutStore's default statistics are low-space. Keep first-win
-		// independent of when the availability check first inspects the group.
-		tests.MustHandleStoreHeartbeat(re, pd, &pdpb.StoreHeartbeatRequest{
-			Header: testutil.NewRequestHeader(leader.GetClusterID()),
-			Stats:  &pdpb.StoreStats{StoreId: id, Capacity: 10 * units.GiB, Available: 9 * units.GiB, UsedSize: units.GiB},
-		})
-	}
+	putAffinityStores(re, pd, leader)
 	pdManager, err := leader.GetServer().GetAffinityManager()
 	re.NoError(err)
 	// Avoid bootstrap keyspace label boundaries, which would make the split
@@ -119,18 +111,8 @@ func TestAffinityFirstWinTargetWriteUnavailable(t *testing.T) {
 		g := manager.GetAffinityGroupState(groupID)
 		return g != nil && g.RangeCount == 1 && cluster.GetStore(3) != nil
 	})
-	counter := func() float64 {
-		metrics, err := prometheus.DefaultGatherer.Gather()
-		re.NoError(err)
-		for _, metric := range metrics {
-			if metric.GetName() == "pd_affinity_target_write_failures_total" {
-				return metric.GetMetric()[0].GetCounter().GetValue()
-			}
-		}
-		re.FailNow("target write failure metric not registered")
-		return 0
-	}
-	before := counter()
+
+	before := affinityWriteFailures(re)
 
 	client, conn := testutil.MustNewGrpcClient(re, leader.GetAddr())
 	t.Cleanup(func() { re.NoError(conn.Close()) })
@@ -155,7 +137,7 @@ func TestAffinityFirstWinTargetWriteUnavailable(t *testing.T) {
 	}
 	testutil.Eventually(re, func() bool {
 		heartbeat()
-		return failures.Load() > 0 && counter() > before
+		return failures.Load() > 0 && affinityWriteFailures(re) > before
 	})
 	re.NotNil(cluster.GetRegion(100), "Region heartbeats must still reach scheduling")
 	response, err := primary.GetHTTPClient().Get(leader.GetAddr() + "/health")
@@ -186,6 +168,16 @@ func TestAffinityFirstWinTargetWriteUnavailable(t *testing.T) {
 }
 
 func TestAffinityFirstWinAfterPDLeaderStops(t *testing.T) {
+	testAffinityFirstWinAfterLeaderStops(t, "PD")
+}
+
+func TestAffinityFirstWinAfterSchedulingPrimaryStops(t *testing.T) {
+	for _, mode := range []string{"switch", "restart"} {
+		t.Run(mode, func(t *testing.T) { testAffinityFirstWinAfterLeaderStops(t, mode) })
+	}
+}
+
+func testAffinityFirstWinAfterLeaderStops(t *testing.T, mode string) {
 	re := require.New(t)
 	ctx := t.Context()
 	re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/schedule/changeCoordinatorTicker", "return(true)"))
@@ -200,22 +192,18 @@ func TestAffinityFirstWinAfterPDLeaderStops(t *testing.T) {
 	leaderName := pd.WaitLeader()
 	re.NotEmpty(leaderName)
 	re.NoError(leader.BootstrapCluster())
-	tc, err := tests.NewTestSchedulingCluster(ctx, 1, pd)
+	schedulingCount := 1
+	if mode == "switch" {
+		schedulingCount = 2
+	}
+	tc, err := tests.NewTestSchedulingCluster(ctx, schedulingCount, pd)
 	re.NoError(err)
 	t.Cleanup(tc.Destroy)
 	primary := tc.WaitForPrimaryServing(re)
 	pd.SetSchedulingCluster(tc)
 	cluster := primary.GetCluster()
 	cluster.SetPrepared()
-	for id := uint64(1); id <= 3; id++ {
-		tests.MustPutStore(re, pd, &metapb.Store{Id: id, State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving})
-		// MustPutStore's default statistics are low-space. Keep first-win
-		// independent of when the availability check first inspects the group.
-		tests.MustHandleStoreHeartbeat(re, pd, &pdpb.StoreHeartbeatRequest{
-			Header: testutil.NewRequestHeader(leader.GetClusterID()),
-			Stats:  &pdpb.StoreStats{StoreId: id, Capacity: 10 * units.GiB, Available: 9 * units.GiB, UsedSize: units.GiB},
-		})
-	}
+	putAffinityStores(re, pd, leader)
 	manager := cluster.GetAffinityManager()
 	// Establish membership before the experiment, independently of a failed
 	// target write that might otherwise discover the initial leader.
@@ -262,24 +250,65 @@ func TestAffinityFirstWinAfterPDLeaderStops(t *testing.T) {
 	}
 	// A successful write establishes that scheduling has learned the old URL.
 	firstWin(100, "b", "c")
-	writeFailures := func() float64 {
-		metrics, err := prometheus.DefaultGatherer.Gather()
-		re.NoError(err)
-		for _, metric := range metrics {
-			if metric.GetName() == "pd_affinity_target_write_failures_total" {
-				return metric.GetMetric()[0].GetCounter().GetValue()
-			}
+
+	before := affinityWriteFailures(re)
+	if mode == "PD" {
+		re.NoError(leader.Stop())
+		newLeaderName := pd.WaitLeaderChange(leaderName)
+		re.NotEmpty(newLeaderName)
+		leader = pd.GetServer(newLeaderName)
+	} else {
+		oldAddr := primary.GetAddr()
+		tc.DestroyServer(oldAddr)
+		if mode == "restart" {
+			re.NoError(tc.AddServer(oldAddr))
 		}
-		re.FailNow("target write failure metric not registered")
-		return 0
+		primary = tc.WaitForPrimaryServing(re)
+		cluster = primary.GetCluster()
+		cluster.SetPrepared()
+		manager = cluster.GetAffinityManager()
+		testutil.Eventually(re, func() bool {
+			g := manager.GetAffinityGroupState("leader-switch-100")
+			return g != nil && g.LeaderStoreID == 1 && len(g.VoterStoreIDs) == 3
+		})
+		// Replaying an old decision after failover must preserve the restored target.
+		pdManager, err := leader.GetServer().GetAffinityManager()
+		re.NoError(err)
+		stale := manager.GetAffinityGroupState("leader-switch-100").Group
+		stale.LeaderStoreID, stale.VoterStoreIDs = 0, nil
+		written, err := pdManager.UpdateAffinityGroupTargets([]affinity.GroupTarget{{Expected: stale, LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 3}}})
+		re.NoError(err)
+		re.Empty(written)
+		re.Equal(uint64(1), pdManager.GetAffinityGroupState(stale.ID).LeaderStoreID)
 	}
-	before := writeFailures()
-	re.NoError(leader.Stop())
-	newLeaderName := pd.WaitLeaderChange(leaderName)
-	re.NotEmpty(newLeaderName)
-	leader = pd.GetServer(newLeaderName)
 	// Do not enable fastUpdateMember: failed writes must refresh membership
 	// before the default one-minute membership ticker can rescue the write.
 	firstWin(101, "d", "e")
-	re.Greater(writeFailures(), before, "writing to the stopped leader must trigger membership refresh")
+	if mode == "PD" {
+		re.Greater(affinityWriteFailures(re), before, "writing to the stopped leader must trigger membership refresh")
+	}
+}
+
+func putAffinityStores(re *require.Assertions, pd *tests.TestCluster, leader *tests.TestServer) {
+	for id := uint64(1); id <= 3; id++ {
+		tests.MustPutStore(re, pd, &metapb.Store{Id: id, State: metapb.StoreState_Up, NodeState: metapb.NodeState_Serving})
+		// MustPutStore's default statistics are low-space. Keep first-win
+		// independent of when the availability check first inspects the group.
+		tests.MustHandleStoreHeartbeat(re, pd, &pdpb.StoreHeartbeatRequest{
+			Header: testutil.NewRequestHeader(leader.GetClusterID()),
+			Stats:  &pdpb.StoreStats{StoreId: id, Capacity: 10 * units.GiB, Available: 9 * units.GiB, UsedSize: units.GiB},
+		})
+	}
+}
+
+func affinityWriteFailures(re *require.Assertions) float64 {
+	metrics, err := prometheus.DefaultGatherer.Gather()
+	re.NoError(err)
+	for _, metric := range metrics {
+		if metric.GetName() == "pd_affinity_target_write_failures_total" {
+			return metric.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	re.FailNow("target write failure metric not registered")
+	return 0
 }

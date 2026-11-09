@@ -64,10 +64,12 @@ func TestFirstWinSingleFlightAndGlobalBackoff(t *testing.T) {
 		synctest.Wait()
 		re.Equal(1, calls, "failure delays all groups")
 		time.Sleep(time.Second)
+		region = generateRegionForTest(10, []uint64{1, 3}, nonOverlappingRange)
 		observe("h")
 		synctest.Wait()
 		re.Equal(2, calls)
 		re.True(m.GetAffinityGroupState("h").AffinitySchedulingAllowed)
+		re.Equal([]uint64{1, 3}, m.GetAffinityGroupState("h").VoterStoreIDs, "patrol replaces the discarded observation")
 		re.Zero(m.GetAffinityGroupState("g").LeaderStoreID, "discarded observations are never replayed")
 		observe("g")
 		synctest.Wait()
@@ -76,48 +78,98 @@ func TestFirstWinSingleFlightAndGlobalBackoff(t *testing.T) {
 	})
 }
 
-func TestFirstWinCancelsInFlight(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		re := require.New(t)
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		m := newTargetTestManagerWith(t, ctx, storage.NewStorageWithMemoryBackend(), time.Now())
-		re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}}))
-		calls := 0
-		stopped := false
-		m.SetTargetWriter(targetWriterFunc(func(ctx context.Context, _ []GroupTarget) ([]string, error) {
-			calls++
-			<-ctx.Done()
-			stopped = true
-			return nil, ctx.Err()
-		}))
-		region := generateRegionForTest(10, []uint64{1, 2}, nonOverlappingRange)
-		m.ObserveAvailableRegion(region, m.GetAffinityGroupState("g"))
-		synctest.Wait()
-		re.Equal(1, calls)
-		cancel()
-		synctest.Wait()
-		re.True(stopped)
-		m.ObserveAvailableRegion(region, m.GetAffinityGroupState("g"))
-		synctest.Wait()
-		re.Equal(1, calls)
-	})
-}
-
-func TestFirstWinReplyKeepsNewerWatcherTarget(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		re := require.New(t)
-		m, _ := newTargetTestManager(t)
-		re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}}))
-		newer := m.GetAffinityGroupState("g").Group
-		newer.LeaderStoreID, newer.VoterStoreIDs = 2, []uint64{1, 2}
-		m.SetTargetWriter(targetWriterFunc(func(_ context.Context, _ []GroupTarget) ([]string, error) {
-			// An admin write reaches the watcher before the old HTTP response.
-			m.SyncGroupFromEtcd(&newer)
-			return []string{"g"}, nil
-		}))
-		m.ObserveAvailableRegion(generateRegionForTest(10, []uint64{1, 2}, nonOverlappingRange), m.GetAffinityGroupState("g"))
-		synctest.Wait()
-		re.Equal(newer, m.GetAffinityGroupState("g").Group)
-	})
+func TestFirstWinRecovery(t *testing.T) {
+	for _, fault := range []string{"timeout", "lost reply", "delayed watcher", "primary restart", "late reply"} {
+		t.Run(fault, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				re := require.New(t)
+				pd, store := newTargetTestManager(t)
+				re.NoError(pd.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}}))
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				m := newTargetTestManagerWith(t, ctx, storage.NewStorageWithMemoryBackend(), time.Now())
+				m.applyStoreConditions(map[uint64]storeCondition{})
+				initial := pd.GetAffinityGroupState("g").Group
+				m.SyncGroupFromEtcd(&initial)
+				calls := 0
+				var sent []GroupTarget
+				writer := targetWriterFunc(func(ctx context.Context, targets []GroupTarget) ([]string, error) {
+					calls++
+					sent = append(sent, targets[0])
+					if calls == 1 {
+						switch fault {
+						case "timeout":
+							request, stop := context.WithTimeout(ctx, 3*time.Second)
+							defer stop()
+							<-request.Done()
+							return nil, request.Err()
+						case "primary restart":
+							<-ctx.Done()
+							return nil, ctx.Err()
+						}
+					}
+					written, err := pd.UpdateAffinityGroupTargets(targets)
+					if calls == 1 && fault == "lost reply" {
+						return nil, errors.New("response lost after PD commit")
+					}
+					if calls == 1 && fault == "late reply" {
+						newer, updateErr := pd.UpdateAffinityGroupPeers("g", 2, []uint64{1, 2})
+						if updateErr != nil {
+							return nil, updateErr
+						}
+						m.SyncGroupFromEtcd(&newer.Group)
+					}
+					return written, err
+				})
+				m.SetTargetWriter(writer)
+				observe := func(voters []uint64) {
+					m.ObserveAvailableRegion(generateRegionForTest(10, voters, nonOverlappingRange), m.GetAffinityGroupState("g"))
+					synctest.Wait()
+				}
+				observe([]uint64{1, 2})
+				re.Equal(1, calls)
+				if fault == "timeout" {
+					time.Sleep(3 * time.Second)
+					synctest.Wait()
+				}
+				if fault == "primary restart" {
+					cancel()
+					synctest.Wait()
+					re.False(m.targetWriteInFlight, "the old primary's sender has exited")
+					time.Sleep(time.Second)
+					observe([]uint64{1, 3})
+					re.Equal(1, calls, "a canceled primary cannot start another write")
+					m, _ = newTargetTestManager(t)
+					m.applyStoreConditions(map[uint64]storeCondition{})
+					m.SyncGroupFromEtcd(loadStoredGroup(re, store, "g"))
+					m.SetTargetWriter(writer)
+				}
+				if fault != "late reply" {
+					re.Zero(m.GetAffinityGroupState("g").LeaderStoreID, "HTTP completion cannot publish a target")
+				}
+				time.Sleep(time.Second)
+				observe([]uint64{1, 3})
+				stored := loadStoredGroup(re, store, "g")
+				switch fault {
+				case "timeout", "primary restart":
+					re.Equal([]uint64{1, 3}, stored.VoterStoreIDs, "a later patrol supplies the new observation")
+				case "lost reply", "delayed watcher":
+					re.Equal([]uint64{1, 2}, stored.VoterStoreIDs, "an observation with stale Expected cannot overwrite a commit")
+				case "late reply":
+					re.Equal(uint64(2), m.GetAffinityGroupState("g").LeaderStoreID)
+					re.Equal(1, calls, "the watcher already published the admin target")
+				}
+				written, err := pd.UpdateAffinityGroupTargets([]GroupTarget{sent[len(sent)-1]})
+				re.NoError(err)
+				re.Equal(fault == "timeout" || fault == "primary restart", len(written) == 1)
+				m.SyncGroupFromEtcd(stored)
+				re.Equal(*stored, m.GetAffinityGroupState("g").Group)
+				re.True(m.GetAffinityGroupState("g").AffinitySchedulingAllowed)
+				re.False(m.targetWriteInFlight)
+				before := calls
+				observe([]uint64{1, 3})
+				re.Equal(before, calls, "patrol stops initializing a published healthy group")
+			})
+		})
+	}
 }
