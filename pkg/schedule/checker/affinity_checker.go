@@ -49,6 +49,7 @@ type AffinityChecker struct {
 	affinityManager  *affinity.Manager
 	conf             config.CheckerConfigProvider
 	recentMergeCache *cache.TTLUint64
+	splitAttempts    cache.Cache
 	startTime        time.Time
 	balancer         *affinityBalancer
 }
@@ -61,6 +62,7 @@ func NewAffinityChecker(ctx context.Context, cluster sche.CheckerCluster, conf c
 		affinityManager:  cluster.GetAffinityManager(),
 		conf:             conf,
 		recentMergeCache: cache.NewIDTTL(ctx, gcInterval, recentMergeTTL),
+		splitAttempts:    cache.NewCache(affinitySplitCacheSize, cache.LRUCache),
 		startTime:        time.Now(),
 	}
 	if c.affinityManager != nil {
@@ -179,6 +181,8 @@ func (c *AffinityChecker) Check(region *core.RegionInfo) []*operator.Operator {
 
 	// For a Region already in affinity, try to merge it with neighboring affinity Regions.
 	if isAffinity {
+		// The move is done, so a later move of the Region tries to split it again.
+		c.splitAttempts.Remove(region.GetID())
 		return c.mergeCheck(region, group)
 	}
 
@@ -289,6 +293,10 @@ func (c *AffinityChecker) createAffinityOperator(region *core.RegionInfo, group 
 		return nil
 	}
 
+	if op, ready := c.prepareAffinityPeerMove(region, group); !ready {
+		return op
+	}
+
 	// Determine operator kind based on whether leader needs to change
 	kind := operator.OpAffinity
 	if currentLeaderStoreID != group.LeaderStoreID {
@@ -344,6 +352,7 @@ func (c *AffinityChecker) affinityTargetStoreStatus(region *core.RegionInfo, gro
 // - Does NOT skip hot spots regions
 // - Only merges regions within the same affinity group
 // - Skips regions that are recently merged
+// - Skips regions whose size is not reported yet
 func (c *AffinityChecker) mergeCheck(region *core.RegionInfo, group *affinity.GroupState) []*operator.Operator {
 	// Skip merge during startup TTL period
 	if time.Since(c.startTime) < recentMergeTTL {
@@ -368,6 +377,11 @@ func (c *AffinityChecker) mergeCheck(region *core.RegionInfo, group *affinity.Gr
 		return nil
 	}
 	affinityMergeCheckerCounter.Inc()
+
+	if isRegionSizeUnknown(region) {
+		affinityMergeCheckerUnknownSizeCounter.Inc()
+		return nil
+	}
 
 	// Region is not small enough
 	maxSize := int64(maxAffinityMergeRegionSize)
@@ -441,6 +455,11 @@ func (c *AffinityChecker) checkAffinityMergeTarget(region, adjacent *core.Region
 
 	if !isAffinity {
 		affinityMergeCheckerAdjNotAffinityCounter.Inc()
+		return false
+	}
+
+	if isRegionSizeUnknown(adjacent) {
+		affinityMergeCheckerAdjUnknownSizeCounter.Inc()
 		return false
 	}
 
