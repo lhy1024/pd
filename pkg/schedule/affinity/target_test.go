@@ -197,6 +197,56 @@ func (f targetWriterFunc) WriteGroupTargets(ctx context.Context, targets []Group
 	return f(ctx, targets)
 }
 
+func TestFirstWinWithOverlappingRanges(t *testing.T) {
+	for _, mode := range []string{"classic", "mcs"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				re := require.New(t)
+				m, store := newTargetTestManager(t)
+				re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}, {GroupID: "h"}}))
+				_, err := m.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+				re.NoError(err)
+				m.ExpireAffinityGroup("g")
+				before := *loadStoredGroup(re, store, "g")
+				for _, id := range []string{"g", "h"} {
+					data, err := json.Marshal(MakeLabelRule(GroupKeyRanges{GroupID: id, KeyRanges: []keyutil.KeyRange{nonOverlappingRange}}))
+					re.NoError(err)
+					rule, err := labeler.NewLabelRuleFromJSON(data)
+					re.NoError(err)
+					re.NoError(m.SyncKeyRangesFromEtcd(rule))
+				}
+				m.ReconcileRangeConflicts()
+				re.True(m.GetAffinityGroupState("g").rangeConflict)
+				calls := 0
+				if mode == "mcs" {
+					m.SetTargetWriter(targetWriterFunc(func(context.Context, []GroupTarget) ([]string, error) {
+						calls++
+						return nil, nil
+					}))
+				}
+				observe := func() {
+					m.ObserveAvailableRegion(generateRegionForTest(10, []uint64{2, 1, 3}, nonOverlappingRange), m.GetAffinityGroupState("g"))
+					synctest.Wait()
+				}
+				observe()
+				re.Zero(calls)
+				re.Equal(before, *loadStoredGroup(re, store, "g"))
+				re.Equal(before, m.GetAffinityGroupState("g").Group)
+				m.SyncKeyRangesDeleteFromEtcd(GetLabelRuleID("h"))
+				m.ReconcileRangeConflicts()
+				re.False(m.GetAffinityGroupState("g").rangeConflict)
+				observe()
+				if mode == "mcs" {
+					re.Equal(1, calls)
+					re.Equal(before, *loadStoredGroup(re, store, "g"))
+				} else {
+					re.Equal(uint64(2), loadStoredGroup(re, store, "g").LeaderStoreID)
+				}
+			})
+		})
+	}
+}
+
 func TestFirstWinSingleFlightAndGlobalBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		re := require.New(t)
