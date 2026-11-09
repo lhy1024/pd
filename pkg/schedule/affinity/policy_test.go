@@ -302,7 +302,7 @@ func TestObserveAvailableRegionBeforeAvailabilityCheck(t *testing.T) {
 			_, err = manager.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
 			re.NoError(err)
 
-			loaded := newTargetTestManagerWithStorage(t, store)
+			loaded := newTargetTestManagerWithStorage(t, t.Context(), store)
 			region := generateRegionForTest(10, []uint64{2, 1, 3}, nonOverlappingRange)
 			observe := func() uint64 {
 				loaded.ObserveAvailableRegion(region, loaded.GetAffinityGroupState("g"))

@@ -15,6 +15,7 @@
 package affinity
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -174,7 +175,12 @@ func TestCommitBalanceTargets(t *testing.T) {
 				re.NoError(err)
 			case "writer", "watched", "superseded", "error", "partial":
 				stored = expected
-				m.SetTargetWriter(&fakeTargetWriter{reply: func(GroupTarget) ([]string, error) {
+				m.SetTargetWriter(targetWriterFunc(func(_ context.Context, targets []GroupTarget) ([]string, error) {
+					re.Len(targets, 1)
+					re.Equal(GroupTarget{Expected: expected, LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 4}}, targets[0])
+					if scenario == "watched" || scenario == "superseded" {
+						m.SyncGroupFromEtcd(&want)
+					}
 					if scenario == "error" {
 						return nil, writeErr
 					}
@@ -182,12 +188,7 @@ func TestCommitBalanceTargets(t *testing.T) {
 						return []string{id}, writeErr
 					}
 					return []string{id}, nil
-				}, write: func(g GroupTarget) {
-					re.Equal(GroupTarget{Expected: expected, LeaderStoreID: 2, VoterStoreIDs: []uint64{1, 2, 4}}, g)
-					if scenario == "watched" || scenario == "superseded" {
-						m.SyncGroupFromEtcd(&want)
-					}
-				}})
+				}))
 			}
 			stale := scenario == "admin" || scenario == "fixed" || scenario == "recreated"
 			if stale {
