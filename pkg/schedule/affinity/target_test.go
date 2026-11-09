@@ -578,13 +578,14 @@ func TestMCSFirstWinKeepsFixedTarget(t *testing.T) {
 		observed := m.GetAffinityGroupState("g")
 		_, err = m.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
 		re.NoError(err)
-		writer := &fakeTargetWriter{reply: func(target GroupTarget) ([]string, error) {
-			return []string{target.Expected.ID}, nil
-		}}
-		m.SetTargetWriter(writer)
+		calls := 0
+		m.SetTargetWriter(targetWriterFunc(func(_ context.Context, targets []GroupTarget) ([]string, error) {
+			calls++
+			return []string{targets[0].Expected.ID}, nil
+		}))
 		m.ObserveAvailableRegion(generateRegionForTest(10, []uint64{2, 1}, nonOverlappingRange), observed)
 		synctest.Wait()
-		re.Empty(writer.sent())
+		re.Zero(calls)
 		re.Equal(uint64(1), m.GetAffinityGroupState("g").LeaderStoreID)
 	})
 }
