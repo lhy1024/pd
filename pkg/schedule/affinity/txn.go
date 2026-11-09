@@ -348,7 +348,7 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 		}
 		// Policy-only updates keep affinityVer, so check the current policy while
 		// holding metaMutex. A degraded fixed group can only confirm its target.
-		if group.BalancePolicy.IsFixed() && !group.RegularSchedulingAllowed && leaderStoreID != group.LeaderStoreID {
+		if (group.BalancePolicy.IsFixed() || group.storeConditionsUnknown) && !group.RegularSchedulingAllowed && leaderStoreID != group.LeaderStoreID {
 			return group, nil
 		}
 		target := GroupTarget{Expected: group.Group, LeaderStoreID: leaderStoreID, VoterStoreIDs: voterStoreIDs}
@@ -444,6 +444,9 @@ func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy
 		// them again only when they change.
 		groupInfo.SetAvailability(calcGroupAvailability(m.unavailableStores, updated.LeaderStoreID, updated.VoterStoreIDs))
 		m.resetCountLocked(groupInfo)
+	}
+	if groupInfo.BalancePolicy != updated.BalancePolicy {
+		m.touchBalanceTableLocked(groupID)
 	}
 	groupInfo.Group = *updated
 	return newGroupState(groupInfo), nil

@@ -138,7 +138,8 @@ type GroupState struct {
 	affinityVer uint64
 	// groupInfoPtr is a pointer to the original information.
 	// It is used only for pointer comparison and should not access any internal data.
-	groupInfoPtr *runtimeGroupInfo
+	groupInfoPtr           *runtimeGroupInfo
+	storeConditionsUnknown bool
 }
 
 // IsRegionAffinity checks whether the Region is in an affinity state.
@@ -173,6 +174,8 @@ type runtimeGroupInfo struct {
 	availability groupAvailability
 	// degradedExpiredAt indicates the expiration time of groupDegraded. After this time, it should be treated as groupExpired.
 	degradedExpiredAt uint64
+	// A loaded target remains unchanged until the first store availability check.
+	storeConditionsUnknown bool
 	// AffinityVer tracks changes to Region affinity; policy-only updates preserve it.
 	AffinityVer uint64
 	// AffinityRegionCount indicates how many Regions have all Voter and Leader peers in the correct stores. (AffinityVer equals).
@@ -214,6 +217,7 @@ func newGroupState(g *runtimeGroupInfo) *GroupState {
 		AffinityRegionCount:       g.AffinityRegionCount,
 		affinityVer:               g.AffinityVer,
 		groupInfoPtr:              g,
+		storeConditionsUnknown:    g.storeConditionsUnknown,
 	}
 }
 
@@ -253,6 +257,7 @@ func (g *runtimeGroupInfo) GetAvailability() groupAvailability {
 //   - newAvailability = groupDegraded: do nothing and do not refresh degradedExpiredAt
 //   - newAvailability = groupExpired: do nothing
 func (g *runtimeGroupInfo) SetAvailability(newAvailability groupAvailability) {
+	g.storeConditionsUnknown = false
 	// If the expiration time has been reached, change groupDegraded to groupExpired.
 	if g.availability == groupDegraded && g.IsExpired() {
 		g.availability = groupExpired
