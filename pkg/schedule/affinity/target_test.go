@@ -106,7 +106,7 @@ func TestUpdateAffinityGroupTargetsRejectsInvalidInput(t *testing.T) {
 }
 
 func TestSyncRecreatedAffinityGroup(t *testing.T) {
-	for _, path := range []string{"watcher", "conflict", "written"} {
+	for _, path := range []string{"watcher", "conflict", "written", "policy", "peers"} {
 		t.Run(path, func(t *testing.T) {
 			re := require.New(t)
 			m, store := newTargetTestManager(t)
@@ -119,9 +119,10 @@ func TestSyncRecreatedAffinityGroup(t *testing.T) {
 			recreated := *old
 			recreated.CreateTimestamp++
 			re.NoError(store.RunInTxn(t.Context(), func(txn kv.Txn) error { return store.SaveAffinityGroup(txn, old.ID, &recreated) }))
-			if path == "watcher" {
+			switch path {
+			case "watcher":
 				m.SyncGroupFromEtcd(&recreated)
-			} else {
+			case "conflict", "written":
 				target := targetFor(m, old.ID, 2, 1, 2, 3)
 				if path == "written" {
 					target.Expected = recreated
@@ -130,6 +131,13 @@ func TestSyncRecreatedAffinityGroup(t *testing.T) {
 				written, err := m.UpdateAffinityGroupTargets([]GroupTarget{target})
 				re.NoError(err)
 				re.Equal(path == "written", len(written) == 1)
+			case "policy":
+				_, err := m.UpdateAffinityGroupPolicy(old.ID, BalancePolicyFixed)
+				re.NoError(err)
+				recreated.BalancePolicy = BalancePolicyFixed
+			case "peers":
+				_, err := m.UpdateAffinityGroupPeers(old.ID, 1, []uint64{1, 2, 3})
+				re.NoError(err)
 			}
 			state := m.GetAffinityGroupState(old.ID)
 			re.Equal(recreated, state.Group)
@@ -363,4 +371,130 @@ func TestTargetCASAndLostReplyWithEtcd(t *testing.T) {
 	after, err := client.Get(t.Context(), keypath.AffinityGroupPath("g"))
 	re.NoError(err)
 	re.Equal(before.Kvs[0].ModRevision, after.Kvs[0].ModRevision, "idempotent retries do not put again")
+}
+
+// TestUpdateAffinityGroupTargetsChecksPolicy checks that a target decided before
+// a policy change is not written.
+func TestUpdateAffinityGroupTargetsChecksPolicy(t *testing.T) {
+	re := require.New(t)
+	manager, store := newTargetTestManager(t)
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}}))
+	target := targetFor(manager, "g", 1, 1, 2, 3)
+	_, err := manager.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+	re.NoError(err)
+
+	written, err := manager.UpdateAffinityGroupTargets([]GroupTarget{target})
+	re.NoError(err)
+	re.Empty(written)
+	re.Zero(loadStoredGroup(re, store, "g").LeaderStoreID)
+	re.Equal(BalancePolicyFixed, manager.GetAffinityGroupState("g").BalancePolicy)
+}
+
+// replyTestStorage counts group saves and can lose the reply of one committed
+// transaction.
+type replyTestStorage struct {
+	endpoint.AffinityStorage
+	saves     int
+	loseReply bool
+}
+
+func (s *replyTestStorage) SaveAffinityGroup(txn kv.Txn, groupID string, group any) error {
+	s.saves++
+	return s.AffinityStorage.SaveAffinityGroup(txn, groupID, group)
+}
+
+func (s *replyTestStorage) RunInTxn(ctx context.Context, f func(kv.Txn) error) error {
+	if err := s.AffinityStorage.RunInTxn(ctx, f); err != nil || !s.loseReply {
+		return err
+	}
+	s.loseReply = false
+	return errors.New("the reply of a committed transaction is lost")
+}
+
+// TestConfirmationChecksStoredTarget checks that without a target writer a
+// Region with the layout of the target in memory confirms it only if storage
+// still holds it. A first-win write whose reply was lost may have stored another
+// target, and confirming the old one would keep memory and storage apart.
+func TestConfirmationChecksStoredTarget(t *testing.T) {
+	re := require.New(t)
+	m, store := newTargetTestManager(t)
+	re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g", KeyRanges: []keyutil.KeyRange{nonOverlappingRange}}}))
+	_, err := m.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+	re.NoError(err)
+	m.checkGroupsAvailability()
+	wrapped := &replyTestStorage{AffinityStorage: store}
+	m.storage = wrapped
+
+	// A Region with the current target confirms it without a write.
+	m.ExpireAffinityGroup("g")
+	m.ObserveAvailableRegion(generateRegionForTest(1, []uint64{1, 2, 3}, nonOverlappingRange), m.GetAffinityGroupState("g"))
+	re.Zero(wrapped.saves)
+	re.True(m.GetAffinityGroupState("g").AffinitySchedulingAllowed)
+
+	// First-win stores leader 2, but the reply is lost, so memory keeps leader 1.
+	m.ExpireAffinityGroup("g")
+	wrapped.loseReply = true
+	m.ObserveAvailableRegion(generateRegionForTest(2, []uint64{2, 1, 3}, nonOverlappingRange), m.GetAffinityGroupState("g"))
+	re.Equal(uint64(2), loadStoredGroup(re, store, "g").LeaderStoreID)
+	re.Equal(uint64(1), m.GetAffinityGroupState("g").LeaderStoreID)
+
+	// A Region with the old layout does not confirm it: memory takes the stored target.
+	m.ObserveAvailableRegion(generateRegionForTest(3, []uint64{1, 2, 3}, nonOverlappingRange), m.GetAffinityGroupState("g"))
+	state := m.GetAffinityGroupState("g")
+	re.Equal(*loadStoredGroup(re, store, "g"), state.Group)
+	re.Equal(uint64(2), state.LeaderStoreID)
+}
+
+func TestClassicFirstWinKeepsCommittedPolicy(t *testing.T) {
+	for _, hasTarget := range []bool{false, true} {
+		t.Run(fmt.Sprintf("has-target-%t", hasTarget), func(t *testing.T) {
+			re := require.New(t)
+			m, store := newTargetTestManager(t)
+			re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}}))
+			if hasTarget {
+				_, err := m.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+				re.NoError(err)
+			}
+			wrapped := &replyTestStorage{AffinityStorage: store, loseReply: true}
+			m.storage = wrapped
+			_, err := m.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+			re.Error(err)
+			re.Empty(m.GetAffinityGroupState("g").BalancePolicy)
+			committed := *loadStoredGroup(re, store, "g")
+			re.Equal(BalancePolicyFixed, committed.BalancePolicy)
+			saves := wrapped.saves
+			m.ExpireAffinityGroup("g")
+			m.ObserveAvailableRegion(generateRegionForTest(10, []uint64{2, 1, 3}, nonOverlappingRange), m.GetAffinityGroupState("g"))
+			re.Equal(saves, wrapped.saves, "stale first-win must not overwrite the committed fixed policy")
+			re.Equal(committed, *loadStoredGroup(re, store, "g"))
+			re.Equal(committed, m.GetAffinityGroupState("g").Group)
+			m.ObserveAvailableRegion(generateRegionForTest(11, []uint64{2, 1, 3}, nonOverlappingRange), m.GetAffinityGroupState("g"))
+			state := m.GetAffinityGroupState("g")
+			re.Equal(BalancePolicyFixed, state.BalancePolicy)
+			re.Equal(uint64(2), state.LeaderStoreID)
+			re.Equal(state.Group, *loadStoredGroup(re, store, "g"))
+		})
+	}
+}
+
+func TestMCSFirstWinKeepsFixedTarget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		re := require.New(t)
+		m, _ := newTargetTestManager(t)
+		re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g"}}))
+		_, err := m.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2})
+		re.NoError(err)
+		m.DegradeAffinityGroup("g")
+		observed := m.GetAffinityGroupState("g")
+		_, err = m.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+		re.NoError(err)
+		writer := &fakeTargetWriter{reply: func(target GroupTarget) ([]string, error) {
+			return []string{target.Expected.ID}, nil
+		}}
+		m.SetTargetWriter(writer)
+		m.ObserveAvailableRegion(generateRegionForTest(10, []uint64{2, 1}, nonOverlappingRange), observed)
+		synctest.Wait()
+		re.Empty(writer.sent())
+		re.Equal(uint64(1), m.GetAffinityGroupState("g").LeaderStoreID)
+	})
 }
