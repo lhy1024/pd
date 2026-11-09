@@ -158,7 +158,7 @@ func (b *affinityBalancer) step(ctx context.Context, id affinity.TableID, counts
 				zap.Int("groups", groups), zap.Int("mutable", res.groupCounts[balanceGroupMutable]),
 				zap.Int("fixed", res.groupCounts[balanceGroupFixed]), zap.Int("unready", res.groupCounts[balanceGroupUnready]),
 				zap.Int("unsupported", res.groupCounts[balanceGroupUnsupported]),
-				zap.Any("baseline", res.planner.Baseline), zap.Any("score", res.planner.Score), zap.Any("bound", res.planner.Bound),
+				zap.Any("baseline", res.planner.Baseline), zap.Any("score", res.planner.Score),
 				zap.String("stop", string(res.planner.Stop)), zap.Int64("work", res.work), zap.Int("visits", res.visits),
 				zap.Int("rounds", len(res.stops)), zap.Duration("duration", duration))
 		}
@@ -202,7 +202,7 @@ func (b *affinityBalancer) step(ctx context.Context, id affinity.TableID, counts
 	if len(written) > 0 {
 		log.Info("balanced affinity table", zap.String("table-id", string(id)),
 			zap.Int("planned", len(res.targets)), zap.Int("written", len(written)), zap.Uint64("version", version),
-			zap.Any("baseline", res.planner.Baseline), zap.Any("score", res.planner.Score), zap.Any("bound", res.planner.Bound),
+			zap.Any("baseline", res.planner.Baseline), zap.Any("score", res.planner.Score),
 			zap.String("stop", string(res.planner.Stop)), zap.Int("changed", res.planner.Changed), zap.Duration("duration", time.Since(start)))
 	} else {
 		log.Info("affinity balance plan not written", zap.String("table-id", string(id)),
