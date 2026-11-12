@@ -561,7 +561,7 @@ func TestAffinityBalanceLearnerInLaterRegion(t *testing.T) {
 	target := f.affinityManager.GetAffinityGroupState(blocked)
 	re.NotContains(target.VoterStoreIDs, uint64(4))
 	re.Contains(f.affinityManager.GetAffinityGroupState(ids[1-groupIndex]).VoterStoreIDs, uint64(4))
-	op := f.createAffinityOperator(later, target)
+	op := f.createAffinityOperator(later, target, f.ruleManager.FitRegion(f.Cluster, later))
 	re.NotNil(op)
 	operator.ApplyOperator(f.Cluster, op)
 	re.Equal(learner, f.GetRegion(later.GetID()).GetStoreLearner(4))
@@ -741,7 +741,7 @@ func TestAffinityBalanceTiFlashRecordRules(t *testing.T) {
 			for _, region := range f.GetRegions() {
 				group, _ := f.affinityManager.GetRegionAffinityGroupState(region)
 				learners := region.GetLearners()
-				if op := f.createAffinityOperator(region, group); op != nil {
+				if op := f.createAffinityOperator(region, group, f.ruleManager.FitRegion(f.Cluster, region)); op != nil {
 					operator.ApplyOperator(f.Cluster, op)
 				}
 				moved := f.GetRegion(region.GetID())
@@ -942,9 +942,9 @@ func TestAffinityOperatorTargetStores(t *testing.T) {
 			_, err := f.affinityManager.UpdateAffinityGroupPeers(ids[0], leader, voters)
 			re.NoError(err)
 			region, group := f.GetRegion(1), f.affinityManager.GetAffinityGroupState(ids[0])
-			re.NotNil(f.createAffinityOperator(region, group))
+			re.NotNil(f.createAffinityOperator(region, group, f.ruleManager.FitRegion(f.Cluster, region)))
 			tc.set(f, store)
-			re.Nil(f.createAffinityOperator(region, group))
+			re.Nil(f.createAffinityOperator(region, group, f.ruleManager.FitRegion(f.Cluster, region)))
 		})
 	}
 }
