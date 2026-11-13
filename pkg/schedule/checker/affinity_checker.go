@@ -560,6 +560,10 @@ func cloneRegionWithReplacePeerStores(region *core.RegionInfo, leaderStoreID uin
 		}
 	}
 
+	// Keep virtual peer IDs on deterministic stores so repeated fits of the
+	// same target give the same feedback.
+	slices.Sort(storesToRemove)
+	slices.Sort(storesToAdd)
 	options := make([]core.RegionCreateOption, 0, len(storesToRemove)+1)
 	for i, removeStoreID := range storesToRemove {
 		options = append(options, core.WithReplacePeerStore(removeStoreID, storesToAdd[i]))
@@ -620,37 +624,105 @@ const (
 
 // regionPlacementBestLocation checks the fit of a Region as isRegionPlacementRuleSatisfiedWithBestLocation does.
 func (c *AffinityChecker) regionPlacementBestLocation(region *core.RegionInfo, fit *placement.RegionFit) bestLocationStatus {
+	return c.checkRegionPlacement(region, fit, false).status
+}
+
+// bestLocationFeedback keeps a replacement scoped to the checked Region target.
+type bestLocationFeedback struct {
+	status       bestLocationStatus
+	replacements []bestLocationReplacement
+	scans        int
+}
+
+type bestLocationReplacement struct {
+	old        uint64
+	candidates []uint64
+}
+
+func (c *AffinityChecker) regionPlacementFeedback(region *core.RegionInfo, fit *placement.RegionFit) bestLocationFeedback {
+	return c.checkRegionPlacement(region, fit, true)
+}
+
+// checkRegionPlacement always merges all rule decisions. Detailed repair hints
+// are only needed by the balance planner; boolean callers reuse the same status.
+func (c *AffinityChecker) checkRegionPlacement(region *core.RegionInfo, fit *placement.RegionFit, withReplacements bool) bestLocationFeedback {
 	// Check region is satisfied
 	if fit == nil || !fit.IsSatisfied() {
-		return bestLocationRejected
+		return bestLocationFeedback{status: bestLocationRejected}
 	}
 
-	status := affinityPlacementReady
+	feedback := bestLocationFeedback{status: bestLocationSatisfied}
+	var preferred []uint64
+	if withReplacements {
+		preferred = make([]uint64, len(fit.RuleFits))
+	}
 	// Check whether all peers covered by the rules are at the best isolation level.
 	// This logic is based on `RuleChecker.fixBetterLocation`.
-	for _, rf := range fit.RuleFits {
+	for i, rf := range fit.RuleFits {
 		if len(rf.Rule.LocationLabels) == 0 {
 			continue
 		}
 		isWitness := rf.Rule.IsWitness && isWitnessEnabled(c.cluster)
 		// If the peer to be moved is a witness, since no snapshot is needed, we also reuse the fast failover logic.
 		strategy := c.strategy(region, rf.Rule, isWitness)
-		_, newStoreID, filterByTempState := strategy.getBetterLocation(c.cluster, region, fit, rf)
+		oldStoreID, candidates, filterByTempState := strategy.getBetterLocationCandidates(c.cluster, region, fit, rf)
+		feedback.scans++
+		if withReplacements {
+			preferred[i] = oldStoreID
+		}
 		// filterByTempState being true means a better placement exists but is temporarily unschedulable.
 		// This is also considered not satisfied.
 		if filterByTempState {
-			return bestLocationTemporarilyBlocked
+			if feedback.status == bestLocationSatisfied {
+				feedback.status = bestLocationTemporarilyBlocked
+			}
+			// This rule can reach better isolation after temporary recovery.
+			// Continue with other rules so their definite rejection still wins.
+			continue
 		}
-		if newStoreID != 0 {
-			return bestLocationRejected
+		if candidates != nil {
+			feedback.status = bestLocationRejected
+			if withReplacements {
+				ids := make([]uint64, 0, len(candidates.Stores))
+				for _, store := range candidates.Stores {
+					ids = append(ids, store.GetID())
+				}
+				feedback.replacements = append(feedback.replacements, bestLocationReplacement{old: oldStoreID, candidates: ids})
+			}
 		}
 		// If the isolation level does not meet the requirement, it is also considered not to be at the best location.
 		if !statistics.IsRegionLabelIsolationSatisfied(rf.Stores, rf.Rule.LocationLabels, rf.Rule.IsolationLevel) {
-			return bestLocationRejected
+			feedback.status = bestLocationRejected
 		}
 	}
 
-	return bestLocationSatisfied
+	// A rejected Region may be repaired through another fitted rule, or another
+	// source of that rule. Keep the existing decision; only add directed hints.
+	if withReplacements && feedback.status == bestLocationRejected {
+		for i, rf := range fit.RuleFits {
+			if len(rf.Rule.LocationLabels) == 0 {
+				continue
+			}
+			strategy := c.strategy(region, rf.Rule, rf.Rule.IsWitness && isWitnessEnabled(c.cluster))
+			for _, store := range getRuleFitStores(c.cluster, rf) {
+				if store.GetID() == preferred[i] {
+					continue
+				}
+				old, candidates, _ := strategy.getBetterLocationCandidatesFromStores(c.cluster, region, fit, rf, []*core.StoreInfo{store})
+				feedback.scans++
+				if candidates == nil {
+					continue
+				}
+				replacement := bestLocationReplacement{old: old, candidates: make([]uint64, 0, len(candidates.Stores))}
+				for _, candidate := range candidates.Stores {
+					replacement.candidates = append(replacement.candidates, candidate.GetID())
+				}
+				feedback.replacements = append(feedback.replacements, replacement)
+			}
+		}
+	}
+
+	return feedback
 }
 
 // checkRegionFitAtBestLocation shares the balance planner's placement decision.

@@ -15,12 +15,17 @@
 package checker
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
+
+	"github.com/tikv/pd/pkg/core"
+	"github.com/tikv/pd/pkg/schedule/affinity"
 	"github.com/tikv/pd/pkg/schedule/affinity/balanceplan"
 	"github.com/tikv/pd/pkg/schedule/placement"
 )
@@ -51,7 +56,7 @@ func TestAffinityBalanceSameRoleIsolation(t *testing.T) {
 	re.Equal(int64(8), result.Baseline.Voter)
 	re.Equal(int64(6), result.Score.Voter)
 	for _, target := range plan.changedTargets(&result) {
-		status, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+		status, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
 		t.Logf("raw target: group=%s voters=%v leader=%d status=%d", target.ID, target.VoterStoreIDs, target.LeaderStoreID, status)
 	}
 	region := f.GetRegion(1)
@@ -69,10 +74,10 @@ func TestAffinityBalanceSameRoleIsolation(t *testing.T) {
 	re.False(temporary)
 	res, err := f.planBalanceTargets(t.Context(), snapshot)
 	re.NoError(err)
-	t.Logf("raw score=%v -> %v changed=%d; validated score=%v targets=%d rounds=%d groupCounts=%v retry=%v", result.Baseline, result.Score, result.Changed, res.planner.Score, len(res.targets), len(res.stops), res.groupCounts, res.retry)
+	t.Logf("raw score=%v -> %v changed=%d; validated score=%v targets=%d rounds=%d groupCounts=%v retry=%v", result.Baseline, result.Score, result.Changed, res.planner.Score, len(res.targets), res.rounds, res.groupCounts, res.retry)
 	re.Equal(balanceplan.Score{Voter: 8, Leader: 2}, res.planner.Score)
 	re.Len(res.targets, 1)
-	re.Len(res.stops, 1)
+	re.Equal(2, res.rounds)
 	re.Equal(2, res.groupCounts[balanceGroupMutable])
 	re.True(f.step())
 	re.Equal([2]int{8, 2}, balanceTableScore(f.affinityManager, balanceTestTable()))
@@ -86,9 +91,72 @@ func TestAffinityBalanceSameRoleIsolation(t *testing.T) {
 	f.SetStoreLabel(4, map[string]string{"zone": "b", "id": "4"})
 	second.LabelConstraints[0].Values = []string{"2", "3", "4"}
 	re.NoError(f.ruleManager.SetRule(second))
+	// Simply pinning each rejected relaxed choice makes no progress on this
+	// four-store expansion, although moving a voter onto store 4 is legal.
+	snapshot = f.snapshot()
+	pinned := make(map[string]balancePlanGroupKind)
+	for range 2 {
+		plan := f.balancePlanInput(snapshot, nil, pinned)
+		raw := balanceplan.Plan(&plan.input, balanceplan.Options{Seed: snapshot.Version})
+		re.True(raw.Score.Less(raw.Baseline))
+		for _, target := range plan.changedTargets(&raw) {
+			status, _, reason := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+			re.Equal(balanceRejected, status)
+			re.Equal(balanceTargetLocation, reason)
+			pinned[target.ID] = balanceGroupUnsupported
+		}
+	}
+	pinnedPlan := f.balancePlanInput(snapshot, nil, pinned)
+	unchanged := balanceplan.Plan(&pinnedPlan.input, balanceplan.Options{Seed: snapshot.Version})
+	re.Equal(unchanged.Baseline, unchanged.Score)
 	re.True(f.step())
 	re.Equal([2]int{6, 2}, balanceTableScore(f.affinityManager, balanceTestTable()))
 	for _, group := range f.snapshot().Groups {
 		re.NotContains(group.VoterStoreIDs, uint64(2))
 	}
+}
+
+func TestAffinityBalanceLaterRegionPlacement(t *testing.T) {
+	f := newAffinityBalanceTest(t, 5, "a", "a", "b", "c", "b")
+	for id := uint64(1); id <= 5; id++ {
+		f.SetStoreLabel(id, map[string]string{"zone": []string{"a", "a", "b", "c", "b"}[id-1], "id": strconv.Itoa(int(id))})
+	}
+	f.UpdateRegionCount(3, 100)
+	rule := f.ruleManager.GetRule(placement.DefaultGroupID, placement.DefaultRuleID)
+	rule.Count = 2
+	rule.LabelConstraints = []placement.LabelConstraint{{Key: "id", Op: placement.In, Values: []string{"1", "2", "3", "4", "5"}}}
+	require.NoError(t, f.ruleManager.SetRule(rule))
+	require.NoError(t, f.ruleManager.SetRule(&placement.Rule{GroupID: placement.DefaultGroupID, ID: "learner", Role: placement.Learner, Count: 1,
+		StartKeyHex: hex.EncodeToString([]byte(balanceTestKey("b"))), EndKeyHex: hex.EncodeToString([]byte(balanceTestKey("c"))), LabelConstraints: []placement.LabelConstraint{{Key: "id", Op: placement.In, Values: []string{"5"}}}}))
+	f.group(balanceTestGroupID("_tidb_pt_100_p1"), 1, 1, []uint64{1, 4}, "a", "b", "c")
+	f.group(balanceTestGroupID("_tidb_pt_100_p2"), 3, 1, []uint64{1, 4}, "d", "e")
+	f.policy(affinity.BalancePolicyFixed, balanceTestGroupID("_tidb_pt_100_p2"))
+	later := f.GetRegion(2)
+	f.PutRegion(later.Clone(core.WithAddPeer(&metapb.Peer{Id: 100, StoreId: 5, Role: metapb.PeerRole_Learner})))
+	snapshot := f.snapshot()
+	rawPlan := f.balancePlanInput(snapshot, nil, nil)
+	raw := balanceplan.Plan(&rawPlan.input, balanceplan.Options{Seed: snapshot.Version})
+	t.Logf("later probe raw=%v voters=%v targets=%v", raw.Score, raw.Voters, rawPlan.changedTargets(&raw))
+	for _, target := range rawPlan.changedTargets(&raw) {
+		for _, id := range []uint64{1, 2} {
+			region := f.GetRegion(id)
+			fit := f.ruleManager.FitRegionWithoutCache(f.Cluster, region)
+			status, reason := f.validateBalanceTarget(target, region, fit)
+			if id == 1 {
+				require.Equal(t, balanceAllowed, status)
+			} else {
+				require.Equal(t, balanceRejected, status)
+				require.Equal(t, balanceTargetLocation, reason)
+			}
+		}
+	}
+	res, err := f.planBalanceTargets(t.Context(), snapshot)
+	require.NoError(t, err)
+	require.NotEmpty(t, res.targets)
+	require.Greater(t, res.rounds, 1)
+	for _, target := range res.targets {
+		status, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+		require.Equal(t, balanceAllowed, status)
+	}
+	t.Logf("later Region: raw=%v result=%v targets=%d rounds=%d retry=%v", raw.Score, res.planner.Score, len(res.targets), res.rounds, res.retry)
 }

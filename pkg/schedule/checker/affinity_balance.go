@@ -35,6 +35,20 @@ const (
 	balanceUnready
 )
 
+// balanceTargetFailure identifies the constraint to learn after final validation.
+// Location failures may enable directed feedback; other placement failures pin
+// the group, and learner occupancy is local to this group's known Regions.
+type balanceTargetFailure uint8
+
+const (
+	balanceTargetValid balanceTargetFailure = iota
+	balanceTargetStoreAction
+	balanceTargetRegionUnready
+	balanceTargetLearnerConflict
+	balanceTargetPlacement
+	balanceTargetLocation
+)
+
 // balanceRegionScan walks the Regions of a group's ranges in key order.
 type balanceRegionScan struct {
 	ranges     []*keyutil.KeyRange
@@ -108,27 +122,29 @@ func (c *AffinityChecker) validateBalanceCurrentRegion(group *affinity.GroupStat
 
 // validateBalanceTarget checks a Region moved to the target: it must keep its
 // learners, satisfy the rules without lower isolation and be at its best location.
-func (c *AffinityChecker) validateBalanceTarget(target *affinity.Group, region *core.RegionInfo, currentFit *placement.RegionFit) balanceStatus {
+func (c *AffinityChecker) validateBalanceTarget(target *affinity.Group, region *core.RegionInfo, currentFit *placement.RegionFit) (balanceStatus, balanceTargetFailure) {
 	for _, learner := range region.GetLearners() {
 		if slices.Contains(target.VoterStoreIDs, learner.GetStoreId()) {
-			return balanceRejected
+			return balanceRejected, balanceTargetLearnerConflict
 		}
 	}
 	virtual := cloneRegionWithReplacePeerStores(region, target.LeaderStoreID, target.VoterStoreIDs...)
 	if virtual == nil {
-		return balanceRejected
+		return balanceRejected, balanceTargetPlacement
 	}
 	fit := c.ruleManager.FitRegionWithoutCache(c.cluster, virtual)
 	if fit == nil || !fit.IsSatisfied() || !placementNotWorse(currentFit, fit) {
-		return balanceRejected
+		return balanceRejected, balanceTargetPlacement
 	}
+	// Final validation needs only the decision. The callback asks the same
+	// placement predicate for replacement hints if this complete plan fails.
 	switch c.regionPlacementBestLocation(virtual, fit) {
 	case bestLocationSatisfied:
-		return balanceAllowed
+		return balanceAllowed, balanceTargetValid
 	case bestLocationTemporarilyBlocked:
-		return balanceTemporarilyBlocked
+		return balanceTemporarilyBlocked, balanceTargetLocation
 	default:
-		return balanceRejected
+		return balanceRejected, balanceTargetLocation
 	}
 }
 

@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 
+	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/affinity"
 	"github.com/tikv/pd/pkg/schedule/affinity/balanceplan"
 	"github.com/tikv/pd/pkg/schedule/placement"
@@ -36,8 +37,8 @@ const (
 	// targets before the table is planned.
 	affinityBalanceCreateGrace = time.Minute
 	// maxBalanceValidationRounds bounds the rounds of planning and validating
-	// a table. Every failed round excludes a store for a group or keeps a group
-	// unchanged.
+	// a table. Failed rounds add a placement check, exclude a learner store,
+	// or keep a group unchanged.
 	maxBalanceValidationRounds = 10
 )
 
@@ -77,37 +78,56 @@ type balancePlanResult struct {
 	targets []*affinity.Group
 	// retry reports that the table may improve soon without a metadata change.
 	retry bool
-	// planner and groupCounts describe the last round; work, visits and durations
-	// include every round, including a canceled or rejected round.
-	planner          balanceplan.Result
-	groupCounts      [4]int
-	stops            []balanceplan.StopReason
-	work             int64
-	visits           int
-	planDuration     time.Duration
-	validateDuration time.Duration
+	// planner and groupCounts describe the last round; work and visits include
+	// every round, including a canceled or rejected round.
+	planner     balanceplan.Result
+	groupCounts [4]int
+	rounds      int
+	work        int64
+	visits      int
 }
 
 // planBalanceTargets plans a table and validates every changed group on its
-// known Regions. A group whose target fails is planned again without the stores
-// that hold learners of its Regions, or kept unchanged if no learner is to
-// blame. It returns a validated plan that improves the table, or no targets.
+// known Regions. A placement rejection enables feedback for all known Regions on the next
+// round; a learner conflict excludes the occupied store. Other rejections keep
+// the group unchanged. All feedback is local to this invocation.
 func (c *AffinityChecker) planBalanceTargets(ctx context.Context, snapshot *affinity.BalanceSnapshot) (balancePlanResult, error) {
 	var res balancePlanResult
 	exclude := make(map[string][]uint64)
 	pinned := make(map[string]balancePlanGroupKind)
+	checkPlacement := false
+	checkedLearners := false
 	for range maxBalanceValidationRounds {
+		withPlacement := checkPlacement
 		plan := c.balancePlanInput(snapshot, exclude, pinned)
 		res.retry = res.retry || plan.retry
 		res.groupCounts = plan.groupCounts
-		start := time.Now()
+		// Validate complete relaxed plans first. After a placement rejection,
+		// check every mutable group to avoid one newly failing group per round.
+		if checkPlacement {
+			for i, group := range plan.groups {
+				var regions []*core.RegionInfo
+				scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
+				for ctx.Err() == nil {
+					region := scan.next(c.cluster)
+					if region == nil {
+						break
+					}
+					regions = append(regions, region)
+				}
+				plan.input.Groups[i].CheckTarget = c.balanceTargetCheck(ctx, plan.stores, regions)
+			}
+		}
 		result := balanceplan.Plan(&plan.input, balanceplan.Options{
 			Seed:   snapshot.Version,
 			Cancel: func() bool { return ctx.Err() != nil },
 		})
-		res.planDuration += time.Since(start)
 		res.planner = result
-		res.stops = append(res.stops, result.Stop)
+		res.retry = res.retry || result.TemporarilyBlocked || result.PlacementLimited || result.Stop == balanceplan.StopBudget
+		res.rounds++
+		if counter := affinityBalancePlannerStops[result.Stop]; counter != nil {
+			counter.Inc()
+		}
 		res.work += result.Work
 		res.visits += result.Visits
 		if err := ctx.Err(); err != nil {
@@ -118,12 +138,11 @@ func (c *AffinityChecker) planBalanceTargets(ctx context.Context, snapshot *affi
 		}
 		targets := plan.changedTargets(&result)
 		failed := false
-		start = time.Now()
+		learnerConflict := false
 		for _, target := range targets {
 			group := snapshot.Group(target.ID)
-			status, learners := c.validateBalancePlanTarget(ctx, snapshot, group, target)
+			status, learners, failure := c.validateBalancePlanTarget(ctx, snapshot, group, target)
 			if err := ctx.Err(); err != nil {
-				res.validateDuration += time.Since(start)
 				return res, err
 			}
 			if status != balanceAllowed {
@@ -141,7 +160,10 @@ func (c *AffinityChecker) planBalanceTargets(ctx context.Context, snapshot *affi
 			case status == balanceAllowed:
 				continue
 			case len(learners) > 0:
+				learnerConflict = true
 				exclude[target.ID] = append(exclude[target.ID], learners...)
+			case status == balanceRejected && failure == balanceTargetLocation && !withPlacement:
+				checkPlacement = true
 			default:
 				pinned[target.ID] = balanceGroupUnsupported
 				if status != balanceRejected {
@@ -151,7 +173,29 @@ func (c *AffinityChecker) planBalanceTargets(ctx context.Context, snapshot *affi
 			}
 			failed = true
 		}
-		res.validateDuration += time.Since(start)
+		// A learner store of any known Region cannot hold their shared voter
+		// target. Learn these group constraints together, avoiding one newly
+		// conflicting group per round. They reset with this invocation.
+		if (learnerConflict || checkPlacement) && !checkedLearners {
+			for _, group := range plan.groups {
+				scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
+				for ctx.Err() == nil {
+					region := scan.next(c.cluster)
+					if region == nil {
+						break
+					}
+					for _, peer := range region.GetLearners() {
+						if !slices.Contains(exclude[group.ID], peer.GetStoreId()) {
+							exclude[group.ID] = append(exclude[group.ID], peer.GetStoreId())
+						}
+					}
+				}
+			}
+			checkedLearners = true
+		}
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
 		if !failed {
 			res.targets = targets
 			return res, nil
@@ -197,31 +241,44 @@ func (c *AffinityChecker) commitBalancePlan(ctx context.Context, snapshot *affin
 // the target. On a rejection it also returns the target voters that hold a
 // learner of the Region.
 func (c *AffinityChecker) validateBalancePlanTarget(ctx context.Context, snapshot *affinity.BalanceSnapshot, group *affinity.GroupState,
-	target *affinity.Group) (balanceStatus, []uint64) {
-	if status := c.balanceTargetExecutionStatus(&group.Group, target); status != balanceAllowed {
-		return status, nil
+	target *affinity.Group) (balanceStatus, []uint64, balanceTargetFailure) {
+	status, failure := c.balanceTargetExecutionStatus(&group.Group, target), balanceTargetValid
+	if status != balanceAllowed {
+		failure = balanceTargetStoreAction
+		if status == balanceRejected {
+			return status, nil, failure
+		}
 	}
+	var learners []uint64
 	scan := newBalanceRegionScan(snapshot.Ranges[group.ID])
 	for ctx.Err() == nil {
 		region := scan.next(c.cluster)
 		if region == nil {
-			return balanceAllowed, nil
+			return status, learners, failure
 		}
-		fit, status := c.validateBalanceCurrentRegion(group, region)
-		if status != balanceAllowed {
-			return status, nil
+		fit, currentStatus := c.validateBalanceCurrentRegion(group, region)
+		if currentStatus != balanceAllowed {
+			if status == balanceAllowed {
+				status, failure = currentStatus, balanceTargetRegionUnready
+			}
+			continue
 		}
-		if status := c.validateBalanceTarget(target, region, fit); status != balanceAllowed {
-			var learners []uint64
+		targetStatus, targetFailure := c.validateBalanceTarget(target, region, fit)
+		if targetFailure == balanceTargetLearnerConflict {
 			for _, peer := range region.GetLearners() {
-				if slices.Contains(target.VoterStoreIDs, peer.GetStoreId()) {
-					learners = append(learners, peer.GetStoreId())
+				if id := peer.GetStoreId(); slices.Contains(target.VoterStoreIDs, id) && !slices.Contains(learners, id) {
+					learners = append(learners, id)
 				}
 			}
-			return status, learners
+		}
+		// A temporary failure must not hide another Region's definite rejection.
+		// Within rejected results prefer failures that replacement hints cannot fix.
+		if targetStatus == balanceRejected && (status != balanceRejected || failure == balanceTargetLocation) ||
+			targetStatus != balanceAllowed && status == balanceAllowed {
+			status, failure = targetStatus, targetFailure
 		}
 	}
-	return balanceUnready, nil
+	return balanceUnready, learners, balanceTargetRegionUnready
 }
 
 // balanceCreatingTable reports whether a table has an auto group that was
@@ -353,19 +410,65 @@ func (c *AffinityChecker) balancePlanGroup(group *affinity.GroupState, ranges af
 		}
 	}
 	g.LeaderPinned = !allowed(group.LeaderStoreID, true, true)
-	if len(voterRules) > 1 {
-		scan := newBalanceRegionScan(ranges)
-		region := scan.next(c.cluster)
-		g.CheckTarget = func(voters []int, leader int) bool {
-			stores := make([]uint64, len(voters))
-			for i, s := range voters {
-				stores[i] = rules.stores[s]
-			}
-			virtual := cloneRegionWithReplacePeerStores(region, rules.stores[leader], stores...)
-			return virtual != nil && c.isRegionPlacementRuleSatisfiedWithBestLocation(virtual, false)
-		}
-	}
+
 	return g, balanceGroupMutable
+}
+
+// balanceTargetCheck reuses placement feedback for all known Regions
+// after a placement rejection. Every new complete target is
+// still validated on all known Regions before it is returned for commit.
+func (c *AffinityChecker) balanceTargetCheck(ctx context.Context, storeIDs []uint64, regions []*core.RegionInfo) func([]int, int, int64) balanceplan.TargetFeedback {
+	index := make(map[uint64]int, len(storeIDs))
+	for i, id := range storeIDs {
+		index[id] = i
+	}
+	return func(voters []int, leader int, workLimit int64) balanceplan.TargetFeedback {
+		stores := make([]uint64, len(voters))
+		for i, s := range voters {
+			stores[i] = storeIDs[s]
+		}
+		feedback := balanceplan.TargetFeedback{}
+		for _, region := range regions {
+			if ctx.Err() != nil || feedback.Work >= workLimit {
+				feedback.Status = balanceplan.TargetRejected
+				return feedback
+			}
+			virtual := cloneRegionWithReplacePeerStores(region, storeIDs[leader], stores...)
+			feedback.Work += int64(len(storeIDs))
+			if virtual == nil {
+				feedback.Status = balanceplan.TargetRejected
+				return feedback
+			}
+			fit := c.ruleManager.FitRegionWithoutCache(c.cluster, virtual)
+			if fit != nil {
+				feedback.Work += int64(len(storeIDs) * len(fit.RuleFits))
+			}
+			d := c.regionPlacementFeedback(virtual, fit)
+			feedback.Work += int64(len(storeIDs) * d.scans)
+			switch d.status {
+			case bestLocationSatisfied:
+				continue
+			case bestLocationTemporarilyBlocked:
+				if feedback.Status == balanceplan.TargetSatisfied {
+					feedback.Status = balanceplan.TargetTemporarilyBlocked
+				}
+			default:
+				feedback.Status = balanceplan.TargetRejected
+				for _, replacement := range d.replacements {
+					if old, ok := index[replacement.old]; ok {
+						r := balanceplan.StoreReplacement{Old: old}
+						for _, id := range replacement.candidates {
+							if next, ok := index[id]; ok {
+								r.Candidates = append(r.Candidates, next)
+							}
+						}
+						feedback.Replace = append(feedback.Replace, r)
+					}
+				}
+			}
+		}
+		return feedback
+	}
 }
 
 // balanceGroupRules returns the voter rules of a group. The planner models
