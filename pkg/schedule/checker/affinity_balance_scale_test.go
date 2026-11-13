@@ -74,7 +74,7 @@ func TestAffinityBalanceAtScale(t *testing.T) {
 				require.Equal(t, balanceplan.StopGreedy, result.planner.Stop)
 				require.False(t, result.retry)
 				for _, target := range result.targets {
-					status, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+					status, _, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
 					require.Equal(t, balanceAllowed, status)
 				}
 				written, _, err := f.commitBalancePlan(t.Context(), snapshot, result, f.ruleManager.GetRevision())

@@ -141,7 +141,8 @@ func (c *AffinityChecker) planBalanceTargets(ctx context.Context, snapshot *affi
 		learnerConflict := false
 		for _, target := range targets {
 			group := snapshot.Group(target.ID)
-			status, learners, failure := c.validateBalancePlanTarget(ctx, snapshot, group, target)
+			status, learners, failure, retry := c.validateBalancePlanTarget(ctx, snapshot, group, target)
+			res.retry = res.retry || retry
 			if err := ctx.Err(); err != nil {
 				return res, err
 			}
@@ -169,7 +170,6 @@ func (c *AffinityChecker) planBalanceTargets(ctx context.Context, snapshot *affi
 				if status != balanceRejected {
 					pinned[target.ID] = balanceGroupUnready
 				}
-				res.retry = res.retry || status != balanceRejected
 			}
 			failed = true
 		}
@@ -239,14 +239,16 @@ func (c *AffinityChecker) commitBalancePlan(ctx context.Context, snapshot *affin
 // validateBalancePlanTarget checks the store actions of a changed group and,
 // on every known Region of its ranges, the current Region and the Region moved to
 // the target. On a rejection it also returns the target voters that hold a
-// learner of the Region.
+// learner of the Region. The last result preserves any observed transient
+// constraint even if a definite rejection wins the aggregate status.
 func (c *AffinityChecker) validateBalancePlanTarget(ctx context.Context, snapshot *affinity.BalanceSnapshot, group *affinity.GroupState,
-	target *affinity.Group) (balanceStatus, []uint64, balanceTargetFailure) {
+	target *affinity.Group) (balanceStatus, []uint64, balanceTargetFailure, bool) {
 	status, failure := c.balanceTargetExecutionStatus(&group.Group, target), balanceTargetValid
+	retry := status == balanceTemporarilyBlocked
 	if status != balanceAllowed {
 		failure = balanceTargetStoreAction
 		if status == balanceRejected {
-			return status, nil, failure
+			return status, nil, failure, retry
 		}
 	}
 	var learners []uint64
@@ -254,16 +256,18 @@ func (c *AffinityChecker) validateBalancePlanTarget(ctx context.Context, snapsho
 	for ctx.Err() == nil {
 		region := scan.next(c.cluster)
 		if region == nil {
-			return status, learners, failure
+			return status, learners, failure, retry
 		}
 		fit, currentStatus := c.validateBalanceCurrentRegion(group, region)
 		if currentStatus != balanceAllowed {
+			retry = true
 			if status == balanceAllowed {
 				status, failure = currentStatus, balanceTargetRegionUnready
 			}
 			continue
 		}
 		targetStatus, targetFailure := c.validateBalanceTarget(target, region, fit)
+		retry = retry || targetStatus == balanceTemporarilyBlocked
 		if targetFailure == balanceTargetLearnerConflict {
 			for _, peer := range region.GetLearners() {
 				if id := peer.GetStoreId(); slices.Contains(target.VoterStoreIDs, id) && !slices.Contains(learners, id) {
@@ -278,7 +282,7 @@ func (c *AffinityChecker) validateBalancePlanTarget(ctx context.Context, snapsho
 			status, failure = targetStatus, targetFailure
 		}
 	}
-	return balanceUnready, learners, balanceTargetRegionUnready
+	return balanceUnready, learners, balanceTargetRegionUnready, true
 }
 
 // balanceCreatingTable reports whether a table has an auto group that was

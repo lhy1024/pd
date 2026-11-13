@@ -557,10 +557,11 @@ func TestAffinityBalanceLearnerInLaterRegion(t *testing.T) {
 	// A temporary store action must not hide a later Region's learner conflict.
 	f.SetStoreBusy(4, true)
 	snapshot := f.snapshot()
-	status, learners, reason := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(blocked), initial.targets[index])
+	status, learners, reason, retry := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(blocked), initial.targets[index])
 	re.Equal(balanceRejected, status)
 	re.Equal([]uint64{4}, learners)
 	re.Equal(balanceTargetLearnerConflict, reason)
+	re.True(retry)
 	f.SetStoreBusy(4, false)
 	re.True(f.step())
 	// The TiFlash store holds a learner of every Region and is never a voter target.
