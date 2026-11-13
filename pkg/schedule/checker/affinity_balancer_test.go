@@ -66,8 +66,6 @@ func TestAffinityBalancerIdleLifecycle(t *testing.T) {
 		noImprovement := testutil.ToFloat64(affinityBalancePlanCounters[affinityBalanceNoImprovement])
 		re.False(b.balance(t.Context()))
 		re.Equal(1.0, testutil.ToFloat64(affinityBalancePlanCounters[affinityBalanceNoImprovement])-noImprovement)
-		re.Equal(1.0, testutil.ToFloat64(affinityBalanceTablesRegistered))
-		re.Equal(1.0, testutil.ToFloat64(affinityBalanceTablesIdle))
 		idle := b.idle[balanceTestTable()]
 		version, _ := m.GetBalanceVersion(balanceTestTable())
 		re.Equal(version, idle.version)
@@ -96,8 +94,6 @@ func TestAffinityBalancerIdleLifecycle(t *testing.T) {
 	re.False(b.balance(t.Context()))
 	re.Empty(b.tables)
 	re.Empty(b.idle)
-	re.Zero(testutil.ToFloat64(affinityBalanceTablesRegistered))
-	re.Zero(testutil.ToFloat64(affinityBalanceTablesIdle))
 }
 
 func TestAffinityBalancerBatchAndDisabledTables(t *testing.T) {

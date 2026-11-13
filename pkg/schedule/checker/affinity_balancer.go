@@ -99,8 +99,12 @@ func (b *affinityBalancer) run(ctx context.Context) {
 // any target was written.
 func (b *affinityBalancer) balance(ctx context.Context) bool {
 	allowed := b.checker.balanceAllowed()
-	defer b.collectTableMetrics(!allowed)
 	if !allowed {
+		b.mu.Lock()
+		if len(b.tables) > 0 {
+			affinityBalancePlanCounters[affinityBalanceDisabled].Inc()
+		}
+		b.mu.Unlock()
 		return false
 	}
 	manager := b.checker.affinityManager
@@ -148,11 +152,10 @@ func (b *affinityBalancer) step(ctx context.Context, id affinity.TableID, counts
 	result := "skipped"
 	var res balancePlanResult
 	var version uint64
-	var groups, numWritten int
-	var commitDuration time.Duration
+	var groups, numPlanned, numWritten int
 	defer func() {
 		duration := time.Since(start)
-		recordAffinityBalanceStepMetrics(result, &res, duration, commitDuration, numWritten)
+		recordAffinityBalanceStepMetrics(result, duration, numPlanned, numWritten)
 		if ce := log.L().Check(zap.DebugLevel, "planned affinity table"); ce != nil {
 			ce.Write(zap.String("table-id", string(id)), zap.Uint64("version", version), zap.String("result", result),
 				zap.Int("groups", groups), zap.Int("mutable", res.groupCounts[balanceGroupMutable]),
@@ -160,7 +163,7 @@ func (b *affinityBalancer) step(ctx context.Context, id affinity.TableID, counts
 				zap.Int("unsupported", res.groupCounts[balanceGroupUnsupported]),
 				zap.Any("baseline", res.planner.Baseline), zap.Any("score", res.planner.Score),
 				zap.String("stop", string(res.planner.Stop)), zap.Int64("work", res.work), zap.Int("visits", res.visits),
-				zap.Int("rounds", len(res.stops)), zap.Duration("duration", duration))
+				zap.Int("rounds", res.rounds), zap.Duration("duration", duration))
 		}
 	}()
 	c := b.checker
@@ -194,9 +197,8 @@ func (b *affinityBalancer) step(ctx context.Context, id affinity.TableID, counts
 		b.mu.Unlock()
 		return false, nil
 	}
-	commitStart := time.Now()
+	numPlanned = len(res.targets)
 	written, reason, err := c.commitBalancePlan(ctx, snapshot, res, revision)
-	commitDuration = time.Since(commitStart)
 	numWritten = len(written)
 	moveBalanceCounts(counts, snapshot, res.targets, written)
 	if len(written) > 0 {

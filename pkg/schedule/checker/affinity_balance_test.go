@@ -515,7 +515,8 @@ func TestAffinityBalancePlacement(t *testing.T) {
 	worse := f.ruleManager.FitRegionWithoutCache(f.Cluster, cloneRegionWithReplacePeerStores(region, 1, target.VoterStoreIDs...))
 	re.True(worse.IsSatisfied())
 	re.False(placementNotWorse(fit, worse))
-	re.Equal(balanceRejected, f.validateBalanceTarget(&target, region, fit))
+	status, _ = f.validateBalanceTarget(&target, region, fit)
+	re.Equal(balanceRejected, status)
 	rule := f.ruleManager.GetRule(placement.DefaultGroupID, placement.DefaultRuleID)
 	rule.IsolationLevel = "zone"
 	re.NoError(f.ruleManager.SetRule(rule))
@@ -553,6 +554,14 @@ func TestAffinityBalanceLearnerInLaterRegion(t *testing.T) {
 	learner := &metapb.Peer{Id: 200, StoreId: 4, Role: metapb.PeerRole_Learner}
 	later = later.Clone(core.WithRemoveStorePeer(6), core.WithAddPeer(learner))
 	f.PutRegion(later)
+	// A temporary store action must not hide a later Region's learner conflict.
+	f.SetStoreBusy(4, true)
+	snapshot := f.snapshot()
+	status, learners, reason := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(blocked), initial.targets[index])
+	re.Equal(balanceRejected, status)
+	re.Equal([]uint64{4}, learners)
+	re.Equal(balanceTargetLearnerConflict, reason)
+	f.SetStoreBusy(4, false)
 	re.True(f.step())
 	// The TiFlash store holds a learner of every Region and is never a voter target.
 	for _, group := range f.snapshot().Groups {
@@ -1221,7 +1230,8 @@ func TestAffinityBalanceOverlappingRulesAllowLeaderBalance(t *testing.T) {
 		re.True(fit.IsSatisfied())
 		target := group.Group
 		target.LeaderStoreID = 2
-		re.Equal(balanceAllowed, f.validateBalanceTarget(&target, region, fit))
+		status, _ = f.validateBalanceTarget(&target, region, fit)
+		re.Equal(balanceAllowed, status)
 	}
 	re.Equal([2]int{16, 4}, balanceTableScore(f.affinityManager, balanceTestTable()))
 	re.True(f.step())
