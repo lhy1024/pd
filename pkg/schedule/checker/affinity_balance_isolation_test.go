@@ -56,7 +56,7 @@ func TestAffinityBalanceSameRoleIsolation(t *testing.T) {
 	re.Equal(int64(8), result.Baseline.Voter)
 	re.Equal(int64(6), result.Score.Voter)
 	for _, target := range plan.changedTargets(&result) {
-		status, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+		status, _, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
 		t.Logf("raw target: group=%s voters=%v leader=%d status=%d", target.ID, target.VoterStoreIDs, target.LeaderStoreID, status)
 	}
 	region := f.GetRegion(1)
@@ -100,7 +100,7 @@ func TestAffinityBalanceSameRoleIsolation(t *testing.T) {
 		raw := balanceplan.Plan(&plan.input, balanceplan.Options{Seed: snapshot.Version})
 		re.True(raw.Score.Less(raw.Baseline))
 		for _, target := range plan.changedTargets(&raw) {
-			status, _, reason := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+			status, _, reason, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
 			re.Equal(balanceRejected, status)
 			re.Equal(balanceTargetLocation, reason)
 			pinned[target.ID] = balanceGroupUnsupported
@@ -150,12 +150,32 @@ func TestAffinityBalanceLaterRegionPlacement(t *testing.T) {
 			}
 		}
 	}
+	// A heartbeat after the snapshot makes the first Region temporarily
+	// unready. A later Region still rejects the relaxed target's location.
+	first := f.GetRegion(1)
+	extra := &metapb.Peer{Id: 200, StoreId: 3}
+	f.PutRegion(first.Clone(core.WithAddPeer(extra), core.WithPendingPeers([]*metapb.Peer{extra})))
+	blocked, err := f.planBalanceTargets(t.Context(), snapshot)
+	require.NoError(t, err)
+	t.Logf("mixed-state: targets=%d rounds=%d retry=%v temporary=%v limited=%v stop=%s", len(blocked.targets), blocked.rounds, blocked.retry, blocked.planner.TemporarilyBlocked, blocked.planner.PlacementLimited, blocked.planner.Stop)
+	require.Empty(t, blocked.targets)
+	require.Equal(t, 2, blocked.rounds)
+	require.False(t, blocked.planner.TemporarilyBlocked)
+	require.False(t, blocked.planner.PlacementLimited)
+	require.Equal(t, balanceplan.StopGreedy, blocked.planner.Stop)
+	require.True(t, blocked.retry)
+	target := rawPlan.changedTargets(&raw)[0]
+	status, _, reason, retry := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+	require.Equal(t, balanceRejected, status)
+	require.Equal(t, balanceTargetLocation, reason)
+	require.True(t, retry)
+	f.PutRegion(first)
 	res, err := f.planBalanceTargets(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.NotEmpty(t, res.targets)
 	require.Greater(t, res.rounds, 1)
 	for _, target := range res.targets {
-		status, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+		status, _, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
 		require.Equal(t, balanceAllowed, status)
 	}
 	t.Logf("later Region: raw=%v result=%v targets=%d rounds=%d retry=%v", raw.Score, res.planner.Score, len(res.targets), res.rounds, res.retry)

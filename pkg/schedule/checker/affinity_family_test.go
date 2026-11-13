@@ -92,7 +92,7 @@ func TestAffinityBalanceCapacityExpansion(t *testing.T) {
 		require.NoError(t, err)
 		rejected := 0
 		for _, target := range result.targets {
-			status, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
+			status, _, _, _ := f.validateBalancePlanTarget(t.Context(), snapshot, snapshot.Group(target.ID), target)
 			if status != balanceAllowed {
 				rejected++
 			}
