@@ -571,13 +571,14 @@ func TestAffinityBalanceLearnerInLaterRegion(t *testing.T) {
 	target := f.affinityManager.GetAffinityGroupState(blocked)
 	re.NotContains(target.VoterStoreIDs, uint64(4))
 	re.Contains(f.affinityManager.GetAffinityGroupState(ids[1-groupIndex]).VoterStoreIDs, uint64(4))
-	op := f.createAffinityOperator(later, target)
+	op, relearn := f.createAffinityOperator(later, target, f.ruleManager.FitRegion(f.Cluster, later))
+	re.False(relearn)
 	re.NotNil(op)
 	operator.ApplyOperator(f.Cluster, op)
 	re.Equal(learner, f.GetRegion(later.GetID()).GetStoreLearner(4))
 }
 
-func TestAffinityBalanceValidationRoundRetry(t *testing.T) {
+func TestAffinityBalanceValidationLearnerExclusions(t *testing.T) {
 	re := require.New(t)
 	f := newAffinityBalanceTest(t, 15)
 	re.NoError(f.ruleManager.SetRule(&placement.Rule{GroupID: placement.DefaultGroupID, ID: "learner", Role: placement.Learner, Count: 1}))
@@ -589,8 +590,8 @@ func TestAffinityBalanceValidationRoundRetry(t *testing.T) {
 	f.group(id, 1, 1, []uint64{1, 2, 3}, keys...)
 	f.group(fixed, 13, 1, []uint64{1, 2, 3}, "z", "zz")
 	f.policy(affinity.BalancePolicyFixed, fixed)
-	// Each candidate voter store holds a learner in a different Region, so
-	// excluding one conflicting store per round cannot finish within ten rounds.
+	// Each candidate voter store holds a learner in a different Region. The
+	// feedback path learns these exclusions together before replanning.
 	for i := range 12 {
 		region := f.GetRegion(uint64(i + 1))
 		f.PutRegion(region.Clone(core.WithAddPeer(&metapb.Peer{Id: uint64(100 + i), StoreId: uint64(4 + i), Role: metapb.PeerRole_Learner})))
@@ -598,12 +599,14 @@ func TestAffinityBalanceValidationRoundRetry(t *testing.T) {
 	before := f.snapshot()
 	res, err := f.planBalanceTargets(t.Context(), before)
 	re.NoError(err)
-	re.Len(res.stops, 10)
-	re.Empty(res.targets)
-	re.True(res.retry)
-	re.False(f.step())
-	re.Equal(before.Groups, f.snapshot().Groups)
-	re.WithinDuration(time.Now().Add(30*time.Second), f.balancer.idle[balanceTestTable()].until, 2*time.Second)
+	re.Equal(2, res.rounds)
+	re.Len(res.targets, 1)
+	re.Equal([]uint64{1, 2, 3}, res.targets[0].VoterStoreIDs)
+	re.True(f.step())
+	group := f.affinityManager.GetAffinityGroupState(id)
+	re.Equal(res.targets[0].LeaderStoreID, group.LeaderStoreID)
+	re.Equal(res.targets[0].VoterStoreIDs, group.VoterStoreIDs)
+	re.Equal(before.Group(fixed).Group, f.affinityManager.GetAffinityGroupState(fixed).Group)
 }
 
 func TestAffinityBalanceRegionHeartbeat(t *testing.T) {
@@ -751,7 +754,9 @@ func TestAffinityBalanceTiFlashRecordRules(t *testing.T) {
 			for _, region := range f.GetRegions() {
 				group, _ := f.affinityManager.GetRegionAffinityGroupState(region)
 				learners := region.GetLearners()
-				if op := f.createAffinityOperator(region, group); op != nil {
+				op, relearn := f.createAffinityOperator(region, group, f.ruleManager.FitRegion(f.Cluster, region))
+				re.False(relearn)
+				if op != nil {
 					operator.ApplyOperator(f.Cluster, op)
 				}
 				moved := f.GetRegion(region.GetID())
@@ -952,9 +957,14 @@ func TestAffinityOperatorTargetStores(t *testing.T) {
 			_, err := f.affinityManager.UpdateAffinityGroupPeers(ids[0], leader, voters)
 			re.NoError(err)
 			region, group := f.GetRegion(1), f.affinityManager.GetAffinityGroupState(ids[0])
-			re.NotNil(f.createAffinityOperator(region, group))
+			fit := f.ruleManager.FitRegion(f.Cluster, region)
+			op, relearn := f.createAffinityOperator(region, group, fit)
+			re.False(relearn)
+			re.NotNil(op)
 			tc.set(f, store)
-			re.Nil(f.createAffinityOperator(region, group))
+			op, relearn = f.createAffinityOperator(region, group, fit)
+			re.False(relearn)
+			re.Nil(op)
 		})
 	}
 }
