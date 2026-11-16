@@ -95,6 +95,11 @@ func (m *Manager) UpdateAffinityGroupTargets(targets []GroupTarget) ([]string, e
 func (m *Manager) updateGroupTarget(target GroupTarget) (bool, error) {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
+	return m.updateGroupTargetLocked(target)
+}
+
+// updateGroupTargetLocked requires metaMutex to serialize metadata changes.
+func (m *Manager) updateGroupTargetLocked(target GroupTarget) (bool, error) {
 	var stored *Group
 	written := false
 	err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
@@ -149,9 +154,22 @@ func (t *GroupTarget) result() *Group {
 // existing second-resolution creation timestamp cannot distinguish same-ID
 // recreations within one second.
 func sameStoredGroup(a, b *Group) bool {
-	return a.ID == b.ID && a.CreateTimestamp == b.CreateTimestamp &&
+	return a.ID == b.ID &&
+		a.CreateTimestamp == b.CreateTimestamp &&
+		sameBalancePolicy(a.BalancePolicy, b.BalancePolicy) &&
 		a.LeaderStoreID == b.LeaderStoreID &&
 		slices.Equal(sortedStoreIDs(a.VoterStoreIDs), sortedStoreIDs(b.VoterStoreIDs))
+}
+
+// sameBalancePolicy compares policies, where an empty policy means auto.
+func sameBalancePolicy(a, b BalancePolicy) bool {
+	if a == "" {
+		a = BalancePolicyAuto
+	}
+	if b == "" {
+		b = BalancePolicyAuto
+	}
+	return a == b
 }
 
 func sortedStoreIDs(ids []uint64) []uint64 {
