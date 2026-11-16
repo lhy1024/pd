@@ -472,7 +472,7 @@ func UpdateAffinityGroupTargets(c *gin.Context) {
 //	@Failure		404	{string}	string	"Affinity group not found."
 //	@Failure		500	{string}	string	"PD server failed to proceed the request."
 //	@Router			/affinity-groups/{group_id} [delete]
-//	@Description	force=false: missing group returns 404; force=true: missing group is ignored, existing group is deleted.
+//	@Description	force=false: missing group returns 404; force=true: the group and its label rule are deleted if they exist, so a label rule left without its group is deleted too.
 func DeleteAffinityGroup(c *gin.Context) {
 	svr := c.MustGet(middlewares.ServerContextKey).(*server.Server)
 	manager, err := svr.GetAffinityManager()
@@ -497,23 +497,18 @@ func DeleteAffinityGroup(c *gin.Context) {
 	}
 	force := queryParams.Force
 
-	if !manager.IsGroupExist(groupID) {
-		if !force {
-			c.AbortWithStatusJSON(http.StatusNotFound, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID).Error())
-			return
-		}
-		// If force is true and group does not exist, succeed silently
-		c.JSON(http.StatusOK, "Affinity group deleted successfully.")
+	if !force && !manager.IsGroupExist(groupID) {
+		c.AbortWithStatusJSON(http.StatusNotFound, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID).Error())
 		return
 	}
 
-	// Delete the affinity group from manager
+	// A forced delete also runs when the group does not exist, so that it
+	// removes a label rule left without its group, for example by a creation
+	// request that failed after some of its transactions committed.
 	err = manager.DeleteAffinityGroups([]string{groupID}, force)
 	if handleAffinityError(c, err) {
 		return
 	}
-
-	// Note: Label deletion is now handled inside the DeleteAffinityGroup method
 
 	c.JSON(http.StatusOK, "Affinity group deleted successfully.")
 }
@@ -522,7 +517,8 @@ func DeleteAffinityGroup(c *gin.Context) {
 //
 //	@Tags		affinity-groups
 //	@Summary	List all affinity groups.
-//	@Param		ids	query	[]string	false	"Optional affinity group IDs. Repeat as ids=a&ids=b."
+//	@Param		ids		query	[]string	false	"Optional affinity group IDs. Repeat as ids=a&ids=b."
+//	@Param		prefix	query	string		false	"Optional prefix that the IDs of the listed groups start with."
 //	@Produce	json
 //	@Success	200	{object}	AffinityGroupsResponse
 //	@Failure	400	{string}	string	"The input is invalid."
@@ -536,18 +532,10 @@ func GetAllAffinityGroups(c *gin.Context) {
 		return
 	}
 
-	rawIDs := c.QueryArray("ids")
-	var (
-		groupStates map[string]*affinity.GroupState
-	)
-	if len(rawIDs) == 0 {
-		groupStates = affinity.CollectAllGroupStates(manager)
-	} else {
-		groupStates, err = affinity.CollectGroupStates(manager, rawIDs)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
-			return
-		}
+	groupStates, err := affinity.CollectGroupStatesByQuery(manager, c.QueryArray("ids"), c.Query("prefix"))
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+		return
 	}
 
 	response := AffinityGroupsResponse{
