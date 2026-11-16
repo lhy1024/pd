@@ -279,6 +279,16 @@ func TestAffinityGroupAndRangeCommands(t *testing.T) {
 	groups := make(map[string]*pd.AffinityGroupState)
 	mustRun(&groups, "create", "--group-id", "poc-a", "--range", customRange(0x0a, 0x0b), "--range", customRange(0x0c, 0x0d))
 	re.Equal(2, groups["poc-a"].RangeCount)
+	for _, policy := range []string{"fixed", "auto"} {
+		var state pd.AffinityGroupState
+		mustRun(&state, "policy", "--group-id", "poc-a", "--balance-policy", policy)
+		re.Equal("poc-a", state.ID)
+		re.Equal(policy, state.BalancePolicy)
+	}
+	for _, selector := range []string{"table-id", "partition-id", "keyspace-id"} {
+		_, err := run("policy", "--group-id", "poc-a", "--balance-policy", "fixed", "--"+selector, "1")
+		re.ErrorContains(err, "--group-id cannot be used with --"+selector)
+	}
 	ranges := showRanges("--group-id", "poc-a")
 	re.Equal("poc-a", ranges.ID)
 	re.Len(ranges.Ranges, 2)

@@ -390,8 +390,8 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 	// When affinityVer is non-zero, it indicates a non-admin operation and triggers additional checks.
 	// Note: if the check fails, no changes are applied. The existing Group is returned as-is without error.
 	if affinityVer != 0 {
-		// If affinityVer is not equal, the update may come from stale statistics and will be ignored.
-		if group.affinityVer != affinityVer {
+		// A conflicted group permits regular scheduling but not first-win.
+		if group.affinityVer != affinityVer || group.rangeConflict {
 			return group, nil
 		}
 		// Group must not change voterStoreIDs while it is not in the expired status. Changing only leaderStoreID is allowed.
