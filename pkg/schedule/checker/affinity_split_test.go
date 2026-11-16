@@ -421,7 +421,7 @@ func TestAffinitySplitBeforeLearnerMove(t *testing.T) {
 				// A swap demotes a voter, which needs joint consensus.
 				tc.SetEnableUseJointConsensus(true)
 				re.NoError(tc.GetRuleManager().SetRule(newLearnerRule(testCase.learnerStores...)))
-				putLearner(tc, 1, 4)
+				putLearners(tc, 1, 4)
 			}
 			region := tc.GetRegion(1).Clone(core.SetApproximateSize(testCase.size), core.SetApproximateKeys(10), core.SetSource(core.Heartbeat))
 			tc.PutRegion(region)
