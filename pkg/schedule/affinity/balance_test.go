@@ -25,6 +25,7 @@ import (
 
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
+	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/versioninfo/kerneltype"
@@ -251,4 +252,61 @@ func TestCommitBalanceTargetsAfterLostReply(t *testing.T) {
 	re.NoError(err)
 	re.Equal([]string{id}, written)
 	re.Equal(uint64(2), loadStoredGroup(re, store, id).LeaderStoreID)
+}
+
+type cancelTargetStorage struct {
+	endpoint.AffinityStorage
+	cancel       context.CancelFunc
+	beforeCommit bool
+	transactions int
+}
+
+func (s *cancelTargetStorage) RunInTxn(ctx context.Context, f func(kv.Txn) error) error {
+	s.transactions++
+	if s.beforeCommit {
+		s.cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := s.AffinityStorage.RunInTxn(ctx, f)
+	s.cancel()
+	return err
+}
+
+func TestCommitBalanceTargetsCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		beforeCommit bool
+	}{{"between transactions", false}, {"in transaction", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			re := require.New(t)
+			m, store := newTargetTestManager(t)
+			ids := []string{"_tidb_ks1_pt_100_p1", "_tidb_ks1_pt_100_p2"}
+			re.NoError(m.CreateAffinityGroups([]GroupKeyRanges{{GroupID: ids[0]}, {GroupID: ids[1]}}))
+			snapshot := m.GetBalanceSnapshot("_tidb_ks1_pt_100", m.GetBalanceCounts())
+			targets := make([]*Group, 0, len(ids))
+			for _, id := range ids {
+				target := targetFor(m, id, 1, 1, 2, 3)
+				targets = append(targets, target.result())
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			wrapped := &cancelTargetStorage{AffinityStorage: store, cancel: cancel, beforeCommit: tc.beforeCommit}
+			m.storage = wrapped
+			written, err := m.CommitBalanceTargets(ctx, snapshot, targets)
+			re.ErrorIs(err, context.Canceled)
+			re.NoError(m.ctx.Err())
+			re.Equal(1, wrapped.transactions, "cancelled callers must not start another transaction")
+			if tc.beforeCommit {
+				re.Empty(written)
+				re.Zero(loadStoredGroup(re, store, ids[0]).LeaderStoreID)
+			} else {
+				re.Equal(ids[:1], written)
+				re.Equal(uint64(1), loadStoredGroup(re, store, ids[0]).LeaderStoreID)
+				re.Equal(uint64(1), m.GetAffinityGroupState(ids[0]).LeaderStoreID)
+			}
+			re.Zero(loadStoredGroup(re, store, ids[1]).LeaderStoreID)
+		})
+	}
 }

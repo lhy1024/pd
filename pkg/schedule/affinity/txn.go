@@ -355,7 +355,7 @@ func (m *Manager) updateAffinityGroupPeersWithAffinityVer(groupID string, affini
 		if m.targetWriter == nil {
 			// PD has no affinity watcher. Even an unchanged observation must
 			// check storage after a write whose committed result was unknown.
-			if _, err := m.updateGroupTargetLocked(target); err != nil {
+			if _, err := m.updateGroupTargetLocked(m.ctx, target); err != nil {
 				return nil, err
 			}
 		} else {

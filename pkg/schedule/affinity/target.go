@@ -56,6 +56,10 @@ func (m *Manager) SetTargetWriter(w TargetWriter) {
 // target in its own conditional transaction. Earlier commits survive an error.
 // Each target releases metaMutex before the next one starts.
 func (m *Manager) UpdateAffinityGroupTargets(targets []GroupTarget) ([]string, error) {
+	return m.updateGroupTargets(m.ctx, targets)
+}
+
+func (m *Manager) updateGroupTargets(ctx context.Context, targets []GroupTarget) ([]string, error) {
 	if len(targets) == 0 {
 		return nil, errs.ErrEmptyRequest.FastGenByArgs("no targets provided")
 	}
@@ -78,10 +82,13 @@ func (m *Manager) UpdateAffinityGroupTargets(targets []GroupTarget) ([]string, e
 	}
 	written := make([]string, 0, len(adjusted))
 	for _, target := range adjusted {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
 		if err := m.checkHasUnavailableStore(target.LeaderStoreID, target.VoterStoreIDs); err != nil {
 			continue
 		}
-		ok, err := m.updateGroupTarget(target)
+		ok, err := m.updateGroupTarget(ctx, target)
 		if err != nil {
 			return written, err
 		}
@@ -92,17 +99,17 @@ func (m *Manager) UpdateAffinityGroupTargets(targets []GroupTarget) ([]string, e
 	return written, nil
 }
 
-func (m *Manager) updateGroupTarget(target GroupTarget) (bool, error) {
+func (m *Manager) updateGroupTarget(ctx context.Context, target GroupTarget) (bool, error) {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	return m.updateGroupTargetLocked(target)
+	return m.updateGroupTargetLocked(ctx, target)
 }
 
 // updateGroupTargetLocked requires metaMutex to serialize metadata changes.
-func (m *Manager) updateGroupTargetLocked(target GroupTarget) (bool, error) {
+func (m *Manager) updateGroupTargetLocked(ctx context.Context, target GroupTarget) (bool, error) {
 	var stored *Group
 	written := false
-	err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
+	err := m.storage.RunInTxn(ctx, func(txn kv.Txn) error {
 		value, err := txn.Load(keypath.AffinityGroupPath(target.Expected.ID))
 		if err != nil || value == "" {
 			return err

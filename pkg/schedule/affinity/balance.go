@@ -261,7 +261,7 @@ func (m *Manager) CommitBalanceTargets(ctx context.Context, snapshot *BalanceSna
 		return nil, err
 	}
 	if m.targetWriter == nil {
-		return m.UpdateAffinityGroupTargets(groupTargets)
+		return m.updateGroupTargets(ctx, groupTargets)
 	}
 	written, err := m.targetWriter.WriteGroupTargets(ctx, groupTargets)
 	if err != nil {
