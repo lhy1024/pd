@@ -223,6 +223,7 @@ func (m *Manager) applyStoreConditions(unavailableStores map[uint64]storeConditi
 	m.unavailableStores = unavailableStores
 	m.storeConditionsKnown = true
 	for _, groupInfo := range m.groups {
+		groupInfo.storeConditionsUnknown = false
 		availability := groupInfo.GetAvailability()
 
 		// A Group in the expired status cannot be restored.
