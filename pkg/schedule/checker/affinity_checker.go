@@ -757,7 +757,7 @@ func (c *AffinityChecker) witnessTargetAllowed(region *core.RegionInfo, group *a
 				_, status := c.moveConflictingLearners(region, group, fit, roles, target)
 				return status != affinityPlacementRejected
 			}
-			return c.checkRegionFitAtBestLocation(target, c.ruleManager.FitRegionWithoutCache(c.cluster, target)) != affinityPlacementRejected
+			return c.checkRegionPlacement(target, c.ruleManager.FitRegionWithoutCache(c.cluster, target), false).status != affinityPlacementRejected
 		}
 		for i := start; i <= len(candidates)-count; i++ {
 			if remaining == 0 {

@@ -796,7 +796,7 @@ func TestAffinityCheckerLearnerSearchBudget(t *testing.T) {
 				func(roles map[uint64]placement.PeerRoleType) affinityPlacementStatus {
 					visits++
 					layout := regionWithRoles(region, leader, roles)
-					return checker.checkRegionFitAtBestLocation(layout, tc.GetRuleManager().FitRegionWithoutCache(tc, layout))
+					return checker.checkRegionPlacement(layout, tc.GetRuleManager().FitRegionWithoutCache(tc, layout), false).status
 				})
 			re.False(temporary)
 			if n == 1 {
