@@ -666,9 +666,6 @@ func (c *AffinityChecker) checkRegionPlacement(region *core.RegionInfo, fit *pla
 				feedback.replacements = append(feedback.replacements, bestLocationReplacement{old: oldStoreID, candidates: ids})
 			}
 		}
-		if filterByTempState {
-			status = affinityPlacementTemporary
-		}
 	}
 
 	// A rejected Region may be repaired through another fitted rule, or another
