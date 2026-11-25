@@ -162,6 +162,10 @@ func (m *Manager) initialize() error {
 				zap.Error(errs.ErrLoadRule.Wrap(err)))
 			return
 		}
+		if err := validateBalancePolicy(group.BalancePolicy); err != nil {
+			log.Warn("unknown affinity group balance policy from storage, the group keeps its target",
+				zap.String("key", k), zap.Error(err))
+		}
 		m.initGroupLocked(group)
 	})
 	if err != nil {
@@ -197,7 +201,7 @@ func (m *Manager) setGroupLocked(group *Group) {
 		AffinityVer: 1,
 		Regions:     make(map[uint64]regionCache),
 	}
-	groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
+	groupInfo.VoterStoreIDs = sortedStoreIDs(group.VoterStoreIDs)
 	m.setTargetAvailabilityLocked(groupInfo)
 	m.groups[group.ID] = groupInfo
 }
@@ -581,6 +585,13 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 // SyncGroupFromEtcdWithRevision synchronizes a group and its key's modification revision.
 // A zero modRevision deduplicates by stored group contents.
 func (m *Manager) SyncGroupFromEtcdWithRevision(group *Group, modRevision int64) {
+	if err := validateBalancePolicy(group.BalancePolicy); err != nil {
+		log.Warn("unknown affinity group balance policy from etcd, the group keeps its target",
+			zap.String("group-id", group.ID), zap.Error(err))
+	}
+	clonedGroup := *group
+	clonedGroup.VoterStoreIDs = sortedStoreIDs(group.VoterStoreIDs)
+	group = &clonedGroup
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
@@ -594,7 +605,7 @@ func (m *Manager) SyncGroupFromEtcdWithRevision(group *Group, modRevision int64)
 			return
 		}
 		stored := existingGroup.storedGroup()
-		matchesStored = sameStoredGroup(&stored, group)
+		matchesStored = sameStoredGroup(&stored, group) && stored.BalancePolicy == group.BalancePolicy
 		if modRevision == 0 && matchesStored {
 			m.RUnlock()
 			return
@@ -678,10 +689,18 @@ func (m *Manager) syncGroupTargetLocked(groupInfo *runtimeGroupInfo, group *Grou
 		m.groups[group.ID].rangeConflict = groupInfo.rangeConflict
 		return true
 	}
+	// A policy-only update to the stored target leaves a local replacement in place.
+	if groupInfo.persistedGroup != nil && sameGroupTarget(groupInfo.persistedGroup, group) {
+		groupInfo.BalancePolicy = group.BalancePolicy
+		groupInfo.persistedGroup.BalancePolicy = group.BalancePolicy
+		return false
+	}
+
 	// A duplicate or a healthy local confirmation preserves runtime state
 	// if the voter order also matches.
 	if (groupInfo.persistedGroup == nil || groupInfo.IsAvailable()) &&
-		sameStoredGroup(&groupInfo.Group, group) && slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs) {
+		sameGroupTarget(&groupInfo.Group, group) && slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs) {
+		groupInfo.BalancePolicy = group.BalancePolicy
 		groupInfo.persistedGroup = nil
 		return false
 	}

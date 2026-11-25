@@ -115,6 +115,101 @@ func targetRegion(voters ...uint64) *core.RegionInfo {
 	return generateRegionForTest(10, voters, targetTestRange)
 }
 
+func TestTargetPolicyCAS(t *testing.T) {
+	test := newTargetTest(t, "g")
+	target := test.target("g", 1, 1, 2, 3)
+	_, err := test.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+	test.NoError(err)
+	test.write([]string{}, target)
+	test.Zero(test.stored("g").LeaderStoreID)
+	test.Equal(BalancePolicyFixed, test.GetAffinityGroupState("g").BalancePolicy)
+}
+
+func TestClassicFirstWinKeepsCommittedPolicy(t *testing.T) {
+	for _, hasTarget := range []bool{false, true} {
+		t.Run(fmt.Sprintf("has-target-%t", hasTarget), func(t *testing.T) {
+			test := newTargetTest(t, "g")
+			test.applyStoreConditions(nil)
+			if hasTarget {
+				_, err := test.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+				test.NoError(err)
+			}
+			wrapped := &targetReplyStorage{AffinityStorage: test.store, loseReply: true}
+			test.storage = wrapped
+			_, err := test.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+			test.Error(err)
+			wrapped.loseReply = false
+			test.Empty(test.GetAffinityGroupState("g").BalancePolicy)
+			committed := *test.stored("g")
+			test.Equal(BalancePolicyFixed, committed.BalancePolicy)
+			test.ExpireAffinityGroup("g")
+			test.ObserveAvailableRegion(targetRegion(2, 1, 3), test.GetAffinityGroupState("g"))
+			test.Equal(committed, *test.stored("g"))
+			test.Equal(committed, test.GetAffinityGroupState("g").Group)
+			test.ObserveAvailableRegion(targetRegion(2, 1, 3), test.GetAffinityGroupState("g"))
+			state := test.GetAffinityGroupState("g")
+			test.Equal(BalancePolicyFixed, state.BalancePolicy)
+			test.Equal(uint64(2), state.LeaderStoreID)
+			test.Equal(state.Group, *test.stored("g"))
+		})
+	}
+}
+
+func TestClassicFirstWinBeforeStoreScan(t *testing.T) {
+	test := newTargetTest(t, "g")
+	test.False(test.storeConditionsKnown)
+	test.ObserveAvailableRegion(targetRegion(1, 2, 3), test.GetAffinityGroupState("g"))
+	state := test.GetAffinityGroupState("g")
+	test.True(state.AffinitySchedulingAllowed)
+	test.Equal(uint64(1), state.LeaderStoreID)
+	test.Equal(state.Group, *test.stored("g"))
+}
+
+func TestMCSFirstWinKeepsFixedTarget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		test := newTargetTest(t, "g")
+		test.applyStoreConditions(nil)
+		_, err := test.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2})
+		test.NoError(err)
+		test.DegradeAffinityGroup("g")
+		observed := test.GetAffinityGroupState("g")
+		_, err = test.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+		test.NoError(err)
+		test.reply = func(_ context.Context, targets []GroupTarget) ([]string, error) {
+			return []string{targets[0].Expected.ID}, nil
+		}
+		test.SetTargetWriter(test)
+		test.ObserveAvailableRegion(targetRegion(2, 1), observed)
+		synctest.Wait()
+		test.Empty(test.calls)
+		test.Equal(uint64(1), test.GetAffinityGroupState("g").LeaderStoreID)
+	})
+}
+
+func TestLocalTargetPreservesPolicyUpdate(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		test := newTargetTest(t, "g")
+		test.applyStoreConditions(map[uint64]storeCondition{})
+		test.reply = func(context.Context, []GroupTarget) ([]string, error) {
+			return nil, ErrTargetWriterUnsupported
+		}
+		test.SetTargetWriter(test)
+		test.observe("g", 1, 2, 3)
+		before := test.GetAffinityGroupState("g")
+		test.True(before.HasUnpersistedTarget())
+		stored := before.groupInfoPtr.storedGroup()
+		stored.BalancePolicy = BalancePolicyFixed
+		test.SyncGroupFromEtcd(&stored)
+		after := test.GetAffinityGroupState("g")
+		test.Equal(before.groupInfoPtr, after.groupInfoPtr)
+		test.Equal(before.affinityVer, after.affinityVer)
+		test.Equal(before.LeaderStoreID, after.LeaderStoreID)
+		test.True(after.HasUnpersistedTarget())
+		test.Equal(BalancePolicyFixed, after.BalancePolicy)
+		test.Equal(BalancePolicyFixed, after.groupInfoPtr.storedGroup().BalancePolicy)
+	})
+}
+
 func TestUpdateAffinityGroupTargetsValidation(t *testing.T) {
 	test := newTargetTest(t, "g", "h")
 	valid := test.target("g", 1, 1, 2)
