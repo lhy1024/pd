@@ -32,7 +32,7 @@ import (
 const (
 	// groupTargetsPath is the PD API that writes group targets.
 	groupTargetsPath = "/pd/api/v2/affinity-groups/targets"
-	writeTimeout     = 3 * time.Second
+	writeTimeout     = 5 * time.Second
 )
 
 // TargetWriter sends the targets decided by the scheduling service to PD, which
@@ -84,7 +84,11 @@ func (w *TargetWriter) WriteGroupTargets(ctx context.Context, targets []affinity
 		if resp.StatusCode == http.StatusNotFound {
 			return nil, errors.Wrapf(affinity.ErrTargetWriterUnsupported, "write affinity group targets to %s: %s %s", leaderURL, resp.Status, bytes.TrimSpace(data))
 		}
-		return nil, errors.Errorf("write affinity group targets to %s: %s %s", leaderURL, resp.Status, bytes.TrimSpace(data))
+		var result affinity.GroupTargetsResponse
+		if err := json.Unmarshal(data, &result); err != nil {
+			result.WrittenGroupIDs = nil
+		}
+		return result.WrittenGroupIDs, errors.Errorf("write affinity group targets to %s: %s %s", leaderURL, resp.Status, bytes.TrimSpace(data))
 	}
 	var result affinity.GroupTargetsResponse
 	if err := apiutil.ReadJSON(resp.Body, &result); err != nil {

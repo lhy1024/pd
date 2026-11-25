@@ -90,7 +90,7 @@ func (m *Manager) sendObservedTarget(obs observedTarget) {
 	m.RUnlock()
 	now := time.Now()
 	retrying := now.Before(m.targetWriteRetryAt)
-	if retrying && m.targetEndpointUnsupported {
+	if now.Before(m.targetEndpointUnsupportedUntil) || (retrying && m.targetEndpointUnsupported) {
 		m.targetWriteMutex.Unlock()
 		if current && !obs.persistOnly {
 			m.applyLocalObservedTarget(&obs)
@@ -195,6 +195,24 @@ func (m *Manager) drainObservedTargets() {
 		m.targetWriteMutex.Lock()
 		m.targetDrainWake = nil
 		now := time.Now()
+		if now.Before(m.targetEndpointUnsupportedUntil) {
+			var batch []observedTarget
+			for _, id := range m.pendingTargetIDs {
+				batch = append(batch, m.pendingTargets[id]...)
+			}
+			clear(m.pendingTargets)
+			m.pendingTargetIDs = nil
+			m.targetDrainRunning = false
+			m.targetWriteMutex.Unlock()
+			m.metaMutex.Lock()
+			for _, obs := range batch {
+				if !obs.persistOnly {
+					m.applyLocalObservedTarget(&obs)
+				}
+			}
+			m.metaMutex.Unlock()
+			return
+		}
 		if m.ctx.Err() != nil || now.Before(m.targetWriteRetryAt) {
 			clear(m.pendingTargets)
 			m.pendingTargetIDs = nil
@@ -283,6 +301,7 @@ func (m *Manager) drainObservedTargets() {
 
 		m.targetWriteRetryAt = finish.Add(time.Second)
 		if unsupported {
+			m.targetEndpointUnsupportedUntil = m.targetWriteRetryAt
 			for _, id := range m.pendingTargetIDs {
 				batch = append(batch, m.pendingTargets[id]...)
 			}
@@ -306,6 +325,13 @@ func (m *Manager) drainObservedTargets() {
 		}
 		return
 	}
+}
+
+// recordTargetEndpointUnsupported defers both remote writers after a 404.
+func (m *Manager) recordTargetEndpointUnsupported() {
+	m.targetWriteMutex.Lock()
+	m.targetEndpointUnsupportedUntil = time.Now().Add(time.Second)
+	m.targetWriteMutex.Unlock()
 }
 
 // applyLocalObservedTarget applies a healthy observation without a write when it

@@ -50,6 +50,7 @@ type GroupTargetsRequest struct {
 // GroupTargetsResponse lists targets committed or already stored.
 type GroupTargetsResponse struct {
 	WrittenGroupIDs []string `json:"written_group_ids"`
+	Error           string   `json:"error,omitempty"`
 }
 
 // TargetWriter persists targets in PD. The watcher publishes them locally.
@@ -68,6 +69,10 @@ func (m *Manager) SetTargetWriter(w TargetWriter) {
 // Cancellation of ctx or the Manager context stops further work. The returned
 // IDs include targets confirmed before cancellation or another error.
 func (m *Manager) UpdateAffinityGroupTargets(ctx context.Context, targets []GroupTarget) ([]string, error) {
+	return m.updateGroupTargets(ctx, targets)
+}
+
+func (m *Manager) updateGroupTargets(ctx context.Context, targets []GroupTarget) ([]string, error) {
 	if len(targets) == 0 {
 		return nil, errs.ErrEmptyRequest.FastGenByArgs("no targets provided")
 	}
@@ -112,6 +117,7 @@ func (m *Manager) UpdateAffinityGroupTargets(ctx context.Context, targets []Grou
 		}
 		if ok {
 			written = append(written, target.Expected.ID)
+			failpoint.InjectCall("afterAffinityTargetWritten")
 		}
 	}
 	return written, nil

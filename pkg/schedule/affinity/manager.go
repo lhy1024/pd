@@ -73,14 +73,15 @@ type Manager struct {
 	// as in the scheduling service. When it is nil, the Manager writes its own storage.
 	targetWriter TargetWriter
 	// targetWriteMutex protects the queue, backoff, and per-group state for background first-win requests.
-	targetWriteMutex          syncutil.Mutex
-	pendingTargets            map[string][]observedTarget // FIFO candidates by group ID
-	pendingTargetIDs          []string
-	sendingTargets            map[string]observedTarget
-	targetDrainRunning        bool
-	targetDrainWake           chan struct{}
-	targetWriteRetryAt        time.Time
-	targetEndpointUnsupported bool
+	targetWriteMutex               syncutil.Mutex
+	pendingTargets                 map[string][]observedTarget // FIFO candidates by group ID
+	pendingTargetIDs               []string
+	sendingTargets                 map[string]observedTarget
+	targetDrainRunning             bool
+	targetDrainWake                chan struct{}
+	targetWriteRetryAt             time.Time
+	targetEndpointUnsupported      bool
+	targetEndpointUnsupportedUntil time.Time
 
 	// labelRuleVer is increased while holding RWMutex whenever a group's label rule may change.
 	// A lookup reads it before the region labeler and saves its result only if it is unchanged,
@@ -97,6 +98,8 @@ type Manager struct {
 	// storeConditionsGeneration changes when the last group is deleted, so a
 	// scan that started before the deletion cannot publish its results afterward.
 	storeConditionsGeneration uint64
+	balanceTables             map[TableID]*balanceTable
+	lastBalanceVersion        uint64
 
 	// The following members are protected by metaMutex only, not protected by RWMutex.
 	// Validated PD writes cannot introduce conflicts, so they only need to
@@ -135,6 +138,7 @@ func NewManager(ctx context.Context, storage endpoint.AffinityStorage, storeSetI
 		groups:              make(map[string]*runtimeGroupInfo),
 		regions:             make(map[uint64]regionCache),
 		unavailableStores:   make(map[uint64]storeCondition),
+		balanceTables:       make(map[TableID]*balanceTable),
 		keyRanges:           make(map[string]GroupKeyRanges),
 		labelRuleBuffer:     make(map[string]*labeler.LabelRule),
 		splitDeniedRegions:  cache.NewCache(splitDeniedRegionLimit, cache.LRUCache),
@@ -204,6 +208,7 @@ func (m *Manager) setGroupLocked(group *Group) {
 	groupInfo.VoterStoreIDs = sortedStoreIDs(group.VoterStoreIDs)
 	m.setTargetAvailabilityLocked(groupInfo)
 	m.groups[group.ID] = groupInfo
+	m.touchBalanceTableLocked(group.ID)
 }
 
 func (m *Manager) noGroupsExist(groups []*Group) error {
@@ -241,6 +246,7 @@ func (m *Manager) resetCountLocked(groupInfo *runtimeGroupInfo) {
 	m.affinityRegionCount -= groupInfo.AffinityRegionCount
 	groupInfo.AffinityRegionCount = 0
 	groupInfo.AffinityVer++
+	m.touchBalanceTableLocked(groupInfo.ID)
 }
 
 // setTargetAvailabilityLocked resets availability and the degradation deadline for a new or replaced target.
@@ -372,6 +378,7 @@ func (m *Manager) deleteGroupLocked(groupID string) {
 	m.labelRuleVer.Add(1)
 	m.clearGroupCacheLocked(groupID)
 	delete(m.groups, groupID)
+	m.removeBalanceGroupLocked(groupID)
 	if len(m.groups) == 0 {
 		m.unavailableStores = nil
 		m.storeConditionsKnown = false
@@ -689,10 +696,14 @@ func (m *Manager) syncGroupTargetLocked(groupInfo *runtimeGroupInfo, group *Grou
 		m.groups[group.ID].rangeConflict = groupInfo.rangeConflict
 		return true
 	}
+	policyChanged := groupInfo.BalancePolicy != group.BalancePolicy
 	// A policy-only update to the stored target leaves a local replacement in place.
 	if groupInfo.persistedGroup != nil && sameGroupTarget(groupInfo.persistedGroup, group) {
 		groupInfo.BalancePolicy = group.BalancePolicy
 		groupInfo.persistedGroup.BalancePolicy = group.BalancePolicy
+		if policyChanged {
+			m.touchBalanceTableLocked(groupInfo.ID)
+		}
 		return false
 	}
 
@@ -702,6 +713,9 @@ func (m *Manager) syncGroupTargetLocked(groupInfo *runtimeGroupInfo, group *Grou
 		sameGroupTarget(&groupInfo.Group, group) && slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs) {
 		groupInfo.BalancePolicy = group.BalancePolicy
 		groupInfo.persistedGroup = nil
+		if policyChanged {
+			m.touchBalanceTableLocked(groupInfo.ID)
+		}
 		return false
 	}
 	m.applyGroupTargetLocked(groupInfo, group)

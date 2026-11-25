@@ -481,7 +481,8 @@ func UpdateAffinityGroupTargets(c *gin.Context) {
 		return
 	}
 	written, err := manager.UpdateAffinityGroupTargets(c.Request.Context(), req.Targets)
-	if handleAffinityError(c, err) {
+	if err != nil {
+		c.AbortWithStatusJSON(affinityErrorStatus(err), &affinity.GroupTargetsResponse{WrittenGroupIDs: written, Error: err.Error()})
 		return
 	}
 
@@ -605,22 +606,26 @@ func handleAffinityError(c *gin.Context, err error) bool {
 	if err == nil {
 		return false
 	}
+	c.AbortWithStatusJSON(affinityErrorStatus(err), err.Error())
+	return true
+}
+
+func affinityErrorStatus(err error) int {
 	switch {
 	case errs.ErrAffinityGroupNotFound.Equal(err):
-		c.AbortWithStatusJSON(http.StatusNotFound, err.Error())
+		return http.StatusNotFound
 	case errs.ErrAffinityGroupContent.Equal(err),
 		errs.ErrInvalidGroupID.Equal(err),
 		errs.ErrEmptyRequest.Equal(err),
 		errs.ErrAffinityGroupConflict.Equal(err),
 		errs.ErrInvalidKeyFormat.Equal(err):
-		c.AbortWithStatusJSON(http.StatusBadRequest, err.Error())
+		return http.StatusBadRequest
 	case errs.ErrAffinityGroupExist.Equal(err):
-		c.AbortWithStatusJSON(http.StatusConflict, err.Error())
+		return http.StatusConflict
 	default:
 		// such as ErrAffinityInternal
-		c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
+		return http.StatusInternalServerError
 	}
-	return true
 }
 
 // validateKeyRange checks the endpoints of a range in a create, add, or remove request.
