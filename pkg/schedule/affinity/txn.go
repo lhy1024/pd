@@ -31,9 +31,9 @@ import (
 
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/schedule/labeler"
-	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
+	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 )
 
@@ -130,6 +130,13 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 		groups = append(groups, group)
 	}
 
+	// Sources must already exist outside this request, independent of chunking.
+	for _, change := range changes {
+		if _, inRequest := seenIDs[change.InheritPolicyFrom]; change.InheritPolicyFrom != "" && inRequest {
+			return errs.ErrAffinityGroupContent.FastGenByArgs("policy inheritance source must not be in the same request")
+		}
+	}
+
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
@@ -182,21 +189,39 @@ func (m *Manager) createGroupsWithSkipExisting(changes []GroupKeyRanges, skipExi
 	// Step 4: Create the change plan for the Group
 	labelOps := plan.CommitOps()
 	groupOps := make([][]func(kv.Txn) error, 0, len(filteredGroups))
+	sourceKeys := make([]string, len(filteredGroups))
 	for i, g := range filteredGroups {
 		group := g
+		source := filteredChanges[i].InheritPolicyFrom
+		if source != "" {
+			sourceKeys[i] = keypath.AffinityGroupPath(source)
+		}
 		ops := make([]func(kv.Txn) error, 0, 2)
 		if labelRules[i] != nil {
 			ops = append(ops, labelOps[0])
 			labelOps = labelOps[1:]
 		}
 		ops = append(ops, func(txn kv.Txn) error {
+			if source != "" {
+				value, _, err := m.storage.LoadAffinityGroupInTxn(txn, source)
+				if err != nil {
+					return err
+				}
+				if value != "" {
+					var sourceGroup Group
+					if err := json.Unmarshal([]byte(value), &sourceGroup); err != nil {
+						return err
+					}
+					group.BalancePolicy = sourceGroup.BalancePolicy
+				}
+			}
 			return m.storage.SaveAffinityGroup(txn, group.ID, group)
 		})
 		groupOps = append(groupOps, ops)
 	}
 
 	// Step 5: Save the Group and Label information in storage.
-	committed, err := m.runGroupOpsInTxn(groupOps)
+	committed, err := m.runGroupOpsWithPrefetchInTxn(groupOps, sourceKeys)
 	if err != nil {
 		// Publish the groups that have committed and treat the failed
 		// transaction as not committed. Only groups with ranges have a label
@@ -330,18 +355,43 @@ func (m *Manager) DeleteAffinityGroups(groupIDs []string, force bool) error {
 // Count the individual operations so a group without a label rule cannot make
 // the next group's pair straddle the transaction limit.
 func (m *Manager) runGroupOpsInTxn(groupOps [][]func(kv.Txn) error) (int, error) {
+	return m.runGroupOpsWithPrefetchInTxn(groupOps, nil)
+}
+
+func (m *Manager) runGroupOpsWithPrefetchInTxn(groupOps [][]func(kv.Txn) error, sourceKeys []string) (int, error) {
 	batch := make([]func(kv.Txn) error, 0, etcdutil.MaxEtcdTxnOps)
+	var keys []string
+	commitBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		return m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
+			if err := kv.Prefetch(txn, keys); err != nil {
+				return err
+			}
+			for _, op := range batch {
+				if err := op(txn); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
 	committed := 0
 	for i, ops := range groupOps {
 		if len(batch)+len(ops) > etcdutil.MaxEtcdTxnOps {
-			if err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, batch); err != nil {
+			if err := commitBatch(); err != nil {
 				return committed, err
 			}
 			committed, batch = i, batch[:0]
+			keys = keys[:0]
 		}
 		batch = append(batch, ops...)
+		if len(sourceKeys) > 0 && sourceKeys[i] != "" {
+			keys = append(keys, sourceKeys[i])
+		}
 	}
-	if err := endpoint.RunBatchOpInTxn(m.ctx, m.storage, batch); err != nil {
+	if err := commitBatch(); err != nil {
 		return committed, err
 	}
 	return len(groupOps), nil
@@ -489,36 +539,107 @@ func (m *Manager) updateAffinityGroupPeersWithState(groupID string, observed *Gr
 
 // UpdateAffinityGroupPolicy updates the balance policy while preserving the target.
 func (m *Manager) UpdateAffinityGroupPolicy(groupID string, policy BalancePolicy) (*GroupState, error) {
-	if policy != BalancePolicyAuto && policy != BalancePolicyFixed {
-		return nil, errs.ErrAffinityGroupContent.FastGenByArgs(
-			fmt.Sprintf("invalid balance policy %q, it must be %q or %q", policy, BalancePolicyAuto, BalancePolicyFixed))
+	states, err := m.UpdateAffinityGroupPolicies([]string{groupID}, policy)
+	if err != nil {
+		return nil, err
+	}
+	return states[0], nil
+}
+
+// UpdateAffinityGroupPolicies sets the balance policy of several affinity
+// groups and returns their states. The policy must be auto or fixed. Every
+// group must exist when the request starts; otherwise nothing is written. The
+// groups are written in chunks that each fit in one etcd transaction, so a
+// failed chunk leaves the chunks written before it in place. Writing the same
+// policy again does not change the stored groups.
+func (m *Manager) UpdateAffinityGroupPolicies(groupIDs []string, policy BalancePolicy) ([]*GroupState, error) {
+	if err := validateRequestedBalancePolicy(policy); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(groupIDs))
+	seen := make(map[string]struct{}, len(groupIDs))
+	for _, id := range groupIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		if err := ValidateGroupID(id); err != nil {
+			return nil, err
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, errs.ErrEmptyRequest.FastGenByArgs("no group ids provided")
 	}
 
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
-	if !m.IsGroupExist(groupID) {
-		return nil, errs.ErrAffinityGroupNotFound.GenWithStackByArgs(groupID)
+	if err := m.allGroupsExist(ids); err != nil {
+		return nil, err
 	}
-	var updated *Group
-	if err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
-		var err error
-		updated, err = m.loadAffinityGroupInTxn(txn, groupID)
+	states := make([]*GroupState, 0, len(ids))
+	// Each group takes one comparison and at most one write in the transaction.
+	for chunk := range slices.Chunk(ids, etcdutil.MaxEtcdTxnOps) {
+		updated, err := m.saveGroupPoliciesLocked(chunk, policy)
 		if err != nil {
+			return nil, errors.Annotatef(err, "updated the balance policy of %d of %d affinity groups before the failure", len(states), len(ids))
+		}
+		states = append(states, updated...)
+	}
+	return states, nil
+}
+
+// validateRequestedBalancePolicy checks the policy of a request. An empty
+// policy reads as auto in a stored group, but a request must name one, so that
+// a body without the field does not reset the policy.
+func validateRequestedBalancePolicy(policy BalancePolicy) error {
+	if policy != BalancePolicyAuto && policy != BalancePolicyFixed {
+		return errs.ErrAffinityGroupContent.FastGenByArgs(
+			fmt.Sprintf("invalid balance policy %q, it must be %q or %q", policy, BalancePolicyAuto, BalancePolicyFixed))
+	}
+	return nil
+}
+
+// saveGroupPoliciesLocked writes policy to the stored groups in one
+// transaction and synchronizes their runtime states. A group that
+// already has the policy is not written. metaMutex must be held.
+func (m *Manager) saveGroupPoliciesLocked(groupIDs []string, policy BalancePolicy) ([]*GroupState, error) {
+	updated := make([]*Group, len(groupIDs))
+	if err := m.storage.RunInTxn(m.ctx, func(txn kv.Txn) error {
+		keys := make([]string, len(groupIDs))
+		for i, id := range groupIDs {
+			keys[i] = keypath.AffinityGroupPath(id)
+		}
+		// Storage may be ahead of memory after a committed write loses its reply.
+		if err := kv.Prefetch(txn, keys); err != nil {
 			return err
 		}
-		if updated.BalancePolicy == policy {
-			return nil
+		for i, groupID := range groupIDs {
+			group, err := m.loadAffinityGroupInTxn(txn, groupID)
+			if err != nil {
+				return err
+			}
+			updated[i] = group
+			if group.BalancePolicy == policy {
+				continue
+			}
+			group.BalancePolicy = policy
+			if err := m.storage.SaveAffinityGroup(txn, groupID, group); err != nil {
+				return err
+			}
 		}
-		updated.BalancePolicy = policy
-		return m.storage.SaveAffinityGroup(txn, groupID, updated)
+		return nil
 	}); err != nil {
 		return nil, err
 	}
-
 	m.Lock()
 	defer m.Unlock()
-	m.syncGroupTargetLocked(m.groups[groupID], updated)
-	return newGroupState(m.groups[groupID]), nil
+	states := make([]*GroupState, len(updated))
+	for i, group := range updated {
+		m.syncGroupTargetLocked(m.groups[group.ID], group)
+		states[i] = newGroupState(m.groups[group.ID])
+	}
+	return states, nil
 }
 
 func (m *Manager) loadAffinityGroupInTxn(txn kv.Txn, groupID string) (*Group, error) {
@@ -550,6 +671,7 @@ type plannedRangeUpdate struct {
 // Add validation checks existing ranges before applying removals, so moving a
 // range between groups requires separate requests.
 func (m *Manager) UpdateAffinityGroupKeyRanges(addOps, removeOps []GroupKeyRanges) error {
+	// Validate IDs for the full batch, including empty operations.
 	for _, op := range addOps {
 		if err := ValidateGroupID(op.GroupID); err != nil {
 			return err

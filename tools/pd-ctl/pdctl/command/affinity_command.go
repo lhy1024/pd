@@ -170,6 +170,7 @@ func newAffinityUpdatePolicyCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "policy",
 		Short: "set the balance policy for a specific affinity group",
+		Args:  cobra.NoArgs,
 		RunE:  affinityUpdatePolicyCommandFunc,
 	}
 	cmd.Flags().String("balance-policy", "", "balance policy: auto or fixed")
@@ -421,7 +422,7 @@ func affinityUpdatePeersCommandFunc(cmd *cobra.Command, _ []string) error {
 }
 
 func affinityUpdatePolicyCommandFunc(cmd *cobra.Command, _ []string) error {
-	groupID, err := getGroupID(cmd, true)
+	groupID, err := getGroupID(cmd, false)
 	if err != nil {
 		return err
 	}

@@ -389,6 +389,9 @@ func validateBalancePolicy(policy BalancePolicy) error {
 type GroupKeyRanges struct {
 	KeyRanges []keyutil.KeyRange
 	GroupID   string
+	// InheritPolicyFrom copies the stored policy on creation, including unknown
+	// values. Missing sources use the default; existing groups keep their policy.
+	InheritPolicyFrom string
 }
 
 // ValidateGroupID checks the ID format and requires keyspace-aware TiDB IDs in NextGen.
@@ -443,6 +446,15 @@ func validateGroupKeyRanges(group GroupKeyRanges) error {
 	keyspaceID, scoped, err := parseGroupID(group.GroupID)
 	if err != nil {
 		return err
+	}
+	if group.InheritPolicyFrom != "" {
+		sourceKeyspaceID, sourceScoped, err := parseGroupID(group.InheritPolicyFrom)
+		if err != nil {
+			return err
+		}
+		if kerneltype.IsNextGen() && (!scoped || !sourceScoped || keyspaceID != sourceKeyspaceID) {
+			return errs.ErrAffinityGroupContent.FastGenByArgs("policy inheritance requires scoped TiDB groups in the same keyspace")
+		}
 	}
 	return validateKeyspaceRanges(group, keyspaceID, scoped)
 }

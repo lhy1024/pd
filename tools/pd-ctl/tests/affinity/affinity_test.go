@@ -482,3 +482,40 @@ func TestAffinityCommands(t *testing.T) {
 		}
 	})
 }
+
+func TestAffinityNextGenLegacyTableSelector(t *testing.T) {
+	re := require.New(t)
+	cluster, err := pdTests.NewTestCluster(t.Context(), 1)
+	re.NoError(err)
+	defer cluster.Destroy()
+	re.NoError(cluster.RunInitialServers())
+	cluster.WaitLeader()
+	server := cluster.GetLeaderServer()
+	re.NoError(server.BootstrapCluster())
+	manager, err := server.GetServer().GetAffinityManager()
+	re.NoError(err)
+
+	const modeFlag = "github.com/tikv/pd/pkg/versioninfo/kerneltype/mockNextGenBuildFlag"
+	re.NoError(failpoint.Enable(modeFlag, "return(false)"))
+	defer func() { re.NoError(failpoint.Disable(modeFlag)) }()
+	const groupID = "_tidb_t_9001"
+	re.NoError(manager.CreateAffinityGroups([]affinity.GroupKeyRanges{{
+		GroupID: groupID,
+		KeyRanges: []keyutil.KeyRange{{
+			StartKey: []byte("a"),
+			EndKey:   []byte("b"),
+		}},
+	}}))
+	re.NoError(failpoint.Enable(modeFlag, "return(true)"))
+
+	args := []string{"-u", server.GetAddr(), "config", "affinity"}
+	var state pd.AffinityGroupState
+	tests.MustExec(re, ctl.GetRootCmd(), append(slices.Clone(args), "show", "--table-id", "9001"), &state)
+	re.Equal(groupID, state.ID)
+	re.Equal(1, state.RangeCount)
+	_, err = tests.ExecuteCommand(ctl.GetRootCmd(), append(slices.Clone(args), "policy", "--table-id", "9001", "--balance-policy", "fixed")...)
+	re.ErrorContains(err, "pd-ctl --keyspace-id")
+	tests.MustExec(re, ctl.GetRootCmd(), append(args, "delete", "--table-id", "9001", "--force"), nil)
+	re.False(manager.IsGroupExist(groupID))
+	re.Nil(server.GetRaftCluster().GetRegionLabeler().GetLabelRule(affinity.GetLabelRuleID(groupID)))
+}

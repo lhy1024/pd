@@ -67,6 +67,28 @@ func transactionRangeForTest(keyspaceID uint32, tableID int64) keyutil.KeyRange 
 	return keyutil.KeyRange{StartKey: key(tableID), EndKey: key(tableID + 1)}
 }
 
+func TestCreateGroupsRejectsDuplicateIDsAcrossChunks(t *testing.T) {
+	for _, skipExisting := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skip-existing-%t", skipExisting), func(t *testing.T) {
+			re := require.New(t)
+			m, store := newBalanceTestManager(t)
+			changes := make([]GroupKeyRanges, etcdutil.MaxEtcdTxnOps+2)
+			for i := range changes {
+				changes[i].GroupID = fmt.Sprintf("g%03d", i)
+			}
+			changes[0].KeyRanges = []keyutil.KeyRange{{StartKey: []byte("a"), EndKey: []byte("b")}}
+			changes[len(changes)-1].GroupID = changes[0].GroupID
+			re.ErrorIs(m.createGroupsWithSkipExisting(changes, skipExisting), errs.ErrAffinityGroupContent)
+			re.Empty(m.groups)
+			re.Empty(m.keyRanges)
+			value, err := store.LoadAffinityGroup(changes[0].GroupID)
+			re.NoError(err)
+			re.Empty(value)
+			re.Nil(m.regionLabeler.GetLabelRule(GetLabelRuleID(changes[0].GroupID)))
+		})
+	}
+}
+
 func TestNextGenTiDBGroupOperations(t *testing.T) {
 	re := require.New(t)
 	ctx := t.Context()
@@ -133,6 +155,9 @@ func TestNextGenTiDBGroupOperations(t *testing.T) {
 				re.Error(manager.UpdateAffinityGroupKeyRanges(nil, op))
 			}
 		}
+		re.ErrorIs(manager.CreateAffinityGroupsIfNotExists([]GroupKeyRanges{
+			{GroupID: "_tidb_ks42_t_2001", InheritPolicyFrom: id},
+		}), errs.ErrAffinityGroupContent)
 		re.Equal(before, snapshot(), "rejected requests must not change persistent groups or ranges")
 	}
 	for _, id := range append(legacy, "custom_group") {
@@ -152,6 +177,13 @@ func TestNextGenTiDBGroupOperations(t *testing.T) {
 	for _, id := range append(legacy, orphan.GroupID) {
 		re.Nil(regionLabeler.GetLabelRule(GetLabelRuleID(id)))
 	}
+	const tableGroupID = "_tidb_ks42_tg_100"
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: tableGroupID}}))
+	state, err := manager.UpdateAffinityGroupPolicy(tableGroupID, BalancePolicyFixed)
+	re.NoError(err)
+	re.Equal(BalancePolicyFixed, state.BalancePolicy)
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "_tidb_ks42_t_2001", InheritPolicyFrom: tableGroupID}}))
+	re.Equal(BalancePolicyFixed, manager.GetAffinityGroupState("_tidb_ks42_t_2001").BalancePolicy)
 	// Identical table IDs remain independent across keyspaces, including both bounds.
 	for _, keyspaceID := range []uint32{0, 42, 43, 16777215} {
 		id := fmt.Sprintf("_tidb_ks%d_t_1001", keyspaceID)
@@ -179,6 +211,35 @@ func TestNextGenTiDBGroupOperations(t *testing.T) {
 		re.Equal(uint64(1), state.LeaderStoreID)
 		re.Len(manager.keyRanges[id].KeyRanges, 1)
 	}
+}
+
+func TestNextGenPolicyInheritance(t *testing.T) {
+	re := require.New(t)
+	const modeFlag = "github.com/tikv/pd/pkg/versioninfo/kerneltype/mockNextGenBuildFlag"
+	re.NoError(failpoint.Enable(modeFlag, "return(true)"))
+	t.Cleanup(func() { re.NoError(failpoint.Disable(modeFlag)) })
+	manager, store := newBalanceTestManager(t)
+	const source = "_tidb_ks42_t_1"
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: source}}))
+	_, err := manager.UpdateAffinityGroupPolicy(source, BalancePolicyFixed)
+	re.NoError(err)
+	for _, pair := range [][2]string{
+		{"_tidb_ks43_t_2", source},
+		{"_tidb_ks0_t_2", source},
+		{"custom", source},
+		{"_tidb_ks42_t_2", "custom"},
+	} {
+		err := manager.CreateAffinityGroupsIfNotExists([]GroupKeyRanges{{GroupID: pair[0], InheritPolicyFrom: pair[1]}})
+		re.ErrorIs(err, errs.ErrAffinityGroupContent)
+		re.False(manager.IsGroupExist(pair[0]))
+		value, err := store.LoadAffinityGroup(pair[0])
+		re.NoError(err)
+		re.Empty(value)
+	}
+	const replacement = "_tidb_ks42_t_2"
+	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: replacement, InheritPolicyFrom: source}}))
+	re.Equal(BalancePolicyFixed, manager.GetAffinityGroupState(replacement).BalancePolicy)
+	re.Equal(BalancePolicyFixed, loadStoredGroup(re, store, replacement).BalancePolicy)
 }
 
 func TestKeyRangeOverlapValidation(t *testing.T) {
