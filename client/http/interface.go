@@ -1423,8 +1423,8 @@ func (c *client) UpdateAffinityGroupPeers(ctx context.Context, groupID string, l
 
 // UpdateAffinityGroupPolicy updates the balance policy of an affinity group.
 func (c *client) UpdateAffinityGroupPolicy(ctx context.Context, groupID string, balancePolicy string) (*AffinityGroupState, error) {
-	if groupID == "" {
-		return nil, errors.New("group ID must not be empty")
+	if err := validateAffinityGroupID(groupID); err != nil {
+		return nil, err
 	}
 	req := UpdateAffinityGroupPolicyRequest{BalancePolicy: balancePolicy}
 	reqJSON, err := json.Marshal(req)
