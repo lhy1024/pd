@@ -373,11 +373,12 @@ func benchmarkAffinityBalanceStep(b *testing.B, shape balanceBenchShape) {
 func TestAffinityBalancePlacement(t *testing.T) {
 	re := require.New(t)
 	f := newAffinityBalanceTest(t, 4, "a", "b", "c", "a")
-	f.SetLabelProperty("reject-leader", "zone", "c")
-	f.SetLabelProperty("reject-leader", "zone", "a")
 	f.PutStore(f.GetStore(4).Clone(core.SetNodeState(metapb.NodeState_Preparing)))
 	ids := f.seed("100", 1, 1, 2, 3)
 	f.policy(affinity.BalancePolicyFixed, ids[1:]...)
+	// Keep the initial leaders in zones a and c, but reject those zones for new leaders.
+	f.SetLabelProperty("reject-leader", "zone", "c")
+	f.SetLabelProperty("reject-leader", "zone", "a")
 	region := f.GetRegion(1)
 	current := f.affinityManager.GetAffinityGroupState(ids[0])
 	fit, status := f.validateBalanceCurrentRegion(current, region)
