@@ -624,9 +624,10 @@ func TestAffinitySplitFallbackExpiresDespiteStoreLimit(t *testing.T) {
 			require.Equal(t, operator.TIMEOUT, split.Status())
 		}
 
-		// Use up the target store's add-peer budget at a refill rate too low
-		// to admit another move during the test.
-		cluster.SetStoreLimit(3, storelimit.AddPeer, 0.00006)
+		// Keep the destination's add-peer budget available while exhausting
+		// the source's remove-peer budget at operator admission.
+		cluster.SetStoreLimit(3, storelimit.AddPeer, storelimit.Unlimited)
+		cluster.SetStoreLimit(4, storelimit.RemovePeer, 0.00006)
 		move := requireAffinityMove(t, controller.CheckRegion(blocked[0]))
 		require.True(t, ops.AddOperator(move))
 		require.True(t, ops.RemoveOperator(move))
