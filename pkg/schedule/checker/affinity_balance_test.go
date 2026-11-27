@@ -45,6 +45,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
+	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/versioninfo/kerneltype"
 )
 
@@ -121,7 +122,10 @@ func (f *affinityBalanceTest) group(id string, firstRegion, leader uint64, voter
 		keys[i] = balanceTestKey(keys[i])
 	}
 	group := &affinity.Group{ID: id, LeaderStoreID: leader, VoterStoreIDs: voters}
-	re.NoError(createAffinityGroupForTest(f.affinityManager, group, []byte(keys[0]), []byte(keys[len(keys)-1])))
+	re.NoError(createAffinityGroupForTest(f.affinityManager, group, keyutil.KeyRange{
+		StartKey: []byte(keys[0]),
+		EndKey:   []byte(keys[len(keys)-1]),
+	}))
 	followers := slices.DeleteFunc(slices.Clone(voters), func(id uint64) bool { return id == leader })
 	for i := 0; i+1 < len(keys); i++ {
 		regionID := firstRegion + uint64(i)
@@ -236,7 +240,7 @@ func TestAffinityBalanceLeaderConvergence(t *testing.T) {
 	}()
 	custom := []string{"custom", balanceTestGroupID("_tidb_t_100")}
 	for _, id := range custom {
-		re.NoError(createAffinityGroupForTest(m, &affinity.Group{ID: id, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}, nil, nil))
+		re.NoError(createAffinityGroupForTest(m, &affinity.Group{ID: id, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}))
 		c.balancer.enqueue(id)
 	}
 	for i := range ids {
@@ -488,7 +492,10 @@ func newMissingHeartbeatBalanceTest(t *testing.T) (*affinityBalanceTest, *core.R
 	enableFastAffinityAvailabilityCheck(t)
 	f := newAffinityBalanceTest(t, 3)
 	group := &affinity.Group{ID: balanceTestGroupID("_tidb_pt_100_p1"), LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}
-	re.NoError(createAffinityGroupForTest(f.affinityManager, group, []byte(balanceTestKey("a")), []byte(balanceTestKey("c"))))
+	re.NoError(createAffinityGroupForTest(f.affinityManager, group, keyutil.KeyRange{
+		StartKey: []byte(balanceTestKey("a")),
+		EndKey:   []byte(balanceTestKey("c")),
+	}))
 	f.AddLeaderRegionWithRange(1, balanceTestKey("a"), balanceTestKey("b"), 1, 2, 3)
 	f.PutRegion(f.GetRegion(1).Clone(core.SetApproximateSize(1)))
 	f.group(balanceTestGroupID("_tidb_pt_100_p2"), 3, 1, []uint64{1, 2, 3}, "d", "e")
@@ -591,7 +598,8 @@ func TestAffinityBalanceTiFlashRecordRules(t *testing.T) {
 				}
 				id := balanceTestGroupID(fmt.Sprintf("_tidb_pt_100_p%d", partition))
 				re.NoError(createAffinityGroupForTest(f.affinityManager,
-					&affinity.Group{ID: id, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}, start, end))
+					&affinity.Group{ID: id, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}},
+					keyutil.KeyRange{StartKey: start, EndKey: end}))
 				keys := [][]byte{start, record, end}
 				for j := range 2 {
 					regionID := uint64(2*i + j + 1)
