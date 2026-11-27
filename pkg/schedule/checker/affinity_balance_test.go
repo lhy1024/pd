@@ -433,6 +433,7 @@ func TestBalanceRuleCacheHardIsolation(t *testing.T) {
 
 func TestAffinityBalanceLearnerInLaterRegion(t *testing.T) {
 	re := require.New(t)
+	enableFastAffinityAvailabilityCheck(t)
 	f := newAffinityBalanceTest(t, 6)
 	f.SetEnableUseJointConsensus(false)
 	f.SetStoreLabel(6, map[string]string{"engine": "tiflash"})
@@ -446,6 +447,7 @@ func TestAffinityBalanceLearnerInLaterRegion(t *testing.T) {
 	for _, region := range f.GetRegions() {
 		f.PutRegion(region.Clone(core.WithAddPeer(&metapb.Peer{Id: 100 + region.GetID(), StoreId: 6, Role: metapb.PeerRole_Learner})))
 	}
+	f.waitForStoreScan(ids[0])
 	initial, err := f.planBalanceTargets(t.Context(), f.snapshot())
 	re.NoError(err)
 	index := slices.IndexFunc(initial.targets, func(g *affinity.Group) bool { return slices.Contains(g.VoterStoreIDs, uint64(4)) })
@@ -568,6 +570,7 @@ func TestAffinityBalanceTiFlashRecordRules(t *testing.T) {
 	for _, differentVoterRules := range []bool{false, true} {
 		t.Run(fmt.Sprintf("different-voter-rules=%t", differentVoterRules), func(t *testing.T) {
 			re := require.New(t)
+			enableFastAffinityAvailabilityCheck(t)
 			f := newAffinityBalanceTest(t, 5)
 			f.SetEnableUseJointConsensus(false)
 			f.SetStoreLabel(5, map[string]string{"engine": "tiflash"})
@@ -614,6 +617,7 @@ func TestAffinityBalanceTiFlashRecordRules(t *testing.T) {
 					re.True(f.ruleManager.FitRegionWithoutCache(f.Cluster, region).IsSatisfied())
 				}
 			}
+			f.waitForStoreScan(balanceTestGroupID("_tidb_pt_100_p101"))
 			snapshot := f.snapshot()
 			revision := f.ruleManager.GetRevision()
 			res, err := f.planBalanceTargets(t.Context(), snapshot)
