@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -68,6 +69,18 @@ type Manager struct {
 	storeSetInformer core.StoreSetInformer
 	conf             config.SharedConfigProvider
 	regionLabeler    *labeler.RegionLabeler // region labeler for syncing key ranges
+	// targetWriter writes the targets this Manager decides when it does not own the storage,
+	// as in the scheduling service. When it is nil, the Manager writes its own storage.
+	targetWriter TargetWriter
+	// targetWriteMutex protects the queue, backoff, and per-group state for background first-win requests.
+	targetWriteMutex          syncutil.Mutex
+	pendingTargets            map[string][]observedTarget // FIFO candidates by group ID
+	pendingTargetIDs          []string
+	sendingTargets            map[string]observedTarget
+	targetDrainRunning        bool
+	targetDrainWake           chan struct{}
+	targetWriteRetryAt        time.Time
+	targetEndpointUnsupported bool
 
 	// labelRuleVer is increased while holding RWMutex whenever a group's label rule may change.
 	// A lookup reads it before the region labeler and saves its result only if it is unchanged,
@@ -81,6 +94,9 @@ type Manager struct {
 	unavailableStores   map[uint64]storeCondition    // {store_id} -> storeCondition
 	// storeConditionsKnown reports whether unavailableStores has been populated by a store check.
 	storeConditionsKnown bool
+	// storeConditionsGeneration changes when the last group is deleted, so a
+	// scan that started before the deletion cannot publish its results afterward.
+	storeConditionsGeneration uint64
 
 	// The following members are protected by metaMutex only, not protected by RWMutex.
 	// Validated PD writes cannot introduce conflicts, so they only need to
@@ -172,17 +188,16 @@ func (m *Manager) initGroupLocked(group *Group) {
 		log.Error("group already initialized", zap.String("group-id", group.ID))
 		return
 	}
+	m.setGroupLocked(group)
+}
+
+func (m *Manager) setGroupLocked(group *Group) {
 	groupInfo := &runtimeGroupInfo{
-		ID:                  group.ID,
-		CreateTimestamp:     group.CreateTimestamp,
-		LeaderStoreID:       group.LeaderStoreID,
-		VoterStoreIDs:       slices.Clone(group.VoterStoreIDs),
-		AffinityVer:         1,
-		AffinityRegionCount: 0,
-		Regions:             make(map[uint64]regionCache),
-		LabelRule:           nil,
-		RangeCount:          0,
+		Group:       *group,
+		AffinityVer: 1,
+		Regions:     make(map[uint64]regionCache),
 	}
+	groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
 	m.setTargetAvailabilityLocked(groupInfo)
 	m.groups[group.ID] = groupInfo
 }
@@ -245,6 +260,7 @@ func (m *Manager) updateGroupPeers(groupID string, leaderStoreID uint64, voterSt
 
 	groupInfo.LeaderStoreID = leaderStoreID
 	groupInfo.VoterStoreIDs = slices.Clone(voterStoreIDs)
+	groupInfo.persistedGroup = nil
 	if m.storeConditionsKnown {
 		m.setTargetAvailabilityLocked(groupInfo)
 	} else {
@@ -272,7 +288,7 @@ func (m *Manager) ExpireAffinityGroup(groupID string) {
 }
 
 // ExpireAffinityGroupIf changes the Group availability to groupExpired only when
-// the group still matches the expected runtime instance, version, and target.
+// the group still matches the expected runtime instance, version, revision, and target.
 func (m *Manager) ExpireAffinityGroupIf(expected *GroupState) (*GroupState, bool) {
 	if expected == nil {
 		return nil, false
@@ -284,6 +300,7 @@ func (m *Manager) ExpireAffinityGroupIf(expected *GroupState) (*GroupState, bool
 		(expected.groupInfoPtr != nil && groupInfo != expected.groupInfoPtr) ||
 		groupInfo.CreateTimestamp != expected.CreateTimestamp ||
 		groupInfo.AffinityVer != expected.affinityVer ||
+		groupInfo.modRevision != expected.modRevision ||
 		groupInfo.LeaderStoreID != expected.LeaderStoreID ||
 		!slices.Equal(groupInfo.VoterStoreIDs, expected.VoterStoreIDs) {
 		return nil, false
@@ -351,6 +368,11 @@ func (m *Manager) deleteGroupLocked(groupID string) {
 	m.labelRuleVer.Add(1)
 	m.clearGroupCacheLocked(groupID)
 	delete(m.groups, groupID)
+	if len(m.groups) == 0 {
+		m.unavailableStores = nil
+		m.storeConditionsKnown = false
+		m.storeConditionsGeneration++
+	}
 }
 
 // deleteGroups requires metaMutex so range conflicts can be scanned before
@@ -555,17 +577,30 @@ func (m *Manager) ReconcileRangeConflicts() {
 
 // SyncGroupFromEtcd synchronizes a group from etcd to the in-memory state.
 func (m *Manager) SyncGroupFromEtcd(group *Group) {
+	m.SyncGroupFromEtcdWithRevision(group, 0)
+}
+
+// SyncGroupFromEtcdWithRevision synchronizes a group and its key's modification revision.
+// A zero modRevision deduplicates by stored group contents.
+func (m *Manager) SyncGroupFromEtcdWithRevision(group *Group, modRevision int64) {
 	m.metaMutex.Lock()
 	defer m.metaMutex.Unlock()
 
 	// Fast path: avoid taking write lock if nothing changes.
 	m.RLock()
 	existingGroup, exists := m.groups[group.ID]
-	if exists &&
-		existingGroup.LeaderStoreID == group.LeaderStoreID &&
-		slices.Equal(existingGroup.VoterStoreIDs, group.VoterStoreIDs) {
-		m.RUnlock()
-		return
+	matchesStored := false
+	if exists {
+		if modRevision > 0 && modRevision <= existingGroup.modRevision {
+			m.RUnlock()
+			return
+		}
+		stored := existingGroup.storedGroup()
+		matchesStored = sameStoredGroup(&stored, group)
+		if modRevision == 0 && matchesStored {
+			m.RUnlock()
+			return
+		}
 	}
 	m.RUnlock()
 
@@ -590,10 +625,27 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 
 	m.Lock()
 	defer m.Unlock()
-	// Check if the group exists again to avoid other threads modifying the group.
-	groupInfo, exists := m.groups[group.ID]
-	if !exists {
+	switch {
+	case !exists:
 		m.initGroupLocked(group)
+	case matchesStored && existingGroup.persistedGroup != nil:
+		// A newer etcd write can reassert the stored peers after a local replacement.
+		// Apply it and invalidate observations made before the write.
+		m.applyGroupTargetLocked(existingGroup, group)
+	default:
+		changed := m.syncGroupTargetLocked(existingGroup, group)
+		if !changed && matchesStored && existingGroup.IsExpired() && m.storeConditionsKnown &&
+			calcGroupAvailability(m.unavailableStores, existingGroup.LeaderStoreID, existingGroup.VoterStoreIDs) == groupAvailable {
+			// A newer write can restore a healthy target after the group has expired.
+			m.setTargetAvailabilityLocked(existingGroup)
+			m.resetCountLocked(existingGroup)
+		}
+	}
+	if modRevision > 0 {
+		m.groups[group.ID].modRevision = modRevision
+	}
+	if !exists {
+		m.rangeConflictsStale = true
 		if labelRule != nil {
 			if labelErr != nil {
 				log.Warn("failed to attach existing label rule to new affinity group",
@@ -612,23 +664,41 @@ func (m *Manager) SyncGroupFromEtcd(group *Group) {
 		}
 		// Once group created, the buffer must be deleted.
 		delete(m.labelRuleBuffer, group.ID)
-		m.rangeConflictsStale = true
-	} else {
-		changed := false
-		if groupInfo.LeaderStoreID != group.LeaderStoreID {
-			groupInfo.LeaderStoreID = group.LeaderStoreID
-			changed = true
-		}
-		if !slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs) {
-			groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
-			changed = true
-		}
-
-		if changed {
-			m.setTargetAvailabilityLocked(groupInfo)
-			m.resetCountLocked(groupInfo)
-		}
 	}
+}
+
+// syncGroupTargetLocked applies the stored target and returns whether it
+// replaced the group or reset its availability and counts.
+// Both metaMutex and the write lock of RWMutex must be held.
+func (m *Manager) syncGroupTargetLocked(groupInfo *runtimeGroupInfo, group *Group) bool {
+	if groupInfo.CreateTimestamp != group.CreateTimestamp {
+		// The replacement happens under the same lock, so store conditions remain valid.
+		m.clearGroupCacheLocked(group.ID)
+		m.setGroupLocked(group)
+		// The label watcher will not resend an unchanged rule for the new instance.
+		m.updateGroupLabelRuleLockedWithCount(group.ID, groupInfo.LabelRule, groupInfo.RangeCount, false)
+		m.groups[group.ID].rangeConflict = groupInfo.rangeConflict
+		return true
+	}
+	// A duplicate or a healthy local confirmation preserves runtime state
+	// if the voter order also matches.
+	if (groupInfo.persistedGroup == nil || groupInfo.IsAvailable()) &&
+		sameStoredGroup(&groupInfo.Group, group) && slices.Equal(groupInfo.VoterStoreIDs, group.VoterStoreIDs) {
+		groupInfo.persistedGroup = nil
+		return false
+	}
+	m.applyGroupTargetLocked(groupInfo, group)
+	return true
+}
+
+// applyGroupTargetLocked installs the persisted target and invalidates cached affinity.
+// The write lock of RWMutex must be held.
+func (m *Manager) applyGroupTargetLocked(groupInfo *runtimeGroupInfo, group *Group) {
+	groupInfo.Group = *group
+	groupInfo.VoterStoreIDs = slices.Clone(group.VoterStoreIDs)
+	groupInfo.persistedGroup = nil
+	m.setTargetAvailabilityLocked(groupInfo)
+	m.resetCountLocked(groupInfo)
 }
 
 // SyncGroupDeleteFromEtcd synchronizes a group deletion from etcd.

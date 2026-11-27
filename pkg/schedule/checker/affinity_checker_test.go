@@ -42,6 +42,12 @@ import (
 	"github.com/tikv/pd/server/config"
 )
 
+type targetWriterFunc func(context.Context, []affinity.GroupTarget) ([]string, error)
+
+func (f targetWriterFunc) WriteGroupTargets(ctx context.Context, targets []affinity.GroupTarget) ([]string, error) {
+	return f(ctx, targets)
+}
+
 func newAffinityTestOptions() *config.PersistOptions {
 	opt := mockconfig.NewTestOptions()
 	cfg := opt.GetScheduleConfig().Clone()
@@ -300,6 +306,43 @@ func TestAffinityCheckerGroupState(t *testing.T) {
 	ops = affinityChecker.Check(tc.GetRegion(200))
 	re.True(affinityManager.GetAffinityGroupState("test_group").AffinitySchedulingAllowed)
 	re.Nil(ops, "Checker should not create operator for same peers")
+}
+
+func TestAffinityCheckerPersistsUnpersistedTarget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		re := require.New(t)
+		opt := newAffinityTestOptions()
+		cluster := mockcluster.NewCluster(t.Context(), opt)
+		for id := uint64(1); id <= 3; id++ {
+			cluster.AddRegionStore(id, 10)
+		}
+		keyRange := testutil.TxnKeyspaceRange([]byte("a"), []byte("z"))
+		cluster.AddLeaderRegionWithRange(100, string(keyRange.StartKey), string(keyRange.EndKey), 1, 2, 3)
+		region := cluster.GetRegion(100)
+		manager := cluster.GetAffinityManager()
+		re.NoError(manager.CreateAffinityGroups([]affinity.GroupKeyRanges{{GroupID: "g", KeyRanges: []keyutil.KeyRange{keyRange}}}))
+		created := manager.GetAffinityGroupState("g")
+		var requests []affinity.GroupTarget
+		manager.SetTargetWriter(targetWriterFunc(func(_ context.Context, targets []affinity.GroupTarget) ([]string, error) {
+			requests = append(requests, targets...)
+			if len(requests) == 1 {
+				return nil, affinity.ErrTargetWriterUnsupported
+			}
+			return []string{"g"}, nil
+		}))
+		manager.ObserveAvailableRegion(region, created)
+		synctest.Wait()
+		local := manager.GetAffinityGroupState("g")
+		re.True(local.HasUnpersistedTarget())
+		re.True(local.AffinitySchedulingAllowed)
+		re.Len(requests, 1)
+
+		synctest.Sleep(time.Second)
+		re.Empty(newTestAffinityChecker(t.Context(), cluster, opt).Check(region))
+		synctest.Wait()
+		want := affinity.GroupTarget{Expected: created.Group, LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2, 3}}
+		re.Equal([]affinity.GroupTarget{want, want}, requests)
+	})
 }
 
 // TestAffinityAvailabilityCheckWithOfflineStore tests that groups are invalidated when stores go offline.
@@ -1914,9 +1957,6 @@ func TestAffinityCheckerGroupScheduleDisallowed(t *testing.T) {
 	tc.AddRegionStore(3, 10)
 	tc.AddLeaderRegion(1, 1, 2, 3)
 
-	// Make store 2 unavailable for leader (evict-leader).
-	tc.SetStoreEvictLeader(2, true)
-
 	affinityManager := tc.GetAffinityManager()
 	checker := newTestAffinityChecker(ctx, tc, opt)
 
@@ -1927,6 +1967,8 @@ func TestAffinityCheckerGroupScheduleDisallowed(t *testing.T) {
 	}
 	err := createAffinityGroupForTest(affinityManager, group, []byte(""), []byte(""))
 	re.NoError(err)
+
+	tc.SetStoreEvictLeader(2, true)
 
 	// Wait for availability checker to mark the group as not schedulable.
 	var groupState *affinity.GroupState
@@ -1997,13 +2039,10 @@ func TestAffinityCheckerTargetStoreEvictLeader(t *testing.T) {
 	tc.AddRegionStore(3, 10)
 	tc.AddLeaderRegion(1, 1, 2, 3) // Leader on store 1
 
-	// Set store 2 to evict leader
-	tc.SetStoreEvictLeader(2, true)
-
 	affinityManager := tc.GetAffinityManager()
 	checker := newTestAffinityChecker(ctx, tc, opt)
 
-	// Create affinity group with leader on store 2 (which has evict-leader)
+	// Create affinity group with leader on store 2
 	group := &affinity.Group{
 		ID:            "test_group",
 		LeaderStoreID: 2,
@@ -2011,6 +2050,8 @@ func TestAffinityCheckerTargetStoreEvictLeader(t *testing.T) {
 	}
 	err := createAffinityGroupForTest(affinityManager, group, []byte(""), []byte(""))
 	re.NoError(err)
+
+	tc.SetStoreEvictLeader(2, true)
 
 	// Check should return nil because target store doesn't allow leader transfer in
 	ops := checker.Check(tc.GetRegion(1))
@@ -2029,14 +2070,10 @@ func TestAffinityCheckerTargetStoreRejectLeader(t *testing.T) {
 	tc.AddRegionStore(3, 10)
 	tc.AddLeaderRegion(1, 1, 2, 3) // Leader on store 1
 
-	// Set reject-leader label property for store 2
-	tc.SetLabelProperty("reject-leader", "reject", "leader")
-	tc.AddLabelsStore(2, 10, map[string]string{"reject": "leader"})
-
 	affinityManager := tc.GetAffinityManager()
 	checker := newTestAffinityChecker(ctx, tc, opt)
 
-	// Create affinity group with leader on store 2 (which has reject-leader label)
+	// Create affinity group with leader on store 2
 	group := &affinity.Group{
 		ID:            "test_group",
 		LeaderStoreID: 2,
@@ -2044,6 +2081,9 @@ func TestAffinityCheckerTargetStoreRejectLeader(t *testing.T) {
 	}
 	err := createAffinityGroupForTest(affinityManager, group, []byte(""), []byte(""))
 	re.NoError(err)
+
+	tc.SetLabelProperty("reject-leader", "reject", "leader")
+	tc.AddLabelsStore(2, 10, map[string]string{"reject": "leader"})
 
 	// Check should return nil because target store has reject-leader label
 	ops := checker.Check(tc.GetRegion(1))

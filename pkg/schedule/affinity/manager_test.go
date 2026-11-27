@@ -183,7 +183,7 @@ func TestRegionCountStaleCache(t *testing.T) {
 	store := storage.NewStorageWithMemoryBackend()
 	storeInfos := core.NewStoresInfo()
 	for i := 1; i < 7; i++ {
-		storeInfos.PutStore(core.NewStoreInfo(&metapb.Store{Id: uint64(i), Address: fmt.Sprintf("s%d", i)}))
+		storeInfos.PutStore(core.NewStoreInfo(&metapb.Store{Id: uint64(i), Address: fmt.Sprintf("s%d", i)}, core.SetLastHeartbeatTS(time.Now())))
 	}
 
 	conf := mockconfig.NewTestOptions()
@@ -446,7 +446,7 @@ func TestDeleteGroupClearsCache(t *testing.T) {
 	store := storage.NewStorageWithMemoryBackend()
 	storeInfos := core.NewStoresInfo()
 	for i := 1; i <= 3; i++ {
-		storeInfos.PutStore(core.NewStoreInfo(&metapb.Store{Id: uint64(i), Address: fmt.Sprintf("s%d", i)}))
+		storeInfos.PutStore(core.NewStoreInfo(&metapb.Store{Id: uint64(i), Address: fmt.Sprintf("s%d", i)}, core.SetLastHeartbeatTS(time.Now())))
 	}
 
 	conf := mockconfig.NewTestOptions()
@@ -724,7 +724,7 @@ func TestInvalidCacheMultipleTimes(t *testing.T) {
 	store := storage.NewStorageWithMemoryBackend()
 	storeInfos := core.NewStoresInfo()
 	for i := 1; i <= 3; i++ {
-		storeInfos.PutStore(core.NewStoreInfo(&metapb.Store{Id: uint64(i), Address: fmt.Sprintf("s%d", i)}))
+		storeInfos.PutStore(core.NewStoreInfo(&metapb.Store{Id: uint64(i), Address: fmt.Sprintf("s%d", i)}, core.SetLastHeartbeatTS(time.Now())))
 	}
 
 	conf := mockconfig.NewTestOptions()
@@ -1097,7 +1097,7 @@ func TestExpireAffinityGroupIf(t *testing.T) {
 	re.Nil(expired)
 
 	// A concurrent peer update invalidates the stale snapshot.
-	updated, err := manager.UpdateAffinityGroupPeers(groupID, 1, []uint64{1, 2, 4})
+	_, err = manager.UpdateAffinityGroupPeers(groupID, 1, []uint64{1, 2, 4})
 	re.NoError(err)
 	expired, ok = manager.ExpireAffinityGroupIf(snapshot)
 	re.False(ok)
@@ -1106,8 +1106,17 @@ func TestExpireAffinityGroupIf(t *testing.T) {
 	re.True(current.AffinitySchedulingAllowed)
 	re.Equal([]uint64{1, 2, 4}, current.VoterStoreIDs)
 
+	// A same-peers write also invalidates a snapshot used to expire and relearn a target.
+	manager.SyncGroupFromEtcdWithRevision(&current.Group, 1)
+	watched := manager.GetAffinityGroupState(groupID)
+	re.Equal(current.affinityVer, watched.affinityVer)
+	expired, ok = manager.ExpireAffinityGroupIf(current)
+	re.False(ok)
+	re.Nil(expired)
+	re.Equal(watched, manager.GetAffinityGroupState(groupID))
+
 	// Matching snapshot expires atomically and yields the new version for relearning.
-	expired, ok = manager.ExpireAffinityGroupIf(updated)
+	expired, ok = manager.ExpireAffinityGroupIf(watched)
 	re.True(ok)
 	re.NotNil(expired)
 	re.False(expired.AffinitySchedulingAllowed)
