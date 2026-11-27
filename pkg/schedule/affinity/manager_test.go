@@ -320,6 +320,7 @@ func TestSyncGroupPolicyKeepsRuntimeState(t *testing.T) {
 	manager := newTargetTest(t).Manager
 	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "g", KeyRanges: []keyutil.KeyRange{targetTestRange}}}))
 	manager.checkGroupsAvailability()
+	re.True(manager.storeConditionsKnown)
 	_, err := manager.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
 	re.NoError(err)
 	_, isAffinity := manager.GetAndCacheRegionAffinityGroupState(generateRegionForTest(1, []uint64{1, 2, 3}, targetTestRange))
@@ -400,6 +401,8 @@ func TestUpdateAffinityGroupPolicy(t *testing.T) {
 	re.NoError(err)
 
 	ranges := createGroupForTest(re, manager, "policy", 1)
+	manager.checkGroupsAvailability()
+	re.True(manager.storeConditionsKnown)
 	_, err = manager.UpdateAffinityGroupPeers("policy", 1, []uint64{1, 2, 3})
 	re.NoError(err)
 	_, isAffinity := manager.GetAndCacheRegionAffinityGroupState(generateRegionForTest(1, []uint64{1, 2, 3}, ranges[0]))

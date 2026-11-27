@@ -419,6 +419,53 @@ func TestSyncRecreatedAffinityGroup(t *testing.T) {
 	}
 }
 
+func TestRecreatedGroupKeepsRangeConflict(t *testing.T) {
+	for _, source := range []string{"watcher", "policy"} {
+		t.Run(source, func(t *testing.T) {
+			test := newTargetTest(t, "g", "h")
+			test.write([]string{"g"}, test.target("g", 1, 1, 2, 3))
+			test.checkGroupsAvailability()
+			test.True(test.GetAffinityGroupState("g").AffinitySchedulingAllowed)
+			for _, id := range []string{"g", "h"} {
+				data, err := json.Marshal(MakeLabelRule(GroupKeyRanges{GroupID: id, KeyRanges: []keyutil.KeyRange{targetTestRange}}))
+				test.NoError(err)
+				rule, err := labeler.NewLabelRuleFromJSON(data)
+				test.NoError(err)
+				test.NoError(test.SyncKeyRangesFromEtcd(rule))
+			}
+			test.ReconcileRangeConflicts()
+			before := test.GetAffinityGroupState("g")
+			test.True(before.rangeConflict)
+			recreated := before.Group
+			recreated.CreateTimestamp++
+			if source == "watcher" {
+				test.SyncGroupFromEtcdWithRevision(&recreated, 2)
+			} else {
+				test.NoError(test.store.RunInTxn(t.Context(), func(txn kv.Txn) error {
+					return test.store.SaveAffinityGroup(txn, "g", &recreated)
+				}))
+				_, err := test.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
+				test.NoError(err)
+				recreated.BalancePolicy = BalancePolicyFixed
+			}
+			after := test.GetAffinityGroupState("g")
+			test.NotSame(before.groupInfoPtr, after.groupInfoPtr)
+			test.Equal(recreated, after.Group)
+			test.True(after.rangeConflict)
+			test.Equal(1, after.RangeCount)
+			test.True(after.RegularSchedulingAllowed)
+			test.False(after.AffinitySchedulingAllowed)
+
+			test.SyncKeyRangesDeleteFromEtcd(GetLabelRuleID("h"))
+			test.ReconcileRangeConflicts()
+			restored := test.GetAffinityGroupState("g")
+			test.False(restored.rangeConflict)
+			test.False(restored.RegularSchedulingAllowed)
+			test.True(restored.AffinitySchedulingAllowed)
+		})
+	}
+}
+
 func TestFirstWinStoreConditions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := storage.NewStorageWithMemoryBackend()
