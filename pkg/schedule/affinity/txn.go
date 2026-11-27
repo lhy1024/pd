@@ -26,11 +26,13 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/schedule/labeler"
+	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/keypath"
@@ -530,7 +532,16 @@ func (m *Manager) updateAffinityGroupPeersWithState(groupID string, observed *Gr
 	defer m.Unlock()
 	groupInfo := m.groups[groupID]
 	changed := m.syncGroupTargetLocked(groupInfo, &group.Group)
-	groupInfo.SetAvailability(groupAvailable)
+	groupInfo = m.groups[groupID]
+	if !sameGroupTarget(&groupInfo.Group, &group.Group) {
+		m.applyGroupTargetLocked(groupInfo, &group.Group)
+		changed = true
+	}
+	if m.storeConditionsKnown {
+		m.setTargetAvailabilityLocked(groupInfo)
+	} else {
+		groupInfo.SetAvailability(groupAvailable)
+	}
 	if !changed {
 		m.resetCountLocked(groupInfo)
 	}

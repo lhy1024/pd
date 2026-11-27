@@ -430,9 +430,8 @@ func TestAffinityBalancerHonorsUnsupportedTargetCooldown(t *testing.T) {
 
 				const groupID = "new-group"
 				re.NoError(m.CreateAffinityGroups([]affinity.GroupKeyRanges{{GroupID: groupID}}))
-				m.ObserveAvailableRegion(f.GetRegion(1), m.GetAffinityGroupState(groupID))
 				if source == "first-win" {
-					time.Sleep(50 * time.Millisecond)
+					m.ObserveAvailableRegion(f.GetRegion(1), m.GetAffinityGroupState(groupID))
 					synctest.Wait()
 					re.True(m.GetAffinityGroupState(groupID).HasUnpersistedTarget())
 					re.Equal(1, calls)
@@ -440,10 +439,11 @@ func TestAffinityBalancerHonorsUnsupportedTargetCooldown(t *testing.T) {
 				re.False(f.balancer.balance(t.Context()))
 				re.Equal(1, calls, "a single 404 covers both tables")
 
-				// In the balancer-first case, the pending observation can now
-				// initialize locally without issuing another request.
-				time.Sleep(50 * time.Millisecond)
-				synctest.Wait()
+				if source == "balancer" {
+					// Observe the group after the balancer has established the cooldown.
+					m.ObserveAvailableRegion(f.GetRegion(1), m.GetAffinityGroupState(groupID))
+					synctest.Wait()
+				}
 				re.True(m.GetAffinityGroupState(groupID).HasUnpersistedTarget())
 				re.Equal(1, calls)
 				re.Empty(f.balancer.idle, "a skipped write must be retried after the cooldown")

@@ -1543,7 +1543,7 @@ func TestUpdateAffinityGroupPoliciesInChunks(t *testing.T) {
 	_, client, clean := etcdutil.NewTestEtcdCluster(t, 1, nil)
 	defer clean()
 	store := storage.NewStorageWithEtcdBackend(client)
-	manager := newTargetTestManager(t, t.Context(), store)
+	manager := newTargetTestWithStorage(t, t.Context(), store).Manager
 
 	// More groups than one etcd transaction can hold.
 	ids := make([]string, 0, 130)
@@ -1588,7 +1588,7 @@ func TestCreateAffinityGroupsInheritPolicy(t *testing.T) {
 	_, client, clean := etcdutil.NewTestEtcdCluster(t, 1, nil)
 	defer clean()
 	store := storage.NewStorageWithEtcdBackend(client)
-	manager := newTargetTestManager(t, ctx, store)
+	manager := newTargetTestWithStorage(t, ctx, store).Manager
 
 	re.NoError(manager.CreateAffinityGroups([]GroupKeyRanges{{GroupID: "_tidb_ks1_t_1"}}))
 	_, err := manager.UpdateAffinityGroupPolicy("_tidb_ks1_t_1", BalancePolicyFixed)

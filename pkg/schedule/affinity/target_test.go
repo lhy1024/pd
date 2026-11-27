@@ -134,11 +134,11 @@ func TestClassicFirstWinKeepsCommittedPolicy(t *testing.T) {
 				_, err := test.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
 				test.NoError(err)
 			}
-			wrapped := &targetReplyStorage{AffinityStorage: test.store, loseReply: true}
+			wrapped := &lostReplyStorage{AffinityStorage: test.store, lose: true}
 			test.storage = wrapped
 			_, err := test.UpdateAffinityGroupPolicy("g", BalancePolicyFixed)
 			test.Error(err)
-			wrapped.loseReply = false
+			wrapped.lose = false
 			test.Empty(test.GetAffinityGroupState("g").BalancePolicy)
 			committed := *test.stored("g")
 			test.Equal(BalancePolicyFixed, committed.BalancePolicy)
@@ -285,6 +285,60 @@ func TestUpdateAffinityGroupTargetsReplayWithDeletedStore(t *testing.T) {
 	test.write([]string{"g", "h"}, replay, healthy)
 	test.False(test.GetAffinityGroupState("g").AffinitySchedulingAllowed)
 	test.Equal(healthy.result(), test.stored("h"))
+}
+
+func TestAdminTargetUsesStoreConditionsAtCommit(t *testing.T) {
+	test := newTargetTest(t, "g")
+	test.checkGroupsAvailability()
+	test.True(test.storeConditionsKnown)
+	test.interceptTxns(func(ctx context.Context, apply func(kv.Txn) error) error {
+		err := test.store.RunInTxn(ctx, apply)
+		test.applyStoreConditions(map[uint64]storeCondition{2: storeRemoving})
+		return err
+	})
+
+	state, err := test.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+	test.NoError(err)
+	test.Equal(groupExpired, test.groups["g"].GetAvailability())
+	test.False(state.AffinitySchedulingAllowed)
+	test.applyStoreConditions(map[uint64]storeCondition{2: storeRemoving})
+	test.False(test.GetAffinityGroupState("g").AffinitySchedulingAllowed)
+}
+
+func TestAdminTargetReplacesLocalFallback(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		test := newTargetTest(t, "g")
+		test.checkGroupsAvailability()
+		_, err := test.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+		test.NoError(err)
+		test.DegradeAffinityGroup("g")
+		test.useWriter(func(context.Context, []GroupTarget) ([]string, error) {
+			return nil, ErrTargetWriterUnsupported
+		})
+		test.observe("g", 2, 1, 3)
+		test.True(test.GetAffinityGroupState("g").HasUnpersistedTarget())
+
+		state, err := test.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+		test.NoError(err)
+		test.Equal(uint64(1), state.LeaderStoreID)
+		test.False(state.HasUnpersistedTarget())
+		test.Equal(test.stored("g"), &state.Group)
+	})
+}
+
+func TestAdminTargetReturnsRecreatedGroup(t *testing.T) {
+	test := newTargetTest(t, "g")
+	old := test.GetAffinityGroupState("g")
+	recreated := *test.stored("g")
+	recreated.CreateTimestamp++
+	test.NoError(test.store.SaveAffinityGroup(test.store, "g", &recreated))
+
+	state, err := test.UpdateAffinityGroupPeers("g", 1, []uint64{1, 2, 3})
+	test.NoError(err)
+	test.NotSame(old.groupInfoPtr, state.groupInfoPtr)
+	test.Equal(recreated.CreateTimestamp, state.CreateTimestamp)
+	test.Equal(test.stored("g"), &state.Group)
+	test.Equal(test.GetAffinityGroupState("g"), state)
 }
 
 func TestFirstGroupRejectsRemovingStoreBeforeScan(t *testing.T) {
@@ -1066,6 +1120,62 @@ func TestFirstWinReconcilesLocalTarget(t *testing.T) {
 		test.False(state("h").HasUnpersistedTarget())
 		test.Equal(groupDegraded, test.groups["h"].GetAvailability())
 		test.Equal(newDegradedExpiredAtFromNow(), test.groups["h"].degradedExpiredAt)
+	})
+}
+
+func TestFirstWinQueuedBeforeBalancerUnsupported(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		test := newTargetTest(t, "g", "h", "balance")
+		test.checkGroupsAvailability()
+		release := make(chan struct{})
+		test.useWriter(func(_ context.Context, targets []GroupTarget) ([]string, error) {
+			if targets[0].Expected.ID == "h" {
+				<-release
+			}
+			return nil, ErrTargetWriterUnsupported
+		})
+
+		test.observe("h", 1, 2)
+		test.observe("g", 2, 3)
+		snapshot := &BalanceSnapshot{Groups: []*GroupState{test.GetAffinityGroupState("balance")}}
+		_, err := test.CommitBalanceTargets(t.Context(), snapshot, []*Group{{ID: "balance", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2}}})
+		test.ErrorIs(err, ErrTargetWriterUnsupported)
+		test.observe("g", 3, 4)
+		close(release)
+		synctest.Wait()
+
+		test.Equal(uint64(2), test.GetAffinityGroupState("g").LeaderStoreID)
+		test.True(test.GetAffinityGroupState("g").HasUnpersistedTarget())
+		test.Len(test.calls, 2, "the shared cooldown must prevent further HTTP requests")
+	})
+}
+
+func TestFirstWinSuccessfulWriteWaitsForConfirmationDuringCooldown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		test := newTargetTest(t, "g", "balance")
+		test.checkGroupsAvailability()
+		release := make(chan struct{})
+		test.useWriter(func(_ context.Context, targets []GroupTarget) ([]string, error) {
+			if targets[0].Expected.ID == "g" {
+				<-release
+				return []string{"g"}, nil
+			}
+			return nil, ErrTargetWriterUnsupported
+		})
+
+		test.observe("g", 1, 2)
+		test.observe("g", 2, 3)
+		snapshot := &BalanceSnapshot{Groups: []*GroupState{test.GetAffinityGroupState("balance")}}
+		_, err := test.CommitBalanceTargets(t.Context(), snapshot, []*Group{{ID: "balance", LeaderStoreID: 1, VoterStoreIDs: []uint64{1, 2}}})
+		test.ErrorIs(err, ErrTargetWriterUnsupported)
+		test.observe("g", 3, 4)
+		close(release)
+		synctest.Wait()
+
+		state := test.GetAffinityGroupState("g")
+		test.Zero(state.LeaderStoreID, "the earlier successful write is awaiting confirmation")
+		test.False(state.HasUnpersistedTarget())
+		test.Len(test.calls, 2)
 	})
 }
 

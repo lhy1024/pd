@@ -767,9 +767,10 @@ func (suite *affinityHandlerTestSuite) TestAffinityUpdatePolicy() {
 	suite.env.RunTest(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		serverAddr := cluster.GetLeaderServer().GetAddr()
+		keyRange := testutil.TxnKeyspaceRange([]byte{0x00}, []byte{0x10})
 		createReq := handlers.CreateAffinityGroupsRequest{
 			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
-				"policy": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x00}, EndKey: []byte{0x10}}}},
+				"policy": {Ranges: []handlers.AffinityKeyRange{handlers.AffinityKeyRange(keyRange)}},
 			},
 		}
 		mustCreateAffinityGroups(re, serverAddr, &createReq)
@@ -823,10 +824,12 @@ func (suite *affinityHandlerTestSuite) TestAffinityUpdatePolicies() {
 	suite.env.RunTest(func(cluster *tests.TestCluster) {
 		re := suite.Require()
 		serverAddr := cluster.GetLeaderServer().GetAddr()
+		firstRange := testutil.TxnKeyspaceRange([]byte{0x00}, []byte{0x10})
+		secondRange := testutil.TxnKeyspaceRange([]byte{0x10}, []byte{0x20})
 		createReq := handlers.CreateAffinityGroupsRequest{
 			AffinityGroups: map[string]handlers.CreateAffinityGroupInput{
-				"policies-a": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x00}, EndKey: []byte{0x10}}}},
-				"policies-b": {Ranges: []handlers.AffinityKeyRange{{StartKey: []byte{0x10}, EndKey: []byte{0x20}}}},
+				"policies-a": {Ranges: []handlers.AffinityKeyRange{handlers.AffinityKeyRange(firstRange)}},
+				"policies-b": {Ranges: []handlers.AffinityKeyRange{handlers.AffinityKeyRange(secondRange)}},
 			},
 		}
 		mustCreateAffinityGroups(re, serverAddr, &createReq)

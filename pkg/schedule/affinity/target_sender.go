@@ -90,14 +90,8 @@ func (m *Manager) sendObservedTarget(obs observedTarget) {
 	m.RUnlock()
 	now := time.Now()
 	retrying := now.Before(m.targetWriteRetryAt)
-	if now.Before(m.targetEndpointUnsupportedUntil) || (retrying && m.targetEndpointUnsupported) {
-		m.targetWriteMutex.Unlock()
-		if current && !obs.persistOnly {
-			m.applyLocalObservedTarget(&obs)
-		}
-		return
-	}
-	if !current || m.ctx.Err() != nil || retrying {
+	coolingDown := now.Before(m.targetEndpointUnsupportedUntil) || (retrying && m.targetEndpointUnsupported)
+	if !current || m.ctx.Err() != nil || (retrying && !coolingDown) {
 		m.targetWriteMutex.Unlock()
 		return
 	}
@@ -195,25 +189,9 @@ func (m *Manager) drainObservedTargets() {
 		m.targetWriteMutex.Lock()
 		m.targetDrainWake = nil
 		now := time.Now()
-		if now.Before(m.targetEndpointUnsupportedUntil) {
-			var batch []observedTarget
-			for _, id := range m.pendingTargetIDs {
-				batch = append(batch, m.pendingTargets[id]...)
-			}
-			clear(m.pendingTargets)
-			m.pendingTargetIDs = nil
-			m.targetDrainRunning = false
-			m.targetWriteMutex.Unlock()
-			m.metaMutex.Lock()
-			for _, obs := range batch {
-				if !obs.persistOnly {
-					m.applyLocalObservedTarget(&obs)
-				}
-			}
-			m.metaMutex.Unlock()
-			return
-		}
-		if m.ctx.Err() != nil || now.Before(m.targetWriteRetryAt) {
+		retrying := now.Before(m.targetWriteRetryAt)
+		coolingDown := now.Before(m.targetEndpointUnsupportedUntil) || (retrying && m.targetEndpointUnsupported)
+		if m.ctx.Err() != nil || (retrying && !coolingDown) {
 			clear(m.pendingTargets)
 			m.pendingTargetIDs = nil
 			m.targetDrainRunning = false
@@ -249,14 +227,28 @@ func (m *Manager) drainObservedTargets() {
 		}
 		m.targetWriteMutex.Unlock()
 
+		if coolingDown {
+			m.metaMutex.Lock()
+			for _, obs := range batch {
+				if !obs.persistOnly {
+					m.applyLocalObservedTarget(&obs)
+				}
+			}
+			m.metaMutex.Unlock()
+			m.targetWriteMutex.Lock()
+			clear(m.sendingTargets)
+			m.targetWriteMutex.Unlock()
+			continue
+		}
+
 		written, err := m.targetWriter.WriteGroupTargets(m.ctx, targets)
 		unsupported := errors.Is(err, ErrTargetWriterUnsupported)
 
 		m.targetWriteMutex.Lock()
-		clear(m.sendingTargets)
 		finish := time.Now()
 		m.targetEndpointUnsupported = unsupported
 		if err == nil {
+			clear(m.sendingTargets)
 			// PD can skip individual targets in a successful response. Keep any
 			// remaining candidates queued for after the cooldown.
 			for _, obs := range batch {
@@ -302,16 +294,7 @@ func (m *Manager) drainObservedTargets() {
 		m.targetWriteRetryAt = finish.Add(time.Second)
 		if unsupported {
 			m.targetEndpointUnsupportedUntil = m.targetWriteRetryAt
-			for _, id := range m.pendingTargetIDs {
-				batch = append(batch, m.pendingTargets[id]...)
-			}
-		}
-		clear(m.pendingTargets)
-		m.pendingTargetIDs = nil
-		m.targetDrainRunning = false
-		m.targetWriteMutex.Unlock()
-
-		if unsupported {
+			m.targetWriteMutex.Unlock()
 			m.metaMutex.Lock()
 			for _, obs := range batch {
 				if !obs.persistOnly {
@@ -319,7 +302,18 @@ func (m *Manager) drainObservedTargets() {
 				}
 			}
 			m.metaMutex.Unlock()
-		} else if !errors.Is(err, ErrTargetWriterNotReady) && m.ctx.Err() == nil {
+			m.targetWriteMutex.Lock()
+			clear(m.sendingTargets)
+			m.targetWriteMutex.Unlock()
+			continue
+		}
+		clear(m.sendingTargets)
+		clear(m.pendingTargets)
+		m.pendingTargetIDs = nil
+		m.targetDrainRunning = false
+		m.targetWriteMutex.Unlock()
+
+		if !errors.Is(err, ErrTargetWriterNotReady) && m.ctx.Err() == nil {
 			targetWriteFailureCounter.Add(float64(len(targets)))
 			log.Warn("failed to write affinity group targets", zap.Int("group-count", len(batch)), zap.Error(err))
 		}
